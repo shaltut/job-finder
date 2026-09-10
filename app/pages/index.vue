@@ -8,6 +8,24 @@ useHead({ title: 'Posts' })
 const UBadge = resolveComponent('UBadge')
 const UButton = resolveComponent('UButton')
 
+const toast = useToast()
+const queued = ref<Set<string>>(new Set())
+
+async function draft(key: string) {
+  queued.value = new Set([...queued.value, key])
+  try {
+    const r = await $fetch<{ queued: boolean, note?: string }>('/api/run/draft', { method: 'POST', body: { key } })
+    toast.add({
+      title: r.queued ? 'Drafting queued' : 'Already queued',
+      description: r.queued ? 'Read it in the Pipeline view in ~30s.' : r.note,
+      icon: 'i-lucide-pen-line'
+    })
+  } catch (e) {
+    queued.value = new Set([...queued.value].filter(k => k !== key))
+    toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
+  }
+}
+
 const q = ref('')
 const flags = ref<'all' | 'clean' | 'flagged'>('clean')
 const scope = ref<'all' | 'in-scope' | 'remote'>('all')
@@ -79,14 +97,28 @@ const columns: TableColumn<PostRow>[] = [
       : h('span', { class: 'text-xs text-muted' }, 'unprocessed')
   },
   {
-    id: 'expand',
-    cell: ({ row }) => h(UButton, {
-      icon: row.getIsExpanded() ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down',
-      color: 'neutral',
-      variant: 'ghost',
-      size: 'sm',
-      onClick: () => row.toggleExpanded()
-    })
+    id: 'actions',
+    cell: ({ row }) => h('div', { class: 'flex items-center justify-end gap-1' }, [
+      // no second email to a recruiter already handled, and nothing to draft without an address
+      row.original.verdict || !row.original.emails.length
+        ? null
+        : h(UButton, {
+            label: 'Draft',
+            icon: 'i-lucide-pen-line',
+            size: 'xs',
+            color: 'neutral',
+            variant: 'outline',
+            disabled: queued.value.has(row.original.key),
+            onClick: () => draft(row.original.key)
+          }),
+      h(UButton, {
+        icon: row.getIsExpanded() ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down',
+        color: 'neutral',
+        variant: 'ghost',
+        size: 'sm',
+        onClick: () => row.toggleExpanded()
+      })
+    ].filter(Boolean))
   }
 ]
 </script>

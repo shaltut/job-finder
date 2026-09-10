@@ -100,3 +100,23 @@ export interface AppConfig {
   max: number
   since: 'past-24h' | 'past-week' | 'past-month'
 }
+
+export interface StoredDraft {
+  recruiterEmail: string
+  mode: 'apply' | 'follow-up'
+  subject: string | null
+  body: string
+  signature: string
+  keys: string[]
+  gaps: string[]
+  createdAt: string
+}
+
+export interface Contact {
+  email: string
+  stage: Stage
+  threadId: string | null
+  lastSentAt: string | null
+  note: string | null
+  updatedAt: string
+}

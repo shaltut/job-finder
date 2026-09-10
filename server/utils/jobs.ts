@@ -7,6 +7,9 @@
 // Single-post draft requests waiting in the queue are batched into one claude session, because every
 // session pays 3-5 minutes of setup regardless of how many posts it handles.
 import { spawn, type ChildProcess } from 'node:child_process'
+import { readConfig } from './config'
+import { runDrafter, type DraftPost, type DraftRequest } from './drafter'
+import { isClosed, persist, signature, writeDraftFile } from './drafts'
 import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 
 export type Lane = 'scrape' | 'draft'
@@ -127,10 +130,17 @@ function runJob(lane: Lane, item: QueueItem) {
   }
 
   if (lane === 'draft') {
-    // M3 wires `claude -p` in here. Until then the lane exists but refuses work loudly rather than
-    // pretending to succeed.
-    push('the drafter is not wired up yet (M3)')
-    return finish(1)
+    // The drafter is an async pipeline, not a piped child: the server selects the posts, groups them by
+    // recruiter and runs one claude session per group. `abort` gives Stop something to kill.
+    const abort = new AbortController()
+    job.child = { kill: () => abort.abort() } as unknown as ChildProcess
+    runDraftJob(job, args, push, abort.signal)
+      .then(code => finish(code))
+      .catch((e) => {
+        push(`failed: ${(e as Error).message}`)
+        finish(1)
+      })
+    return
   }
 
   const [cmd, cmdArgs] = scrapeArgs({ kind, args })
@@ -210,4 +220,103 @@ export function notify(msg: string) {
   import('node:child_process').then(({ execFile }) => {
     execFile('osascript', ['-e', `display notification ${JSON.stringify(String(msg).slice(0, 200))} with title "Job Finder"`], () => {})
   })
+}
+
+/**
+ * One claude session per recruiter, not per post: the whole point of grouping is that a recruiter who
+ * posted three roles gets one honest email naming all three, rather than three near-identical ones.
+ */
+async function runDraftJob(
+  job: { added: number },
+  args: JobArgs,
+  push: (line: string) => void,
+  signal: AbortSignal
+): Promise<number> {
+  const config = readConfig()
+  const { db, close } = openWritableDb()
+  try {
+    const rows = args.keys?.length
+      ? db.prepare(
+          `SELECT p.* FROM posts p WHERE p.key IN (${args.keys.map(() => '?').join(',')})`
+        ).all(...args.keys)
+      : db.prepare(`
+          SELECT p.* FROM posts p LEFT JOIN applications a ON a.key = p.key
+          WHERE a.key IS NULL AND json_array_length(p.emails) > 0
+          ORDER BY json_array_length(p.flags) > 0, p.score DESC, p.posted_at DESC
+          LIMIT ?
+        `).all(args.n ?? 10)
+
+    if (!rows.length) {
+      push('nothing to draft: no unprocessed posts with a contact address')
+      return 0
+    }
+
+    // group by first email — one recruiter, one email
+    const groups = new Map<string, DraftPost[]>()
+    for (const r of rows as Record<string, unknown>[]) {
+      const emails = JSON.parse((r.emails as string) || '[]') as string[]
+      const to = emails[0]?.toLowerCase()
+      if (!to) continue
+      const post: DraftPost = {
+        key: r.key as string,
+        title: r.title as string | null,
+        company: r.company as string | null,
+        location: r.location as string | null,
+        score: r.score as number | null,
+        flags: JSON.parse((r.flags as string) || '[]'),
+        text: r.text as string
+      }
+      groups.set(to, [...(groups.get(to) ?? []), post])
+    }
+    push(`${rows.length} post(s) across ${groups.size} recruiter(s)`)
+
+    for (const [email, posts] of groups) {
+      if (signal.aborted) {
+        push('stopped')
+        return 1
+      }
+      // never a third email, and never edit a draft that is already waiting to be sent
+      const closed = isClosed(db, email)
+      if (closed) {
+        push(`${email}: ${closed} — skipping`)
+        for (const p of posts) {
+          // A skip must never downgrade a post that an email already names: the M4 follow-up query finds
+          // unmentioned posts by the `named in ...` prefix, so losing it would name the role twice.
+          db.prepare(`
+            INSERT INTO applications (key, verdict, reason, recruiter_email)
+            VALUES (?, 'skipped', ?, ?)
+            ON CONFLICT (key) DO UPDATE SET verdict = excluded.verdict, reason = excluded.reason
+            WHERE applications.verdict <> 'drafted'
+          `).run(p.key, closed, email)
+        }
+        continue
+      }
+
+      const req: DraftRequest = { mode: 'apply', recruiterEmail: email, posts }
+      const res = await runDrafter(req, config, { onLog: push, signal })
+
+      const carrier = res.results.find(r => r.body)
+      let file: string | null = null
+      if (carrier?.body) {
+        file = writeDraftFile({
+          recruiterEmail: email,
+          mode: 'apply',
+          subject: carrier.subject ?? null,
+          body: carrier.body,
+          signature: signature(config.profile),
+          keys: res.results.filter(r => r.verdict === 'drafted').map(r => r.key),
+          gaps: carrier.gaps_declared ?? [],
+          createdAt: new Date().toISOString()
+        })
+      }
+
+      const { drafted, skipped } = persist(db, req, res, file)
+      job.added += drafted
+      push(`${email}: ${drafted} drafted, ${skipped} skipped${file ? ` -> ${file.replace(process.cwd() + '/', '')}` : ''}`)
+      if (res.report) res.report.split('\n').filter(Boolean).forEach(push)
+    }
+    return 0
+  } finally {
+    close()
+  }
 }
