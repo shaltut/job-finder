@@ -208,7 +208,7 @@ const columns: TableColumn<PostRow>[] = [
         }"
       >
         <template #expanded="{ row }">
-          <div class="p-4 space-y-3 text-sm">
+          <div class="p-4 space-y-3 text-sm whitespace-pre-wrap">
             <p
               v-if="row.original.reason"
               class="text-muted"
