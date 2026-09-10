@@ -16,7 +16,8 @@ Egypt, Saudi Arabia, the UAE or Qatar. On-site outside those is out of scope. Pe
 written for a different person. The design record is `~/.claude/plans/i-just-git-clone-snappy-axolotl.md`;
 `docs/superpowers/` holds the *original* author's specs and describes the pre-rewrite system.
 
-**Milestones: M1-M3 are built. M4 (Gmail) and M5 (cleanup) are not.** See "Not built yet" at the end.
+**Milestones: M1-M4 are built; M5 (cleanup) is not.** Gmail works but needs `google-oauth.json` — see
+Configuration. Until it is connected, drafts fall back to `data/drafts/*.json`.
 
 ## The pipeline, end to end
 
@@ -31,7 +32,8 @@ npm run dev ──► http://127.0.0.1:3939
                   │                              │
  Posts view ◄─────┴──────────────────────────────┤
                                                  │
- Pipeline view ◄── data/drafts/*.json ◄── claude -p (the drafter skill, zero tools)
+ Pipeline view ◄── Gmail drafts (CV attached) ◄── claude -p (the drafter skill, zero tools)
+                   └─ data/drafts/*.json when Gmail is not connected
 ```
 
 1. **Scraper** `scraper/run.ts`: drives the installed Chrome (`playwright-core`, `channel: 'chrome'`, headed,
@@ -51,7 +53,7 @@ npm run dev ──► http://127.0.0.1:3939
 
 ```bash
 npm run dev                                  # http://127.0.0.1:3939 (port pinned, see gotchas)
-npm test                                     # 46 tests: helpers, ingest, drafter contract, invariants
+npm test                                     # 72 tests: helpers, ingest, drafter, stages, MIME, invariants
 npm run lint / npm run typecheck
 npm run login                                # one-time LinkedIn login into ./profile (redo when runs exit 2)
 npm run dry -- --terms "vue nuxt developer" --max 10   # prints cards, stores nothing, no OpenAI call
@@ -197,22 +199,50 @@ tests. Deliberate ceilings are marked with `ponytail:` comments. Every non-trivi
 runnable check (`npm test`, a curl, or a dry run). Prefer a test over a comment for anything that would be
 silently expensive if reintroduced — that is what `test/invariants.test.ts` is for.
 
+## Gmail (M4)
+
+- **Nothing can send.** `gmail.compose` includes permission to send, so never-sending is a property of this
+  code: no `messages.send` / `drafts.send` call may exist under `server/`, and `test/invariants.test.ts`
+  fails if one appears. Drafts are created addressed and attached; you press send.
+- **Scopes: `gmail.compose` + `gmail.readonly`.** The sweep searches sent mail with `q=`, which the narrower
+  `gmail.metadata` scope rejects outright.
+- **The callback checks a one-shot `state` nonce before touching the code.** Google's redirect into
+  `/api/gmail/callback` is itself a cross-site GET, so an Origin / Sec-Fetch-Site guard must exempt GETs and
+  cannot protect it; without the nonce any page open in the browser could hand the server its own code and
+  have the drafts written into its mailbox. Ported from upstream `e8be7b6`. Verify: a forged callback returns
+  400 and `gmail-token.json` is untouched. The nonce lives on `globalThis` so an HMR reload mid-consent does
+  not break the round trip.
+- **The CV is attached at creation**, in the same call. The original had to re-open every draft afterwards
+  because the MCP tool corrupted base64 passed through the model; here the bytes are read from disk by the
+  server and never touch a model. `createDraft` re-reads the draft and reports the attached byte count — a
+  draft that logs `NO CV ATTACHED` means the PDF path is wrong.
+- **`renderHtml` emits real anchors.** Gmail rewrites bare URLs in a plain-text body into `google.com/url?q=`
+  redirects; two applications went out that way on the original.
+- **The stage machine is a pure function** in `server/utils/stages.ts` — the original's 8-row table in code,
+  with a test per row. Order matters: a bounce or an auto-reply must never be read as a human reply, or a
+  live application stops dead. Silence is 72 hours from the last outgoing message.
+- **Gmail is the truth about what was sent; `contacts` only caches the stage.** A draft is not a contact
+  until you send it. Run a sweep after sending.
+- **`drafts` are not returned by `messages.list`, even with `in:draft`** — pending drafts are found with the
+  `drafts` endpoint. Trusting the search once nearly produced a duplicate.
+- **The connected account is discovered, not hardcoded.** The sweep matches sent mail by sender, so the wrong
+  account would make every sent application look unsent. Settings shows a warning when the connected address
+  differs from `config.json`.
+- **Daily housekeeping** is a Nitro scheduled task (`server/tasks/daily.ts`, `7 8 * * *`) replacing the
+  launchd plist: a dated `.db` copy in `backups/` (newest 14) and a queued sweep, so follow-ups fire without
+  anyone remembering. It only runs while the dev server is up — the same constraint the original had. Run it
+  by hand with `curl -X POST http://127.0.0.1:3939/_nitro/tasks/daily`.
+
+**Setting Gmail up:** a Google Cloud project with the **Gmail API enabled on the project that owns the
+client**, consent screen **In production** (in Testing, refresh tokens die after 7 days), an OAuth client of
+type **Desktop app**, redirect URI `http://localhost:3939/api/gmail/callback`, downloaded as
+`google-oauth.json` in the project folder. Settings shows these steps when the file is missing.
+
 ## Not built yet
 
-- **M4 — Gmail.** OAuth loopback flow, `gmail.drafts.create` with the CV attached, the 8-row stage machine,
-  follow-up countdowns, `scheduledTasks` cron, `.db` backups. Until then the Pipeline view reads drafts from
-  `data/drafts/*.json` and nothing is ever sent.
-  - **When you build the callback, port the `state` nonce** from upstream commit `e8be7b6`. Google's redirect
-    into the callback is itself a cross-site GET, so an Origin / Sec-Fetch-Site guard must exempt GETs and
-    cannot protect it; without a one-shot random `state`, any page open in the browser could feed the server
-    its own `code` and have the drafts written into its mailbox. Verify with a forged callback: 400, and
-    `gmail-token.json` untouched.
-  - Scopes: `gmail.compose` **and** `gmail.readonly` (the metadata scope rejects the `q=` search the sweep
-    needs). `gmail.compose` includes permission to *send*, so never-sending is a property of this code —
-    `test/invariants.test.ts` fails if a send call appears under `server/`.
 - **M5 — cleanup.** Delete `jobfinder.js`, `ui.js`, `ui.html`, `scrape.js`, `schema.sql`,
-  `com.jobfinder.plist` and their `eslint.config.mjs` ignore entries. They are kept only as porting references
-  for M4's Gmail OAuth and MIME building. **`SETUP.md` still describes the Postgres version and is wrong.**
+  `com.jobfinder.plist` and their `eslint.config.mjs` ignore entries. **`SETUP.md` still describes the
+  Postgres version and is wrong.**
 
 ## Never commit
 

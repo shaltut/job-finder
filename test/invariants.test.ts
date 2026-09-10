@@ -68,10 +68,34 @@ test('a skip can never downgrade a post an email already names', () => {
   // Found live: re-drafting a recruiter whose draft was pending rewrote the post's verdict from
   // 'drafted' to 'skipped', losing the `named in ...` prefix the follow-up query depends on.
   const src = readFileSync('server/utils/jobs.ts', 'utf8')
-  const skipInsert = src.slice(src.indexOf("VALUES (?, 'skipped'"))
+  const skipInsert = src.slice(src.indexOf('VALUES (?, \'skipped\''))
   assert.match(
     skipInsert.slice(0, 400),
     /WHERE applications\.verdict <> 'drafted'/,
-    "the closed-recruiter skip must carry WHERE applications.verdict <> 'drafted'"
+    'the closed-recruiter skip must carry WHERE applications.verdict <> \'drafted\''
   )
+})
+
+test('the OAuth callback checks the state nonce BEFORE exchanging the code', () => {
+  // Google's redirect into the callback is a cross-site GET that no Origin/Sec-Fetch guard can cover.
+  // Without this, any page open in the browser could hand us its own code. Ported from upstream e8be7b6.
+  const src = readFileSync('server/api/gmail/callback.get.ts', 'utf8')
+  const stateAt = src.indexOf('consumeAuthState')
+  const exchangeAt = src.indexOf('exchangeCode(')
+  assert.ok(stateAt > 0, 'the callback must consume the state nonce')
+  assert.ok(exchangeAt > stateAt, 'the state check must come before the code exchange')
+  assert.match(src, /statusCode: 400/, 'a bad state must be a 400')
+})
+
+test('the state nonce is one-shot, so a replayed callback fails too', () => {
+  const src = readFileSync('server/utils/gmail.ts', 'utf8')
+  const fn = src.slice(src.indexOf('export function consumeAuthState'))
+  assert.match(fn.slice(0, 300), /__jobfinderAuthState = null/, 'the nonce must be cleared on use')
+})
+
+test('the Gmail scopes cover the sweep as well as drafting', () => {
+  const src = readFileSync('server/utils/gmail.ts', 'utf8')
+  assert.match(src, /gmail\.compose/)
+  // the sweep searches sent mail with q=, which the narrower gmail.metadata scope rejects
+  assert.match(src, /gmail\.readonly/)
 })

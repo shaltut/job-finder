@@ -120,3 +120,12 @@ export interface Contact {
   note: string | null
   updatedAt: string
 }
+
+export interface GmailStatus {
+  configured: boolean
+  authorized: boolean
+  email: string | null
+  expected: string | null
+  mismatch: boolean
+  redirect: string
+}

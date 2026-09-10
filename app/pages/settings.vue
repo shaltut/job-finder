@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AppConfig } from '~/types'
+import type { AppConfig, GmailStatus } from '~/types'
 
 useDashboard()
 useHead({ title: 'Settings' })
@@ -41,6 +41,17 @@ async function save() {
 
 function reset() {
   form.value = structuredClone(toRaw(data.value!))
+}
+
+const { data: gmail, refresh: refreshGmail } = await useFetch<GmailStatus>('/api/gmail/status', {
+  lazy: true,
+  default: () => ({ configured: false, authorized: false, email: null, expected: null, mismatch: false, redirect: '' })
+})
+
+async function disconnectGmail() {
+  await $fetch('/api/gmail/disconnect', { method: 'POST' })
+  await refreshGmail()
+  toast.add({ title: 'Gmail disconnected' })
 }
 </script>
 
@@ -299,23 +310,93 @@ function reset() {
 
       <UCard class="shrink-0">
         <template #header>
-          <h2 class="font-semibold text-highlighted">
-            Gmail
-          </h2>
+          <div class="flex items-center gap-2">
+            <h2 class="font-semibold text-highlighted">
+              Gmail
+            </h2>
+            <UBadge
+              :color="gmail.authorized ? 'success' : 'neutral'"
+              variant="subtle"
+            >
+              {{ gmail.authorized ? 'connected' : 'not connected' }}
+            </UBadge>
+          </div>
+          <p class="text-sm text-muted">
+            Drafts only. Nothing in this app can send an email.
+          </p>
         </template>
-        <div class="flex items-center gap-3">
-          <UIcon
-            name="i-lucide-plug-zap"
-            class="size-5 text-muted"
+
+        <div class="space-y-4">
+          <UAlert
+            v-if="gmail.mismatch"
+            icon="i-lucide-triangle-alert"
+            color="warning"
+            variant="subtle"
+            title="Connected account does not match your profile"
+            :description="`Connected as ${gmail.email}, but Settings says ${gmail.expected}. The stage sweep matches sent mail by sender, so follow-ups would misfire.`"
           />
-          <div class="text-sm">
+
+          <div
+            v-if="gmail.authorized"
+            class="flex flex-wrap items-center gap-3 text-sm"
+          >
+            <UIcon
+              name="i-lucide-check-circle-2"
+              class="size-5 text-success"
+            />
+            <span class="text-highlighted font-mono text-xs">{{ gmail.email }}</span>
+            <UButton
+              label="Disconnect"
+              size="xs"
+              color="neutral"
+              variant="outline"
+              class="ml-auto"
+              @click="disconnectGmail"
+            />
+          </div>
+
+          <div
+            v-else-if="gmail.configured"
+            class="flex flex-wrap items-center gap-3"
+          >
+            <UButton
+              label="Connect Gmail"
+              icon="i-lucide-plug-zap"
+              to="/api/gmail/auth"
+              external
+            />
+            <span class="text-sm text-muted">Opens Google's consent screen.</span>
+          </div>
+
+          <div
+            v-else
+            class="space-y-2 text-sm"
+          >
             <p class="text-highlighted">
-              Not connected yet
+              <UIcon
+                name="i-lucide-circle-alert"
+                class="size-4 align-text-bottom"
+              />
+              <code class="text-xs">google-oauth.json</code> is missing.
             </p>
-            <p class="text-muted">
-              Drafting lands in M3 and Gmail in M4. Connecting needs a Google Cloud OAuth desktop client
-              with the <code class="text-xs">gmail.compose</code> and <code class="text-xs">gmail.readonly</code> scopes.
-            </p>
+            <ol class="list-decimal ml-5 space-y-1 text-muted">
+              <li>Create a Google Cloud project and <strong>enable the Gmail API on that same project</strong>.</li>
+              <li>
+                OAuth consent screen &rarr; publishing status <strong>In production</strong>
+                (in Testing, refresh tokens die after 7 days).
+              </li>
+              <li>
+                Scopes <code class="text-xs">gmail.compose</code> and <code class="text-xs">gmail.readonly</code>.
+              </li>
+              <li>
+                Create an OAuth client of type <strong>Desktop app</strong>, with redirect URI
+                <code class="text-xs">{{ gmail.redirect }}</code>
+              </li>
+              <li>
+                Download the client JSON as <code class="text-xs">google-oauth.json</code> in the project folder,
+                then reload this page.
+              </li>
+            </ol>
           </div>
         </div>
       </UCard>

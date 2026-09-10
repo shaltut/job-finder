@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Contact, JobState, StoredDraft } from '~/types'
+import type { Contact, GmailStatus, JobState, StoredDraft } from '~/types'
 
 useDashboard()
 useHead({ title: 'Pipeline' })
@@ -8,6 +8,10 @@ const toast = useToast()
 
 const { data: drafts, refresh: refreshDrafts } = await useFetch<StoredDraft[]>('/api/drafts', { lazy: true, default: () => [] })
 const { data: contacts, refresh: refreshContacts } = await useFetch<Contact[]>('/api/contacts', { lazy: true, default: () => [] })
+const { data: gmail, refresh: refreshGmail } = await useFetch<GmailStatus>('/api/gmail/status', {
+  lazy: true,
+  default: () => ({ configured: false, authorized: false, email: null, expected: null, mismatch: false, redirect: '' })
+})
 const { data: job, refresh: refreshJob } = await useFetch<JobState>('/api/job', {
   lazy: true,
   default: () => ({ lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null } }, queue: [], busy: false })
@@ -27,8 +31,29 @@ watch(drafting, (now, before) => {
   if (before && !now) {
     refreshDrafts()
     refreshContacts()
+    refreshGmail()
   }
 })
+
+async function sync() {
+  try {
+    job.value = await $fetch<JobState>('/api/run/sync', { method: 'POST' })
+    toast.add({ title: 'Sync queued', description: 'Re-checks every open recruiter against Gmail.' })
+  } catch (e) {
+    toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
+  }
+}
+
+/** Follow-up countdown, from the note the sweep wrote. */
+function due(c: Contact): string | null {
+  const m = c.note?.match(/follow-up due (.+)$/)
+  if (!m) return null
+  const ms = Date.parse(m[1]!) - Date.now()
+  if (Number.isNaN(ms)) return null
+  if (ms <= 0) return 'follow-up due now'
+  const h = Math.round(ms / 3600e3)
+  return h < 24 ? `follow-up in ${h}h` : `follow-up in ${Math.round(h / 24)}d`
+}
 
 const stageColor = (s: string) => (({
   drafted: 'warning',
@@ -71,7 +96,15 @@ function copy(d: StoredDraft) {
             @click="$fetch('/api/job/stop', { method: 'POST', body: { lane: 'draft' } }).then(() => refreshJob())"
           />
           <UButton
-            v-else
+            v-if="!drafting && gmail.authorized"
+            label="Sync with Gmail"
+            icon="i-lucide-refresh-cw"
+            color="neutral"
+            variant="outline"
+            @click="sync"
+          />
+          <UButton
+            v-if="!drafting"
             label="Draft top 10"
             icon="i-lucide-pen-line"
             @click="draftTop"
@@ -86,7 +119,9 @@ function copy(d: StoredDraft) {
         color="neutral"
         variant="subtle"
         title="Nothing here is sent"
-        description="Drafts are written to data/drafts/ for you to read and copy. Gmail delivery, the stage sweep and follow-up countdowns arrive in M4."
+        :description="gmail.authorized
+          ? `Drafts are created in Gmail with the CV attached, addressed and waiting. You attach nothing and press send yourself. Connected as ${gmail.email}.`
+          : 'Gmail is not connected, so drafts are written to data/drafts/ for you to copy. Connect it in Settings to have them created in Gmail with the CV attached.'"
         class="shrink-0"
       />
 
@@ -137,6 +172,14 @@ function copy(d: StoredDraft) {
               {{ c.stage }}
             </UBadge>
             <span class="font-mono text-xs text-highlighted">{{ c.email }}</span>
+            <UBadge
+              v-if="due(c)"
+              size="sm"
+              color="info"
+              variant="soft"
+            >
+              {{ due(c) }}
+            </UBadge>
             <span
               v-if="c.note"
               class="text-xs text-muted truncate"

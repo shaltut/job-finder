@@ -27,6 +27,16 @@ export default defineNuxtConfig({
 
   compatibilityDate: '2026-06-30',
 
+  nitro: {
+    // Replaces the original's launchd plist. Runs only while the dev server is up, which is the same
+    // constraint the original had — nothing happens when nothing is running.
+    experimental: { tasks: true },
+    scheduledTasks: {
+      // 08:07, not 08:00: every scheduler on the planet fires on the hour
+      '7 8 * * *': ['daily']
+    }
+  },
+
   eslint: {
     config: {
       stylistic: {

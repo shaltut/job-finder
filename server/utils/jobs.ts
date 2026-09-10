@@ -10,7 +10,9 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { readConfig } from './config'
 import { runDrafter, type DraftPost, type DraftRequest } from './drafter'
 import { isClosed, persist, signature, writeDraftFile } from './drafts'
+import { createDraft, gmailStatus, renderHtml } from './gmail'
 import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
+import { sweep } from './sync'
 
 export type Lane = 'scrape' | 'draft'
 export type Kind = 'scrape' | 'rescore' | 'reflag' | 'draft' | 'sync'
@@ -134,7 +136,8 @@ function runJob(lane: Lane, item: QueueItem) {
     // recruiter and runs one claude session per group. `abort` gives Stop something to kill.
     const abort = new AbortController()
     job.child = { kill: () => abort.abort() } as unknown as ChildProcess
-    runDraftJob(job, args, push, abort.signal)
+    const work = kind === 'sync' ? runSyncJob(push) : runDraftJob(job, args, push, abort.signal)
+    work
       .then(code => finish(code))
       .catch((e) => {
         push(`failed: ${(e as Error).message}`)
@@ -296,25 +299,64 @@ async function runDraftJob(
       const res = await runDrafter(req, config, { onLog: push, signal })
 
       const carrier = res.results.find(r => r.body)
-      let file: string | null = null
+      let ref: string | null = null
+      let where = ''
       if (carrier?.body) {
-        file = writeDraftFile({
-          recruiterEmail: email,
-          mode: 'apply',
-          subject: carrier.subject ?? null,
-          body: carrier.body,
-          signature: signature(config.profile),
-          keys: res.results.filter(r => r.verdict === 'drafted').map(r => r.key),
-          gaps: carrier.gaps_declared ?? [],
-          createdAt: new Date().toISOString()
-        })
+        const sig = signature(config.profile)
+        // A Gmail draft when connected, a local file when not, so M1-M3 stay usable without Google Cloud.
+        // Either way nothing is sent: the server has no code path that can send.
+        if (gmailStatus().authorized) {
+          const created = await createDraft({
+            to: email,
+            subject: carrier.subject,
+            text: `${carrier.body}\n\n${sig}`,
+            html: renderHtml(carrier.body, sig)
+          }, config.cv)
+          ref = created.id
+          where = ` -> gmail draft ${created.id}${created.attachedBytes ? `, CV ${created.attachedBytes} bytes` : ', NO CV ATTACHED'}`
+        } else {
+          const file = writeDraftFile({
+            recruiterEmail: email,
+            mode: 'apply',
+            subject: carrier.subject ?? null,
+            body: carrier.body,
+            signature: sig,
+            keys: res.results.filter(r => r.verdict === 'drafted').map(r => r.key),
+            gaps: carrier.gaps_declared ?? [],
+            createdAt: new Date().toISOString()
+          })
+          ref = file
+          where = ` -> ${file.replace(process.cwd() + '/', '')}`
+        }
       }
 
-      const { drafted, skipped } = persist(db, req, res, file)
+      const { drafted, skipped } = persist(db, req, res, ref)
       job.added += drafted
-      push(`${email}: ${drafted} drafted, ${skipped} skipped${file ? ` -> ${file.replace(process.cwd() + '/', '')}` : ''}`)
+      push(`${email}: ${drafted} drafted, ${skipped} skipped${where}`)
       if (res.report) res.report.split('\n').filter(Boolean).forEach(push)
     }
+    return 0
+  } finally {
+    close()
+  }
+}
+
+/** The stage sweep, run alone. Also the first thing a drafter run should do, once Gmail is connected. */
+async function runSyncJob(push: (line: string) => void): Promise<number> {
+  const config = readConfig()
+  const status = gmailStatus(config.profile.email)
+  if (!status.authorized) {
+    push('gmail is not connected — open Settings and press Connect Gmail')
+    return 1
+  }
+  if (status.mismatch) {
+    // the sweep matches sent mail by sender; the wrong account makes every sent application look unsent
+    push(`WARNING: connected as ${status.email} but config.json expects ${status.expected}`)
+  }
+  const { db, close } = openWritableDb()
+  try {
+    const lines = await sweep(db, config, status.email ?? config.profile.email, push)
+    push(`sweep finished: ${lines.length} recruiter(s) checked`)
     return 0
   } finally {
     close()
