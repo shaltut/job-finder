@@ -1,28 +1,47 @@
 {
   "name": "job-finder",
-  "version": "1.0.0",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
-  "scripts": {
-    "test": "node --env-file-if-exists=.env jobfinder.js --self-test",
-    "start": "node --env-file-if-exists=.env jobfinder.js",
-    "login": "node --env-file-if-exists=.env jobfinder.js --login",
-    "dry": "node --env-file-if-exists=.env jobfinder.js --dry-run",
-    "schedule": "mkdir -p logs && sed -e \"s#NODE_PATH#$(which node)#g\" -e \"s#PROJECT_DIR#$PWD#g\" com.jobfinder.plist > ~/Library/LaunchAgents/com.jobfinder.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jobfinder.plist && echo scheduled daily 08:00",
-    "unschedule": "launchctl bootout gui/$(id -u)/com.jobfinder 2>/dev/null; rm -f ~/Library/LaunchAgents/com.jobfinder.plist; echo unscheduled",
-    "ui": "node --env-file-if-exists=.env ui.js",
-    "scrape": "node scrape.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "private": true,
   "type": "module",
+  "description": "Personal LinkedIn job-search pipeline: scrape posts, score against a CV, draft application emails.",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "lint": "eslint .",
+    "typecheck": "nuxt typecheck",
+    "test": "node --env-file-if-exists=.env --test \"test/**/*.test.ts\"",
+    "scrape": "node --env-file-if-exists=.env scraper/run.ts",
+    "dry": "node --env-file-if-exists=.env scraper/run.ts --dry-run",
+    "login": "node --env-file-if-exists=.env scraper/run.ts --login",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
   "dependencies": {
+    "@iconify-json/lucide": "^1.2.129",
+    "@iconify-json/simple-icons": "^1.2.94",
+    "@internationalized/date": "^3.12.4",
+    "@nuxt/ui": "^4.11.0",
+    "@tanstack/table-core": "^8.21.3",
+    "@vueuse/core": "^14.4.0",
+    "@vueuse/nuxt": "^14.4.0",
+    "better-sqlite3": "^12.2.0",
+    "date-fns": "^4.4.0",
+    "drizzle-orm": "^0.45.2",
+    "nuxt": "^4.5.2",
     "openai": "^7.10.0",
-    "pg": "^8.23.0",
-    "playwright-core": "^1.63.0"
+    "playwright-core": "^1.63.0",
+    "scule": "^1.3.0",
+    "tailwindcss": "^4.3.3",
+    "vue": "^3.5.42",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "^1.17.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "drizzle-kit": "^0.31.4",
+    "eslint": "^10.10.0",
+    "typescript": "^6.0.3",
+    "vue-tsc": "^3.3.11"
   }
 }

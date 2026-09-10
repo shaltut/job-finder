@@ -1,9 +1,42 @@
-node_modules/
-profile/
-logs/
+# Nuxt dev/build outputs
+.output
+.data
+.nuxt
+.nitro
+.cache
+dist
+
+# Node dependencies
+node_modules
+
+# Logs
+logs
+*.log
+
+# Misc
+.DS_Store
+.fleet
+.idea
+
+# Local env files
 .env
+.env.*
+!.env.example
+
+# VSC
+.history
+
+# --- job-finder: never commit any of these ---
+# a live, logged-in LinkedIn Chrome session
+profile/
+# jobfinder.db and locally-written drafts
+data/
+# database snapshots
+backups/
+# legacy local drafts
+drafts/
+# Google OAuth client and Gmail tokens
 google-oauth.json
 gmail-token.json
-backups/
-drafts/
+# scraped recruiter addresses
 jobs.csv

@@ -1,0 +1,76 @@
+import { and, desc, eq, isNull, like, or, sql } from 'drizzle-orm'
+import { z } from 'zod'
+import { applications, posts } from '../db/schema'
+import { db } from '../utils/db'
+
+const query = z.object({
+  q: z.string().trim().max(200).optional(),
+  /** clean = no pre-screen flags; flagged = at least one */
+  flags: z.enum(['all', 'clean', 'flagged']).default('all'),
+  scope: z.enum(['all', 'in-scope', 'remote']).default('all'),
+  status: z.enum(['all', 'unprocessed', 'drafted', 'skipped']).default('all'),
+  minScore: z.coerce.number().int().min(0).max(10).default(0),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0)
+})
+
+export default defineEventHandler(async (event) => {
+  const p = await getValidatedQuery(event, query.parse)
+
+  const where = [
+    p.minScore > 0 ? sql`${posts.score} >= ${p.minScore}` : undefined,
+    p.flags === 'clean' ? sql`json_array_length(${posts.flags}) = 0` : undefined,
+    p.flags === 'flagged' ? sql`json_array_length(${posts.flags}) > 0` : undefined,
+    p.scope === 'in-scope' ? eq(posts.inScope, true) : undefined,
+    p.scope === 'remote' ? eq(posts.remote, true) : undefined,
+    p.status === 'unprocessed' ? isNull(applications.key) : undefined,
+    p.status === 'drafted' ? eq(applications.verdict, 'drafted') : undefined,
+    p.status === 'skipped' ? eq(applications.verdict, 'skipped') : undefined,
+    p.q
+      ? or(
+          like(posts.title, `%${p.q}%`),
+          like(posts.company, `%${p.q}%`),
+          like(posts.author, `%${p.q}%`),
+          like(posts.text, `%${p.q}%`)
+        )
+      : undefined
+  ].filter(Boolean)
+
+  const rows = await db
+    .select({
+      key: posts.key,
+      scrapedAt: posts.scrapedAt,
+      searchTerm: posts.searchTerm,
+      author: posts.author,
+      authorUrl: posts.authorUrl,
+      postedAge: posts.postedAge,
+      postedAt: posts.postedAt,
+      title: posts.title,
+      company: posts.company,
+      location: posts.location,
+      remote: posts.remote,
+      inScope: posts.inScope,
+      emails: posts.emails,
+      score: posts.score,
+      reason: posts.reason,
+      text: posts.text,
+      flags: posts.flags,
+      verdict: applications.verdict,
+      verdictReason: applications.reason
+    })
+    .from(posts)
+    .leftJoin(applications, eq(applications.key, posts.key))
+    .where(where.length ? and(...where) : undefined)
+    // flagged posts sort last, then best score, then most recently posted — the original's ordering
+    .orderBy(sql`json_array_length(${posts.flags}) > 0`, desc(posts.score), desc(posts.postedAt))
+    .limit(p.limit)
+    .offset(p.offset)
+
+  const counted = await db
+    .select({ total: sql<number>`count(*)` })
+    .from(posts)
+    .leftJoin(applications, eq(applications.key, posts.key))
+    .where(where.length ? and(...where) : undefined)
+
+  return { rows, total: counted[0]?.total ?? 0 }
+})
