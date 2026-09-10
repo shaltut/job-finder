@@ -78,3 +78,23 @@ export type NewPost = typeof posts.$inferInsert
 export type Application = typeof applications.$inferSelect
 export type Contact = typeof contacts.$inferSelect
 export type Stage = Contact['stage']
+
+/**
+ * The profile, constraints and search settings — one row, ever. Replaces config.json, which was
+ * git-tracked and therefore carried real contact details into a repository.
+ *
+ * One JSON column rather than normalised tables on purpose: nothing queries an individual setting,
+ * every consumer wants the whole object, and splitting it would buy nothing while costing a rewrite
+ * of the Settings PUT. Plain text, not mode:'json' — the scraper and the server read this through a
+ * raw better-sqlite3 handle (see shared/settings.ts), so the parse is explicit at both ends and
+ * cannot double-encode.
+ */
+export const settings = sqliteTable('settings', {
+  id: integer('id').primaryKey().default(1),
+  json: text('json').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`)
+}, t => [
+  check('settings_single_row', sql`${t.id} = 1`)
+])
+
+export type Settings = typeof settings.$inferSelect

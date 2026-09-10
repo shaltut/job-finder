@@ -1,0 +1,239 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import Database from 'better-sqlite3'
+import { isPdf, safeCvName } from '../server/utils/cv.ts'
+import { COUNTRIES, normalizeCountries, resolveCountry, tldsFor, withAliases } from '../shared/countries.ts'
+import {
+  emptySettings, importLegacy, mergeEmpty, missingFields, parseSettings,
+  readSettingsFrom, readSettingsRawFrom, writeSettingsTo, type StoredSettings
+} from '../shared/settings.ts'
+
+/**
+ * In-memory, the way ingest.test.ts does it. These target the handle-taking functions rather than
+ * readConfig/writeConfig, because those close over the db singleton in server/utils/db.ts, which
+ * opens the REAL data/jobfinder.db at module import — a test that touched them would edit live data.
+ */
+function fresh(): Database.Database {
+  const db = new Database(':memory:')
+  db.exec(`CREATE TABLE settings (
+    id integer PRIMARY KEY DEFAULT 1,
+    json text NOT NULL,
+    updated_at integer NOT NULL DEFAULT (unixepoch()),
+    CONSTRAINT settings_single_row CHECK (id = 1)
+  )`)
+  return db
+}
+
+const complete = (): StoredSettings => ({
+  ...emptySettings(),
+  profile: {
+    name: 'Test Person', title: 'Senior Frontend Engineer', location: 'Cairo, Egypt',
+    email: 'test@example.com', phone: '+20 100 000 0000',
+    linkedin: 'https://www.linkedin.com/in/test', github: '',
+    languages: 'Arabic native, English professional', yearsExperience: '10+'
+  },
+  constraints: {
+    remoteAnywhere: true, onsiteCountries: ['Egypt'], willRelocate: [],
+    canStartImmediately: true, workingHours: '09:00-21:00 Africa/Cairo', stackWeighting: 'vue-primary'
+  },
+  cv: 'data/cv/test.pdf',
+  terms: ['vue nuxt developer'],
+  titles: ['Senior Frontend Engineer']
+})
+
+// ---------------- storage ----------------
+
+test('settings round-trip: write then read returns the same object', () => {
+  const db = fresh()
+  const cfg = complete()
+  writeSettingsTo(db, cfg)
+  assert.deepEqual(readSettingsFrom(db), cfg)
+})
+
+test('a fresh database reads as undefined rather than throwing', () => {
+  // no settings table at all: the migration has not run yet
+  assert.equal(readSettingsFrom(new Database(':memory:')), undefined)
+  // table present, no row
+  const db = fresh()
+  assert.equal(readSettingsFrom(db), undefined)
+  assert.equal(readSettingsRawFrom(db), undefined)
+})
+
+test('writing normalises: email lower-cased, strings trimmed, country aliases collapsed', () => {
+  const db = fresh()
+  const saved = writeSettingsTo(db, {
+    ...complete(),
+    profile: { ...complete().profile, email: '  MiXeD@Case.COM ', name: '  Spaced  ' },
+    constraints: { ...complete().constraints, onsiteCountries: ['United Arab Emirates', 'KSA', 'UAE'] }
+  })
+  assert.equal(saved.profile.email, 'mixed@case.com')
+  assert.equal(saved.profile.name, 'Spaced')
+  // aliases collapse to display form AND de-duplicate
+  assert.deepEqual(saved.constraints.onsiteCountries, ['UAE', 'Saudi Arabia'])
+})
+
+test('a malformed email is refused with a field-level message', () => {
+  const db = fresh()
+  assert.throws(
+    () => writeSettingsTo(db, { ...complete(), profile: { ...complete().profile, email: 'not-an-email' } }),
+    (e: { issues: { path: (string | number)[], message: string }[] }) => {
+      assert.equal(e.issues[0]!.path.join('.'), 'profile.email')
+      assert.match(e.issues[0]!.message, /email/)
+      return true
+    }
+  )
+})
+
+test('an empty config still saves — a fresh install must be able to fill the form in stages', () => {
+  const db = fresh()
+  const saved = writeSettingsTo(db, emptySettings())
+  assert.equal(saved.cv, '')
+  assert.deepEqual(saved.terms, [])
+})
+
+// ---------------- the completeness gate ----------------
+
+test('missingFields names every unset field on a fresh config, and none on a complete one', () => {
+  const missing = missingFields(emptySettings())
+  assert.ok(missing.includes('profile.email'))
+  assert.ok(missing.includes('cv'))
+  assert.ok(missing.some(m => m.startsWith('terms')))
+  assert.deepEqual(missingFields(complete()), [])
+})
+
+// ---------------- the one-time legacy import ----------------
+
+test('importLegacy runs once and never overwrites an existing row', () => {
+  const db = fresh()
+  const legacy = { ...complete(), profile: { ...complete().profile, name: 'From config.json' } }
+  assert.equal(importLegacy(db, legacy), true)
+  assert.equal(readSettingsFrom(db)!.profile.name, 'From config.json')
+
+  // a second boot must be a no-op, even if the file still says something else
+  assert.equal(importLegacy(db, { ...legacy, profile: { ...legacy.profile, name: 'Stale' } }), false)
+  assert.equal(readSettingsFrom(db)!.profile.name, 'From config.json')
+})
+
+test('importLegacy resolves legacy country spellings and tolerates missing keys', () => {
+  const db = fresh()
+  // the shape config.json actually has, with the short 'UAE' the old hardcoded picker wrote
+  importLegacy(db, {
+    ...complete(),
+    constraints: { ...complete().constraints, onsiteCountries: ['Egypt', 'UAE'], willRelocate: ['United Arab Emirates'] }
+  })
+  const got = readSettingsFrom(db)!
+  assert.deepEqual(got.constraints.onsiteCountries, ['Egypt', 'UAE'])
+  assert.deepEqual(got.constraints.willRelocate, ['UAE'], 'the long form resolves to the same entry')
+
+  // a legacy file missing a key the schema needs falls back to the empty default rather than throwing
+  const db2 = fresh()
+  const { max: _max, ...noMax } = complete()
+  assert.equal(importLegacy(db2, noMax), true)
+  assert.equal(readSettingsFrom(db2)!.max, 40)
+})
+
+// ---------------- prefill merge ----------------
+
+test('mergeEmpty fills blanks and never touches a field you set', () => {
+  const current = { ...emptySettings(), profile: { ...emptySettings().profile, name: 'Yours' } }
+  const merged = mergeEmpty(current, {
+    profile: { name: 'The Model', title: 'Senior Frontend Engineer', email: 'CV@Example.com' },
+    titles: ['Frontend Engineer', 'Frontend Engineer', ' Vue Developer ']
+  })
+  assert.equal(merged.profile.name, 'Yours', 'a value you typed survives')
+  assert.equal(merged.profile.title, 'Senior Frontend Engineer', 'a blank gets filled')
+  assert.equal(merged.profile.email, 'cv@example.com')
+  assert.deepEqual(merged.titles, ['Frontend Engineer', 'Vue Developer'], 'trimmed and de-duplicated')
+})
+
+test('mergeEmpty drops only the fields the model got wrong', () => {
+  const merged = mergeEmpty(emptySettings(), {
+    profile: { name: 'Good Name', email: 'not-an-email', linkedin: 'also-not-a-url' }
+  })
+  assert.equal(merged.profile.name, 'Good Name', 'a bad URL must not cost you the name')
+  assert.equal(merged.profile.email, '')
+  assert.equal(merged.profile.linkedin, '')
+})
+
+test('mergeEmpty leaves the constraints alone — a CV cannot know them', () => {
+  const merged = mergeEmpty(emptySettings(), {
+    profile: { name: 'X' },
+    constraints: { onsiteCountries: ['France'], workingHours: '24/7' }
+  } as Partial<StoredSettings>)
+  assert.deepEqual(merged.constraints, emptySettings().constraints)
+})
+
+// ---------------- countries ----------------
+
+test('the country table is complete, unique, and resolves aliases case-insensitively', () => {
+  assert.ok(COUNTRIES.length > 190, `expected the full ISO list, got ${COUNTRIES.length}`)
+  assert.equal(new Set(COUNTRIES.map(c => c.code)).size, COUNTRIES.length, 'duplicate alpha-2 code')
+  assert.equal(new Set(COUNTRIES.map(c => c.name)).size, COUNTRIES.length, 'duplicate display name')
+
+  assert.equal(resolveCountry('United Arab Emirates')!.name, 'UAE')
+  assert.equal(resolveCountry('  ksa ')!.name, 'Saudi Arabia')
+  assert.equal(resolveCountry('EGYPT')!.name, 'Egypt')
+  assert.equal(resolveCountry('Atlantis'), undefined)
+})
+
+test('tldsFor derives the email-domain hint instead of hardcoding .eg .sa .ae .qa', () => {
+  assert.deepEqual(tldsFor(['Egypt', 'Saudi Arabia', 'UAE', 'Qatar']), ['.eg', '.sa', '.ae', '.qa'])
+  // the scope is dynamic now: a different selection must produce a different hint
+  assert.deepEqual(tldsFor(['Germany', 'Kuwait']), ['.de', '.kw'])
+  // GB is the alpha-2, .uk is the ccTLD
+  assert.deepEqual(tldsFor(['UK']), ['.uk'])
+  assert.deepEqual(tldsFor(['Atlantis']), [])
+})
+
+test('normalizeCountries keeps a name it does not recognise', () => {
+  // silently deleting a stored country on every save would be data loss the user never asked for
+  assert.deepEqual(normalizeCountries(['United Arab Emirates', 'Atlantis']), ['UAE', 'Atlantis'])
+})
+
+test('withAliases inlines the long forms so the scoring model matches post text', () => {
+  assert.equal(withAliases(['UAE']), 'UAE (United Arab Emirates, Emirates, U.A.E.)')
+  assert.equal(withAliases(['Qatar']), 'Qatar (State of Qatar)')
+})
+
+test('a stored country that is not in the table survives a round-trip', () => {
+  const db = fresh()
+  const saved = writeSettingsTo(db, {
+    ...complete(),
+    constraints: { ...complete().constraints, onsiteCountries: ['Egypt', 'Atlantis'] }
+  })
+  assert.deepEqual(saved.constraints.onsiteCountries, ['Egypt', 'Atlantis'])
+})
+
+test('parseSettings rejects a stackWeighting outside the enum', () => {
+  assert.throws(() => parseSettings({ ...complete(), constraints: { ...complete().constraints, stackWeighting: 'svelte-primary' } }))
+})
+
+// ---------------- CV upload safety ----------------
+
+test('safeCvName never lets a filename escape the CV directory', () => {
+  // the client's filename is an input like any other; these are the shapes that would write elsewhere
+  assert.equal(safeCvName('../../../etc/passwd'), 'passwd.pdf')
+  assert.equal(safeCvName('../../evil.pdf'), 'evil.pdf')
+  assert.equal(safeCvName('/absolute/path/CV.pdf'), 'CV.pdf')
+  assert.equal(safeCvName('a/b/c.pdf'), 'c.pdf')
+  for (const name of ['../../../etc/passwd', '..\\..\\win.pdf', './../x.pdf', '....//y.pdf']) {
+    const out = safeCvName(name)
+    assert.ok(!/[/\\]/.test(out), `${name} -> ${out} still contains a separator`)
+    assert.ok(!out.includes('..'), `${name} -> ${out} still contains ..`)
+  }
+})
+
+test('safeCvName forces a .pdf extension and survives a hostile name', () => {
+  assert.equal(safeCvName('Mohamed Maher CV.pdf'), 'Mohamed-Maher-CV.pdf')
+  assert.equal(safeCvName('resume.docx'), 'resume.pdf')
+  assert.equal(safeCvName(''), 'cv.pdf')
+  assert.equal(safeCvName('...'), 'cv.pdf')
+  assert.equal(safeCvName('a'.repeat(200)), `${'a'.repeat(80)}.pdf`)
+})
+
+test('isPdf checks the bytes, not the client content-type', () => {
+  assert.equal(isPdf(Buffer.from('%PDF-1.7 rest of file')), true)
+  assert.equal(isPdf(Buffer.from('<html>not a pdf</html>')), false)
+  assert.equal(isPdf(Buffer.from('PK a zip pretending')), false)
+  assert.equal(isPdf(Buffer.from('')), false)
+})

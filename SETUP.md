@@ -35,7 +35,7 @@ Then open **Settings** and make it yours (below), and press **Start scrape** in 
 
 | # | What | Where | Why it matters |
 |---|------|-------|----------------|
-| 1 | **Your profile and constraints** | **Settings view** (writes `config.json`) | Name, contact details, which countries are in scope, whether you will relocate, whether you can start immediately. These are injected into both the scoring prompt and the drafter, so every email states them. **Do this first.** |
+| 1 | **Your profile and constraints** | **Settings view** (writes the `settings` row in the database) | Drop your CV on the upload area, press **Prefill from CV**, then fill in the rest: which countries are in scope, whether you will relocate, whether you can start immediately. Prefill fills only blank fields and never the constraints — a CV cannot know them. These are injected into both the scoring prompt and the drafter, so every email states them. **Do this first.** |
 | 2 | **Your evidence and gaps** | `.claude/skills/job-application-drafter/SKILL.md` | The drafter's honesty depends on this: it declares the gaps listed here and may claim nothing else. Left unedited, every draft claims someone else's projects. |
 | 3 | Your CV PDF | `cv` in Settings | The scoring model reads the PDF itself once per run, and it is attached to every draft. |
 | 4 | `OPENAI_API_KEY` | a new `.env` file | Scoring runs on `gpt-5-nano`; a full 9-term run costs a few cents. |

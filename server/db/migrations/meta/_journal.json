@@ -8,6 +8,13 @@
       "when": 1789045450415,
       "tag": "0000_colossal_kylun",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789069301553,
+      "tag": "0001_petite_vision",
+      "breakpoints": true
     }
   ]
 }

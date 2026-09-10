@@ -1,10 +1,28 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { buildSystemPrompt, checkContract, parseResponse, profileBlock, type DraftRequest } from '../server/utils/drafter.ts'
-import type { AppConfig } from '../server/utils/config.ts'
+import { emptySettings, type StoredSettings as AppConfig } from '../shared/settings.ts'
 
-const config = JSON.parse(readFileSync('config.json', 'utf8')) as AppConfig
+// A fixture, not the stored settings. These assert what profileBlock does with a config, which must
+// hold for any config; reading one person's real settings would also stop this running on a clone.
+const config: AppConfig = {
+  ...emptySettings(),
+  profile: {
+    name: 'Test Person', title: 'Senior Frontend Engineer', location: 'Cairo, Egypt',
+    email: 'test@example.com', phone: '+20 100 000 0000',
+    linkedin: 'https://www.linkedin.com/in/test-person', github: 'https://github.com/testperson',
+    languages: 'Arabic native, English professional', yearsExperience: '10+'
+  },
+  constraints: {
+    ...emptySettings().constraints,
+    onsiteCountries: ['Egypt', 'Saudi Arabia', 'UAE', 'Qatar'],
+    willRelocate: ['Saudi Arabia', 'UAE', 'Qatar'],
+    workingHours: '09:00-21:00 Africa/Cairo'
+  },
+  cv: 'data/cv/test.pdf',
+  terms: ['feed'],
+  titles: ['Senior Frontend Engineer']
+}
 
 const req: DraftRequest = {
   mode: 'apply',

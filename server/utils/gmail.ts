@@ -156,7 +156,7 @@ export interface GmailStatus {
 }
 
 /**
- * `expected` is the address in config.json. The stage sweep decides "already contacted?" by matching the
+ * `expected` is the address in the stored settings. The stage sweep decides "already contacted?" by matching the
  * sender on sent mail, so connecting the wrong account would silently make every sent application look
  * unsent. We report the mismatch rather than hardcoding the address.
  */

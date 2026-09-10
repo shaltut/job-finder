@@ -1,12 +1,24 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
   ageOf, dedupeKey, extractEmails, FLAG_RULES, normalize, postedAt, prescreen, searchUrl, systemPrompt
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
+import { emptySettings } from '../shared/settings.ts'
 
-const config = JSON.parse(readFileSync('config.json', 'utf8')) as Config
+// A fixture, not the stored settings: these assert what systemPrompt DOES with a config, which must
+// hold for any config, and a test that reads one person's settings cannot run on a fresh clone.
+const config: Config = {
+  ...emptySettings(),
+  constraints: {
+    ...emptySettings().constraints,
+    onsiteCountries: ['Egypt', 'Saudi Arabia', 'UAE', 'Qatar'],
+    willRelocate: ['Saudi Arabia', 'UAE', 'Qatar']
+  },
+  cv: 'data/cv/test.pdf',
+  terms: ['feed', 'vue nuxt developer'],
+  titles: ['Senior Frontend Engineer', 'Nuxt Developer']
+}
 
 test('extractEmails: dedupes, lower-cases, merges mailto links', () => {
   assert.deepEqual(extractEmails('Send CV to HR@Acme.sa or jobs@x.co.uk today', ['hr@acme.sa']), ['hr@acme.sa', 'jobs@x.co.uk'])
@@ -91,8 +103,25 @@ test('systemPrompt: embeds the CV and the configured titles and locations', () =
   assert.ok(p.includes('CV-MARKER-TEXT'))
   assert.ok(p.includes(config.titles[0]!))
   assert.ok(p.includes('Saudi Arabia'))
-  // Europe/UK/US on-site must be excluded, or the funnel fills with roles he cannot take
-  assert.match(p, /Europe, UK, US/)
+  // on-site roles outside the configured scope must be excluded, or the funnel fills with roles he
+  // cannot take. This used to name Europe/UK/US literally, which was wrong the moment the scope
+  // became editable — the exclusion is now stated relative to whatever is configured.
+  assert.match(p, /not named above are out of scope/)
+})
+
+test('systemPrompt: the location scope tracks the configured countries, not a fixed list', () => {
+  const p = systemPrompt('cv', { ...config, constraints: { ...config.constraints, onsiteCountries: ['Germany', 'Kuwait'], willRelocate: [] } })
+  assert.ok(p.includes('Germany'))
+  assert.ok(p.includes('Kuwait'))
+  assert.ok(!p.includes('Saudi Arabia'), 'the old scope must not survive a change of countries')
+  // the email-domain hint is derived, not the hardcoded '.eg .sa .ae .qa' it used to be
+  assert.ok(p.includes('.de .kw'))
+  assert.match(p, /will not relocate/)
+})
+
+test('systemPrompt: country aliases are inlined so the model matches post text', () => {
+  // a post saying 'United Arab Emirates' and one saying 'UAE' must both land in scope
+  assert.match(systemPrompt('cv', config), /UAE \(United Arab Emirates/)
 })
 
 test('systemPrompt: honours the stack weighting setting', () => {
@@ -100,9 +129,5 @@ test('systemPrompt: honours the stack weighting setting', () => {
   assert.match(systemPrompt('cv', { ...config, constraints: { ...config.constraints, stackWeighting: 'react-primary' } }), /React\/Next roles are the best fit/)
 })
 
-test('config.json is complete and its CV file exists', () => {
-  assert.ok(config.terms.length && config.titles.length)
-  assert.ok(config.terms.includes('feed'), 'the home feed term should be present')
-  assert.ok(['past-24h', 'past-week', 'past-month'].includes(config.since))
-  assert.ok(config.profile.email === config.profile.email.toLowerCase())
-})
+// The stored settings replaced config.json; their completeness is covered by settings.test.ts,
+// which can assert it against an in-memory database instead of one person's real file.

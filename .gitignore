@@ -40,3 +40,7 @@ google-oauth.json
 gmail-token.json
 # scraped recruiter addresses
 jobs.csv
+
+# Retired: settings live in the `settings` table in data/jobfinder.db.
+# server/plugins/migrate.ts imports this file once if it is present, then never reads it again.
+config.json

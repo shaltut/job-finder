@@ -14,7 +14,9 @@ function walk(dir: string, out: string[] = []): string[] {
   return out
 }
 
-const serverFiles = walk('server')
+// shared/ holds the settings schema and EMPTY_SETTINGS, which are exactly the kind of place a real
+// address would get seeded into. The identity scan below is worthless if it cannot see them.
+const serverFiles = [...walk('server'), ...walk('shared')]
 const read = (p: string) => readFileSync(p, 'utf8')
 
 test('the server never sends mail: it only ever creates drafts', () => {
@@ -52,7 +54,7 @@ test('the schema keeps the lower-case email constraint', () => {
   assert.match(read('server/db/schema.ts'), /lower\(/, 'contacts.email must be constrained to lower case')
 })
 
-test('no server file hardcodes an identity: it all comes from config.json', () => {
+test('no server file hardcodes an identity: it all comes from the stored settings', () => {
   // retargeting this tool must stay data entry. A name or address in the source is how it stops being that.
   const offenders: string[] = []
   for (const f of serverFiles) {
@@ -98,4 +100,19 @@ test('the Gmail scopes cover the sweep as well as drafting', () => {
   assert.match(src, /gmail\.compose/)
   // the sweep searches sent mail with q=, which the narrower gmail.metadata scope rejects
   assert.match(src, /gmail\.readonly/)
+})
+
+test('config.json is not read anywhere: the database is the only source of settings', () => {
+  // It was git-tracked and therefore carried a real phone number and email address into the repo.
+  // The one permitted mention is the one-time import in the migrate plugin, which carries the old
+  // file across on first boot and then never touches it again.
+  // comments may still name the file to explain the migration, so strip them first — as the
+  // identity test above does — and look only at code
+  const offenders = [...serverFiles, 'scraper/run.ts', 'scraper/lib.ts']
+    .filter(f => f !== 'server/plugins/migrate.ts')
+    .filter((f) => {
+      const code = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+      return /config\.json/.test(code)
+    })
+  assert.deepEqual(offenders, [], `these files still read config.json: ${offenders.join(', ')}`)
 })

@@ -1,37 +1,13 @@
 // Pure helpers ported from the original jobfinder.js. No browser, no database, no API — so the Nitro
 // server, the scraper child process and `npm test` can all import them.
 import { createHash } from 'node:crypto'
+import { tldsFor, withAliases } from '../shared/countries.ts'
+import type { Constraints, Profile, StoredSettings } from '../shared/settings.ts'
 
-export interface Constraints {
-  remoteAnywhere: boolean
-  onsiteCountries: string[]
-  willRelocate: string[]
-  canStartImmediately: boolean
-  workingHours: string
-  stackWeighting: 'vue-primary' | 'equal' | 'react-primary'
-}
-
-export interface Profile {
-  name: string
-  title: string
-  location: string
-  email: string
-  phone: string
-  linkedin: string
-  github: string
-  languages: string
-  yearsExperience: string
-}
-
-export interface Config {
-  profile: Profile
-  constraints: Constraints
-  cv: string
-  terms: string[]
-  titles: string[]
-  max: number
-  since: 'past-24h' | 'past-week' | 'past-month'
-}
+// These used to be declared here as a third copy of the same shape, kept in sync by hand with the
+// server's Zod schema and the browser's types. One definition now, in shared/settings.ts.
+export type { Constraints, Profile }
+export type Config = StoredSettings
 
 // ---------------- emails ----------------
 
@@ -130,18 +106,21 @@ const STACK_RULE: Record<Constraints['stackWeighting'], string> = {
 
 export function systemPrompt(cv: string, config: Config): string {
   const { constraints: c, titles } = config
-  const onsite = c.onsiteCountries.join(', ')
+  // aliases inline ('UAE (United Arab Emirates, Emirates)') so the model matches whichever form the
+  // post text happens to use
+  const onsite = withAliases(c.onsiteCountries)
+  const tlds = tldsFor(c.onsiteCountries)
   return `You screen LinkedIn job posts for one candidate. Extract fields from the post text and score how well the post matches the candidate's CV, 0-10.
 Candidate CV:
 """
 ${cv}
 """
 Candidate target titles: ${titles.join('; ')}.
-Location scope: ${c.remoteAnywhere ? 'genuinely location-free remote roles from anywhere, plus ' : ''}on-site or hybrid roles in ${onsite}. The candidate will relocate to ${c.willRelocate.join(', ')}. On-site or hybrid roles anywhere else (Europe, UK, US, India, elsewhere in MENA) are out of scope and score 0-2 however good the stack match.
+Location scope: ${c.remoteAnywhere ? 'genuinely location-free remote roles from anywhere, plus ' : ''}on-site or hybrid roles in ${onsite}. ${c.willRelocate.length ? `The candidate will relocate to ${withAliases(c.willRelocate)}.` : 'The candidate will not relocate.'} On-site or hybrid roles in any country not named above are out of scope and score 0-2 however good the stack match.
 ${STACK_RULE[c.stackWeighting]}
 Non-software-engineering roles (mechanical, electrical, civil, MEP, construction, sales engineering, procurement, QA/QC, BIM) score 0-2 regardless of title words. Pure UI/UX design, graphic design and pure backend/data roles also score 0-2: this candidate builds frontends.
 is_remote: true only if the post says remote or work from home.
-is_in_scope: true if the location, the company, or the contact email domain (.eg .sa .ae .qa) points to ${onsite}, or the role is genuinely location-free remote.
+is_in_scope: true if the location, the company, or${tlds.length ? ` the contact email domain (${tlds.join(' ')}) or` : ''} anything else in the post points to one of the countries named above, or the role is genuinely location-free remote.
 score: 9-10 the role fits the CV's seniority, stack and domain and the location fits; 6-8 strong stack match with one gap (seniority a step off, adjacent stack, location unclear); 3-5 related software role with a major gap; 0-2 unrelated or out of location scope.
 Credit a skill, tool, standard or domain only if the CV text explicitly contains it; never infer or assume it. Anything the post asks for that the CV does not mention is a gap.
 Use "unknown" for strings you cannot find. reason: one sentence in the form "Match: <what the CV shows that the post asks for>; Gaps: <what the post asks for that the CV lacks, or none>".`

@@ -25,6 +25,13 @@ const sqlite = open()
 export const db = drizzle(sqlite, { schema })
 
 /**
+ * The raw handle, for the settings row. shared/settings.ts is duck-typed against better-sqlite3 so
+ * that the scraper's read-only connection satisfies the same functions; going through Drizzle here
+ * would mean two different code paths for one row.
+ */
+export { sqlite }
+
+/**
  * Applies migrations at startup, the way the original applied schema.sql idempotently from both
  * entry points. Falls back to pushing the schema directly when no migration folder exists yet.
  */

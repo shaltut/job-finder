@@ -351,7 +351,7 @@ async function runSyncJob(push: (line: string) => void): Promise<number> {
   }
   if (status.mismatch) {
     // the sweep matches sent mail by sender; the wrong account makes every sent application look unsent
-    push(`WARNING: connected as ${status.email} but config.json expects ${status.expected}`)
+    push(`WARNING: connected as ${status.email} but Settings expects ${status.expected}`)
   }
   const { db, close } = openWritableDb()
   try {

@@ -18,6 +18,7 @@ import {
   ageOf, dedupeKey, extractEmails, normalize, postedAt, prescreen, rand, SCORE_SCHEMA, searchUrl, sleep, systemPrompt
 } from './lib.ts'
 import type { Config } from './lib.ts'
+import { emptySettings, readSettingsFrom } from '../shared/settings.ts'
 
 const { values: opts } = parseArgs({
   options: {
@@ -33,14 +34,36 @@ const { values: opts } = parseArgs({
   }
 })
 
-const CONFIG = JSON.parse(fs.readFileSync('config.json', 'utf8')) as Config
+const MODEL = process.env.JOBFINDER_MODEL || 'gpt-5-nano'
+const DB_PATH = process.env.JOBFINDER_DB || 'data/jobfinder.db'
+const PROFILE_DIR = process.env.PROFILE_DIR || 'profile'
+
+/**
+ * Settings come from the database now, not a config.json this process could drift from. READ-ONLY,
+ * like every other query here: server/utils/db.ts makes the Nitro server the sole writer, and two
+ * writers is how you get SQLITE_BUSY under a long scrape.
+ *
+ * Passing them in on stdin from the server was the alternative and was rejected — it would break
+ * `npm run dry`, --rescore, --reflag and the `node scraper/run.ts | node scraper/ingest.ts` pipe,
+ * all of which run with no server at all.
+ */
+function loadConfig(): Config {
+  try {
+    const db = new Database(DB_PATH, { readonly: true, fileMustExist: true })
+    db.pragma('busy_timeout = 5000')
+    const cfg = readSettingsFrom(db)
+    db.close()
+    if (cfg) return cfg
+  } catch { /* no database yet, or no settings row: fall through to the defaults below */ }
+  return emptySettings()
+}
+
+const CONFIG = loadConfig()
+// argv still wins over the stored settings, and the hardcoded fallbacks stay as the last resort
 const SEARCH_TERMS = opts.terms ? opts.terms.split(',').map(t => t.trim()).filter(Boolean) : CONFIG.terms
 const MAX_CARDS = Number(opts.max) || CONFIG.max || 40
 const SINCE = opts.since || CONFIG.since || 'past-24h'
 const CV_PATH = opts.cv || CONFIG.cv
-const MODEL = process.env.JOBFINDER_MODEL || 'gpt-5-nano'
-const DB_PATH = process.env.JOBFINDER_DB || 'data/jobfinder.db'
-const PROFILE_DIR = process.env.PROFILE_DIR || 'profile'
 
 // ---------------- output ----------------
 /** One NDJSON record on stdout. The only channel through which data leaves this process. */
@@ -203,6 +226,8 @@ async function run({ dry }: { dry: boolean }) {
     log(`jitter: waiting ${Math.round(ms / 60_000)} min`)
     await sleep(ms)
   }
+  if (!SEARCH_TERMS.length) throw new Error('no search terms configured — open Settings and add at least one')
+  if (!dry && !CV_PATH) throw new Error('no CV configured — upload one in Settings')
   const seen = dry ? new Set<string>() : knownKeys()
   if (!dry) system = systemPrompt(await loadCv(CV_PATH), CONFIG) // before the browser: a bad CV path fails fast
   const ctx = await openBrowser()
@@ -291,6 +316,7 @@ function reflag() {
 
 /** Rescore every stored post against the current CV and prompt. */
 async function rescore() {
+  if (!CV_PATH) throw new Error('no CV configured — upload one in Settings')
   system = systemPrompt(await loadCv(CV_PATH), CONFIG)
   const db = new Database(DB_PATH, { readonly: true, fileMustExist: true })
   const rows = db.prepare('SELECT key, author, text FROM posts ORDER BY scraped_at').all() as

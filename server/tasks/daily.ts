@@ -1,5 +1,5 @@
 import { backup } from '../utils/backup'
-import { readConfig } from '../utils/config'
+import { readConfigLoose } from '../utils/config'
 import { gmailStatus } from '../utils/gmail'
 import { enqueue, notify } from '../utils/jobs'
 
@@ -22,7 +22,12 @@ export default defineTask({
 
     // follow-ups only fire if the sweep runs, so this is what makes them automatic
     try {
-      if (gmailStatus(readConfig().profile.email).authorized) {
+      // loose, not readConfig(): an incomplete config must not cost us the nightly backup, and the
+      // sweep has no use for the fields a scrape needs
+      const email = readConfigLoose().profile.email
+      if (!email) {
+        messages.push('sweep skipped: no profile email set')
+      } else if (gmailStatus(email).authorized) {
         enqueue('sync', { auto: true })
         messages.push('sweep queued')
       } else {

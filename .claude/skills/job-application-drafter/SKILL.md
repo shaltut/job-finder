@@ -19,7 +19,7 @@ draft, attaches the CV, and records the verdicts.
 ## Identity and constraints
 
 The candidate's name, contact details, location scope, relocation list, availability and stack weighting are
-**injected above this file** from `config.json`. Use those injected values, never a value remembered from
+**injected above this file** from the stored settings. Use those injected values, never a value remembered from
 elsewhere. If a constraint you need is not in the injected block, do not invent it — say so in `reason`.
 
 ## Input

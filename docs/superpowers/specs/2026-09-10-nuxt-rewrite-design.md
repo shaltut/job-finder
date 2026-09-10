@@ -175,6 +175,11 @@ the design is locked in.
 
 ## Config — `config.json`, edited from the Settings page
 
+> **Superseded by [`2026-09-10-settings-in-sqlite-design.md`](./2026-09-10-settings-in-sqlite-design.md).**
+> `config.json` was retired: settings now live in a `settings` row in the database, the CV is uploaded
+> rather than typed as a path, and the country list is the full ISO 3166 table. The section below
+> records what was true at M1-M5 and is left intact.
+
 **Everything below is editable in the UI's Settings view and ships pre-filled with Mohamed Maher's values as
 defaults.** Nothing here is hardcoded in the source: `config.json` is the single place these live, the
 Settings page is a form over it, and both the scoring prompt and the drafter's system prompt are built from it

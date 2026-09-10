@@ -39,6 +39,9 @@ npm run dev ──► http://127.0.0.1:3939
                                                  │
  Pipeline view ◄── Gmail drafts (CV attached) ◄── claude -p (the drafter skill, zero tools)
                    └─ data/drafts/*.json when Gmail is not connected
+
+ Settings view ──► settings row in the same .db ──► read by the scraper (read-only) and the drafter
+                   └─ CV PDF uploaded to data/cv/, and "Prefill from CV" fills the blanks
 ```
 
 1. **Scraper** `scraper/run.ts`: drives the installed Chrome (`playwright-core`, `channel: 'chrome'`, headed,
@@ -58,7 +61,7 @@ npm run dev ──► http://127.0.0.1:3939
 
 ```bash
 npm run dev                                  # http://127.0.0.1:3939 (port pinned, see gotchas)
-npm test                                     # 72 tests: helpers, ingest, drafter, stages, MIME, invariants
+npm test                                     # 94 tests: helpers, settings, ingest, drafter, stages, MIME, invariants
 npm run lint / npm run typecheck
 npm run login                                # one-time LinkedIn login into ./profile (redo when runs exit 2)
 npm run dry -- --terms "vue nuxt developer" --max 10   # prints cards, stores nothing, no OpenAI call
@@ -66,6 +69,7 @@ node scraper/run.ts | node scraper/ingest.ts # CLI scrape; normally you press St
 npm run db:generate && npm run db:migrate    # after editing server/db/schema.ts
 node scripts/screenshot.mjs [outDir]         # screenshots every view (see the localhost gotcha)
 sqlite3 data/jobfinder.db                    # macOS ships sqlite3 at /usr/bin/sqlite3
+sqlite3 data/jobfinder.db 'select json from settings'   # the settings that replaced config.json
 ```
 
 `--rescore` and `--reflag` are carried over. Both *update* existing rows, which the read-only scraper cannot
@@ -97,27 +101,59 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   would demote good posts for what is now an advantage.
 - **`applications`** — one row per post touched. `verdict` drafted|skipped. Reasons for drafted posts **must**
   start with `named in application` / `named in follow-up`; the follow-up query relies on that prefix.
+- **`settings`** — exactly one row (`id = 1`), holding the whole config as JSON. One column rather than
+  normalised tables because nothing queries an individual setting: every consumer wants the whole object.
+  Plain `text`, not Drizzle's `mode: 'json'` — the scraper and the server read it through a raw
+  better-sqlite3 handle so the parse is explicit at both ends and cannot double-encode. A `CHECK (id = 1)`
+  makes the single row a property of the database rather than of prose.
 - **`contacts`** — one row per recruiter email. `stage` drafted → contacted → followed_up → final, or replied.
   **Two emails per address, ever.** `final` is never reset — enforced by `WHERE contacts.stage <> 'final'` on
   the upsert, not by prose.
 
 ## Configuration
 
-**`config.json` is the single source for the profile, constraints and search settings, and the Settings page
-is a form over it.** Nothing here is hardcoded in the source — `test/invariants.test.ts` fails if a contact
-detail appears under `server/`. Both the scoring prompt (`systemPrompt` in `scraper/lib.ts`) and the drafter's
-system prompt (`profileBlock` in `server/utils/drafter.ts`) are built from it at run time, so editing Settings
-changes the next scrape and the next draft.
+**Settings live in the database — one row in the `settings` table — and the Settings page is a form over
+it.** `config.json` is gone: it was git-tracked, so a real phone number and email address sat in a repository
+whose remote belongs to someone else. Nothing here is hardcoded in the source either —
+`test/invariants.test.ts` fails if a contact detail appears under `server/`, and a second invariant fails if
+any file starts reading `config.json` again. Both the scoring prompt (`systemPrompt` in `scraper/lib.ts`) and
+the drafter's system prompt (`profileBlock` in `server/utils/drafter.ts`) are built from the row at run time,
+so editing Settings changes the next scrape and the next draft.
+
+`shared/settings.ts` is the single definition: the Zod schema, `EMPTY_SETTINGS`, and the two SQL statements.
+It is pure — Zod only, no `node:fs`, no `better-sqlite3` import — so the server, the scraper child process,
+the tests and the browser's types all read the same file. `server/utils/config.ts` is the server's view of it
+and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
 
 - `profile` — name, title, location, email, phone, LinkedIn, GitHub, languages, years.
 - `constraints` — `remoteAnywhere`, `onsiteCountries`, `willRelocate`, `canStartImmediately`, `workingHours`,
   `stackWeighting` (`vue-primary` | `equal` | `react-primary`).
-- `cv` — path to the CV PDF. The scoring model reads the PDF itself once per run (`input_file`); no PDF library.
+- `cv` — repo-relative path under `data/cv/`, written by the upload endpoint rather than typed. The scoring
+  model reads the PDF itself once per run (`input_file`); no PDF library.
 - `terms` (the home feed plus 8 searches), `titles` (30, for the scoring prompt), `max`, `since`.
-- Validated server-side by `server/utils/config.ts`; a bad CV path or an empty terms list is refused with a
-  readable message and `config.json` is left untouched.
 - **`.env`** — `OPENAI_API_KEY`; optionally `JOBFINDER_DB`, `JOBFINDER_MODEL`, `PROFILE_DIR`. Loaded with
   Node's `--env-file-if-exists`. Never write the key into a tracked file.
+
+**Two schemas, not one, and the split is load-bearing.** `settingsSchema` checks shape and format only and
+lets every field be empty, because a fresh install has to be able to save a half-filled form — you cannot
+upload a CV to fix an incomplete config if the incomplete config is what blocks the save. `missingFields()`
+plus `assertComplete()` in `server/utils/config.ts` are the separate run gate: `readConfig()` calls them, so a
+scrape or a draft still refuses to start on an incomplete config, with a readable line per problem.
+`readConfigRaw()` and `readConfigLoose()` never throw — the Settings page and the Gmail status card render on
+that page and have to load in order to *fix* the thing that is wrong.
+
+**Countries come from a bundled ISO 3166 list** (`shared/countries.ts`, ~198 entries with aliases), not from
+LinkedIn. Country names never reach a LinkedIn URL — they are prose inside two prompts — and LinkedIn
+publishes no country-list endpoint, so fetching one would mean extra authenticated requests against the same
+account the scraper rate-limits. The aliases are the point: `withAliases()` renders `UAE (United Arab
+Emirates, Emirates)` into the scoring prompt so the model matches whatever form the post text uses, and
+`tldsFor()` derives the `.eg .sa .ae .qa` email-domain hint that used to be hardcoded. `profileBlock` in the
+drafter deliberately keeps the plain join — alias parentheses would leak into email prose.
+
+**Onboarding a fresh install:** open Settings, drop the CV on the upload area, press **Prefill from CV**. The
+model reads the PDF and fills only the fields that are still empty; it is never asked for
+`onsiteCountries`, `willRelocate`, `workingHours` or the switches, because a CV cannot know them and a model
+asked for them invents an answer that then goes out in an email. Nothing is saved until you press Save.
 
 The skill file holds Mohamed's evidence, gaps and screening rules as a snapshot from
 `/Volumes/Data/projects/CV/app/mohamed-maher-cv/app/data/resume.ts`. **If the CV changes, update the skill's
@@ -162,6 +198,26 @@ Evidence and Gaps sections**, or drafts keep hedging on stale gaps.
   rewrote the verdict to `skipped`, destroying the `named in ...` prefix the follow-up query needs — the
   recruiter would later have been told about a role the first email already covered. The skip insert carries
   `WHERE applications.verdict <> 'drafted'`.
+
+### Settings
+
+- **The CV upload writes behind the Settings form's back.** `PUT /api/config` sends the whole form object, so
+  after `POST /api/settings/cv` the page must re-sync *both* the form and the dirty baseline from the
+  response. Without that, the next Save posts the pre-upload `cv` path and silently overwrites the file
+  reference that was just stored — leaving the scraper pointing at a CV that is not there.
+- **The Settings page's dirty check is `JSON.stringify(form) !== JSON.stringify(data)`, which is key-order
+  sensitive.** `EMPTY_SETTINGS` defines the key order and the server hands back what it was given; rebuilding
+  the object with a different order makes the page permanently dirty.
+- **`UInputTags` does not trim.** Duplicates it rejects on its own (`duplicate` defaults false), but
+  whitespace reaches the schema, so `save()` trims `terms` and `titles` on the way out.
+- **`UInputMenu multiple`, not `USelectMenu multiple`, for the country pickers.** Only the former wraps reka's
+  `TagsInputRoot` and draws deletable chips inside the input; `USelectMenu` renders the selection as joined
+  text.
+- **`readConfig()` throws on an incomplete config and that is deliberate** — but it means every caller on a
+  path that must survive a fresh install has to use `readConfigLoose()` / `readConfigRaw()` instead.
+  `server/tasks/daily.ts` is the one that bit: the strict read there would have cost the nightly backup.
+  Watch for `''` versus `undefined` too — `gmail/status.get.ts` used `?? null`, which passes an empty string
+  straight through and fires the account-mismatch banner against a blank address.
 
 ### The server and the UI
 
@@ -232,7 +288,7 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   `drafts` endpoint. Trusting the search once nearly produced a duplicate.
 - **The connected account is discovered, not hardcoded.** The sweep matches sent mail by sender, so the wrong
   account would make every sent application look unsent. Settings shows a warning when the connected address
-  differs from `config.json`.
+  differs from the stored settings.
 - **Daily housekeeping** is a Nitro scheduled task (`server/tasks/daily.ts`, `7 8 * * *`) replacing the
   launchd plist: a dated `.db` copy in `backups/` (newest 14) and a queued sweep, so follow-ups fire without
   anyone remembering. It only runs while the dev server is up — the same constraint the original had. Run it
@@ -263,10 +319,13 @@ back on a different host, port and path — which Google accepts.
 
 ## Never commit
 
-`profile/` (a live LinkedIn session), `.env`, `data/` (the database and drafts), `google-oauth.json`,
-`gmail-token.json`, `backups/`, `logs/`, `jobs.csv`. `.gitignore` covers all of them — verify with
-`git check-ignore <path>` rather than by eye, and note that a trailing-slash pattern only matches a directory
-that already exists.
+`profile/` (a live LinkedIn session), `.env`, `data/` (the database, the CV and drafts), `config.json`
+(retired, see below), `google-oauth.json`, `gmail-token.json`, `backups/`, `logs/`, `jobs.csv`. `.gitignore`
+covers all of them — verify with `git check-ignore <path>` rather than by eye, and note that a trailing-slash
+pattern only matches a directory that already exists.
 
 **The git remote is `git@github.com:shaltut/job-finder.git` — the original author's repository, not
-Mohamed's.** `config.json` now carries his phone and email. Do not push without confirming the remote.
+Mohamed's.** Confirm the remote before pushing. Retiring `config.json` took the phone number and email out of
+the *code*, but **`docs/superpowers/specs/2026-09-10-nuxt-rewrite-design.md` still quotes them** (the config
+example at ~line 198 and the injected-identity paragraph at ~line 259) — it is a design record from before the
+move. Scrub it or drop the file before this repo goes anywhere public.

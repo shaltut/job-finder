@@ -70,35 +70,17 @@ export interface YieldRow {
   drafted: number
 }
 
-export interface Profile {
-  name: string
-  title: string
-  location: string
-  email: string
-  phone: string
-  linkedin: string
-  github: string
-  languages: string
-  yearsExperience: string
-}
+// The profile, constraints and search settings. These used to be declared here by hand as a third
+// copy of the same shape — one in the server's Zod schema, one in scraper/lib.ts, one here, kept in
+// sync by nobody. shared/settings.ts is now the single definition and this re-exports it.
+export type { AppConfig, Constraints, Profile } from '#shared/settings'
 
-export interface Constraints {
-  remoteAnywhere: boolean
-  onsiteCountries: string[]
-  willRelocate: string[]
-  canStartImmediately: boolean
-  workingHours: string
-  stackWeighting: 'vue-primary' | 'equal' | 'react-primary'
-}
-
-export interface AppConfig {
-  profile: Profile
-  constraints: Constraints
+/** What Settings still needs before a scrape or a draft will start — GET /api/settings/status. */
+export interface SettingsStatus {
+  missing: string[]
+  ready: boolean
   cv: string
-  terms: string[]
-  titles: string[]
-  max: number
-  since: 'past-24h' | 'past-week' | 'past-month'
+  cvExists: boolean
 }
 
 export interface StoredDraft {
