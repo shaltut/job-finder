@@ -1,0 +1,28 @@
+{
+  "name": "job-finder",
+  "version": "1.0.0",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "node --env-file-if-exists=.env jobfinder.js --self-test",
+    "start": "node --env-file-if-exists=.env jobfinder.js",
+    "login": "node --env-file-if-exists=.env jobfinder.js --login",
+    "dry": "node --env-file-if-exists=.env jobfinder.js --dry-run",
+    "schedule": "mkdir -p logs && sed -e \"s#NODE_PATH#$(which node)#g\" -e \"s#PROJECT_DIR#$PWD#g\" com.jobfinder.plist > ~/Library/LaunchAgents/com.jobfinder.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jobfinder.plist && echo scheduled daily 08:00",
+    "unschedule": "launchctl bootout gui/$(id -u)/com.jobfinder 2>/dev/null; rm -f ~/Library/LaunchAgents/com.jobfinder.plist; echo unscheduled",
+    "ui": "node --env-file-if-exists=.env ui.js",
+    "scrape": "node scrape.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "type": "module",
+  "dependencies": {
+    "openai": "^7.10.0",
+    "pg": "^8.23.0",
+    "playwright-core": "^1.63.0"
+  }
+}

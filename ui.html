@@ -1,0 +1,299 @@
+<!doctype html>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Job Finder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ---- tokens: design-system/job-finder/MASTER.md (Data-Dense Dashboard, density 8) ---- */
+:root{--bg:#F8FAFC;--surface:#FFFFFF;--fg:#1E293B;--fg-strong:#0F172A;--muted:#64748B;--muted-bg:#E9EEF6;--border:#E2E8F0;
+  --primary:#1E40AF;--primary-fg:#FFFFFF;--primary-soft:#DBEAFE;--accent:#B45309;--accent-bg:#FEF3C7;
+  --ok:#15803D;--ok-bg:#DCFCE7;--warn:#B45309;--warn-bg:#FEF3C7;--bad:#B91C1C;--bad-bg:#FEE2E2;--ring:#1E40AF;
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--r:6px;--font:"Fira Sans",system-ui,-apple-system,sans-serif;--mono:"Fira Code",ui-monospace,SFMono-Regular,Menlo,monospace}
+@media(prefers-color-scheme:dark){:root{--bg:#0B1220;--surface:#111A2E;--fg:#CBD5E1;--fg-strong:#F1F5F9;--muted:#94A3B8;--muted-bg:#1E293B;--border:#243044;
+  --primary:#60A5FA;--primary-fg:#0B1220;--primary-soft:#1E3A8A;--accent:#FBBF24;--accent-bg:#3B2A0A;
+  --ok:#4ADE80;--ok-bg:#052E16;--warn:#FBBF24;--warn-bg:#3B2A0A;--bad:#F87171;--bad-bg:#3B0A0A;--ring:#60A5FA}}
+*{box-sizing:border-box}html{font-size:15px}[hidden]{display:none!important}a{color:var(--primary)}
+body{margin:0;font:400 1rem/1.5 var(--font);background:var(--bg);color:var(--fg)}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.mono{font-family:var(--mono);font-size:.9em}.mut{color:var(--muted)}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+svg.i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none;vertical-align:-3px}
+
+/* ---- shell ---- */
+.app{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+aside{background:var(--surface);border-right:1px solid var(--border);padding:var(--s4) var(--s3);display:flex;flex-direction:column;gap:var(--s4);position:sticky;top:0;height:100vh}
+.brand{display:flex;align-items:center;gap:var(--s2);font-weight:600;color:var(--fg-strong);padding:0 var(--s2)}
+.brand .dot{width:10px;height:10px;border-radius:50%;background:var(--primary)}
+nav{display:flex;flex-direction:column;gap:2px}
+nav button{display:flex;align-items:center;gap:var(--s2);width:100%;padding:var(--s2) var(--s3);border:0;border-radius:var(--r);background:none;text-align:left;cursor:pointer;color:var(--fg);min-height:36px;transition:background .15s}
+nav button:hover{background:var(--muted-bg)}nav button.on{background:var(--primary-soft);color:var(--primary);font-weight:500}
+nav .badge{margin-left:auto;font-family:var(--mono);font-size:.75rem;background:var(--muted-bg);color:var(--fg);border-radius:999px;padding:0 var(--s2);min-width:22px;text-align:center}
+nav button.on .badge{background:var(--primary);color:var(--primary-fg)}
+.side-foot{margin-top:auto;font-size:.8rem;color:var(--muted);padding:0 var(--s2)}
+main{min-width:0;display:flex;flex-direction:column}
+header.top{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s5);border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:5;min-height:52px}
+header.top h1{font-size:1.05rem;margin:0;font-weight:600;color:var(--fg-strong)}
+.jobbar{margin-left:auto;display:flex;align-items:center;gap:var(--s2);font-size:.85rem;color:var(--muted)}
+.jobbar .pulse{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.view{padding:var(--s4) var(--s5) var(--s6);display:flex;flex-direction:column;gap:var(--s4)}
+@media(max-width:900px){.app{grid-template-columns:1fr}aside{position:static;height:auto;flex-direction:row;align-items:center;flex-wrap:wrap}nav{flex-direction:row;flex-wrap:wrap}nav button{width:auto}.side-foot{display:none}}
+
+/* ---- components ---- */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);cursor:pointer;min-height:32px;transition:background .15s,border-color .15s;white-space:nowrap}
+.btn:hover{background:var(--muted-bg)}.btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}.btn.primary:hover{filter:brightness(1.08)}
+.btn.danger{color:var(--bad);border-color:var(--bad-bg)}.btn.sm{padding:3px 8px;min-height:28px;font-size:.85rem}
+.field{display:flex;flex-direction:column;gap:2px;font-size:.8rem;color:var(--muted)}
+.field input,.field select,.field textarea{padding:6px 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);color:var(--fg);font-size:.95rem;min-height:32px}
+.field input::placeholder{color:var(--muted)}
+.check{display:inline-flex;align-items:center;gap:6px;font-size:.9rem;cursor:pointer;min-height:32px}
+.bar{display:flex;gap:var(--s3);align-items:end;flex-wrap:wrap}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:var(--s4)}
+.card h2{margin:0 0 var(--s3);font-size:.95rem;font-weight:600;color:var(--fg-strong)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--s3)}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:var(--s3) var(--s4)}
+.kpi .n{font-family:var(--mono);font-size:1.5rem;font-weight:600;color:var(--fg-strong);line-height:1.2}
+.kpi .l{font-size:.8rem;color:var(--muted)}.kpi.warn .n{color:var(--warn)}.kpi.ok .n{color:var(--ok)}
+.pill{display:inline-flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:600;font-size:.85rem;min-width:30px;padding:1px 6px;border-radius:999px;background:var(--muted-bg);color:var(--fg)}
+.pill.hi{background:var(--ok-bg);color:var(--ok)}.pill.mid{background:var(--warn-bg);color:var(--warn)}
+.chip{display:inline-flex;align-items:center;font-size:.75rem;padding:1px 7px;border-radius:999px;background:var(--muted-bg);color:var(--fg);margin:1px 3px 1px 0;white-space:nowrap}
+.chip.flag{background:var(--warn-bg);color:var(--warn)}.chip.ok{background:var(--ok-bg);color:var(--ok)}.chip.bad{background:var(--bad-bg);color:var(--bad)}.chip.info{background:var(--primary-soft);color:var(--primary)}
+.tablewrap{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:auto;max-height:calc(100vh - 290px)}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th{position:sticky;top:0;background:var(--surface);z-index:1;text-align:left;font-size:.75rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;padding:var(--s2) var(--s3);border-bottom:1px solid var(--border)}
+td{padding:var(--s2) var(--s3);border-bottom:1px solid var(--border);vertical-align:top}
+tr.row{cursor:pointer;transition:background .15s}tr.row:hover td{background:var(--muted-bg)}tr.row[aria-expanded=true] td{background:var(--primary-soft)}
+.title{font-weight:500;color:var(--fg-strong)}.sub{font-size:.8rem;color:var(--muted)}
+.actions{display:flex;gap:4px;white-space:nowrap}
+.detail{display:grid;grid-template-columns:1.4fr 1fr;gap:var(--s4);padding:var(--s3)}
+.detail pre{margin:0;white-space:pre-wrap;font-family:var(--mono);font-size:.8rem;max-height:340px;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:var(--s3)}
+.detail dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px var(--s3);font-size:.85rem}.detail dt{color:var(--muted)}.detail dd{margin:0}
+@media(max-width:900px){.detail{grid-template-columns:1fr}}
+.log{font-family:var(--mono);font-size:.8rem;white-space:pre-wrap;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:var(--s3);max-height:50vh;overflow:auto;margin:0}
+.empty{padding:var(--s4);color:var(--muted);text-align:center}
+#toast{position:fixed;right:var(--s4);bottom:var(--s4);display:flex;flex-direction:column;gap:var(--s2);z-index:20}
+.toast{background:var(--fg-strong);color:var(--bg);padding:var(--s2) var(--s3);border-radius:var(--r);font-size:.9rem;box-shadow:0 4px 16px rgba(0,0,0,.2);max-width:420px}
+.toast.bad{background:var(--bad);color:#fff}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+<symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></symbol>
+<symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+<symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+<symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+<symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></symbol>
+<symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></symbol>
+<symbol id="i-pen" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></symbol>
+<symbol id="i-ext" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+</defs></svg>
+
+<div class="app">
+<aside>
+  <div class="brand"><span class="dot"></span>Job Finder</div>
+  <nav aria-label="Views">
+    <button data-view="posts" class="on"><svg class="i"><use href="#i-list"/></svg>Posts<span class="badge" id="b-posts">–</span></button>
+    <button data-view="pipeline"><svg class="i"><use href="#i-users"/></svg>Pipeline<span class="badge" id="b-pipe">–</span></button>
+    <button data-view="run"><svg class="i"><use href="#i-zap"/></svg>Run</button>
+    <button data-view="settings"><svg class="i"><use href="#i-sliders"/></svg>Settings</button>
+  </nav>
+  <div class="side-foot" id="foot">last scrape –</div>
+</aside>
+<main>
+  <header class="top"><h1 id="title">Posts</h1>
+    <div class="jobbar" id="jobbar"><span>idle</span></div></header>
+
+  <section class="view" id="view-posts">
+    <div class="kpis" id="kpis"></div>
+    <div class="bar">
+      <label class="field">min score<input id="min" type="number" min="0" max="10" value="6" style="width:70px"></label>
+      <label class="field">search<span style="position:relative"><input id="q" placeholder="title, company, author, text" style="width:260px;padding-left:28px"><svg class="i" style="position:absolute;left:8px;top:9px;color:var(--muted)"><use href="#i-search"/></svg></span></label>
+      <label class="check"><input id="mena" type="checkbox">MENA</label>
+      <label class="check"><input id="remote" type="checkbox">remote</label>
+      <label class="check"><input id="unproc" type="checkbox" checked>unprocessed only</label>
+      <label class="check"><input id="unflag" type="checkbox">hide flagged</label>
+      <button class="btn" id="reload"><svg class="i"><use href="#i-refresh"/></svg>Reload</button><span class="mut" id="count"></span>
+    </div>
+    <div class="tablewrap"><table><thead><tr><th>score</th><th>role</th><th>location</th><th>flags</th><th>recruiter</th><th>age</th><th>status</th><th><span class="sr">actions</span></th></tr></thead><tbody id="ptab"></tbody></table></div>
+  </section>
+
+  <section class="view" id="view-pipeline" hidden>
+    <div class="bar"><button class="btn primary needs-idle" id="sync"><svg class="i"><use href="#i-refresh"/></svg>Sync with Gmail</button>
+      <span class="mut" style="font-size:.85rem">re-checks every open recruiter: sent drafts become contacted, due follow-ups get drafted, silence after a follow-up becomes final</span></div>
+    <div class="card" id="gmailcard"><h2>Gmail</h2><div class="bar"><span id="gmailstate" class="mut">checking…</span>
+      <a class="btn" id="gconnect" href="/api/gmail/auth" target="_blank" rel="noopener">Connect Gmail</a>
+      <button class="btn primary" id="gattach"><svg class="i"><use href="#i-mail"/></svg>Attach CV to waiting drafts</button>
+      <button class="btn" id="gdisconnect">Disconnect</button></div>
+      <p class="sub" style="margin:var(--s3) 0 0">The CV is attached automatically after every drafter or sync run. Use the button after drafting outside the UI, or after editing a draft in Gmail.</p></div>
+    <div class="card"><h2>To send: drafts waiting in Gmail</h2><div class="tablewrap" style="max-height:none;border:0;border-radius:0"><table><thead><tr><th>recruiter</th><th>stage</th><th>posts</th><th>note</th><th><span class="sr">actions</span></th></tr></thead><tbody id="tosend"></tbody></table></div></div>
+    <div class="card"><h2>All recruiters</h2><div class="tablewrap" style="max-height:none;border:0;border-radius:0"><table><thead><tr><th>recruiter</th><th>stage</th><th>last sent</th><th>follow-up</th><th>posts</th><th>note</th><th><span class="sr">actions</span></th></tr></thead><tbody id="ctab"></tbody></table></div></div>
+  </section>
+
+  <section class="view" id="view-run" hidden>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:var(--s4)">
+      <div class="card"><h2>Scrape LinkedIn</h2><div class="bar">
+        <label class="field" style="flex:1;min-width:240px">terms, comma separated<input id="rterms"></label>
+        <label class="field">max cards<input id="rmax" type="number" style="width:80px"></label>
+        <label class="field">since<select id="rsince"><option>past-24h</option><option>past-week</option><option>past-month</option></select></label>
+        <button class="btn primary needs-idle" id="scrape"><svg class="i"><use href="#i-play"/></svg>Run scrape</button></div>
+        <p class="sub" style="margin:var(--s3) 0 0">Opens a Chrome window, scrolls each term, scores posts with emails against the CV. 2 to 4 minutes per term.</p></div>
+      <div class="card"><h2>Draft applications</h2><div class="bar">
+        <label class="field">top N unprocessed<input id="dn" type="number" value="5" style="width:80px"></label>
+        <button class="btn primary needs-idle" id="draft"><svg class="i"><use href="#i-mail"/></svg>Run drafter</button></div>
+        <p class="sub" style="margin:var(--s3) 0 0">Screens each post, drafts Gmail emails, never sends. Reports only when it finishes, 3 to 5 minutes per post. Attach the CV by hand before sending.</p></div>
+    </div>
+    <div class="card"><h2>Queue</h2><div class="tablewrap" style="max-height:none;border:0;border-radius:0"><table><thead><tr><th>#</th><th>lane</th><th>job</th><th>queued</th><th><span class="sr">actions</span></th></tr></thead><tbody id="qtab"></tbody></table></div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:var(--s4)">
+      <div class="card"><h2 id="logtitle-scrape">scrape lane</h2><pre class="log" id="log-scrape">no job yet</pre></div>
+      <div class="card"><h2 id="logtitle-draft">draft lane</h2><pre class="log" id="log-draft">no job yet</pre></div>
+    </div>
+    <div class="card"><h2>Yield by search term</h2><p class="sub" style="margin:0 0 var(--s3)">usable = score 6+, no flags, MENA or remote. Drop terms that stay at zero; the list is edited in Settings.</p>
+      <div class="tablewrap" style="max-height:none;border:0;border-radius:0"><table><thead><tr><th>term</th><th>posts</th><th>7+</th><th>usable</th><th>last scraped</th></tr></thead><tbody id="ytab"></tbody></table></div></div>
+  </section>
+
+  <section class="view" id="view-settings" hidden>
+    <div class="card" style="max-width:820px"><h2>config.json</h2>
+      <label class="field">search terms, one per line<textarea id="cterms" rows="6"></textarea></label>
+      <label class="field" style="margin-top:var(--s3)">target titles for the scoring prompt, one per line<textarea id="ctitles" rows="10"></textarea></label>
+      <div class="bar" style="margin-top:var(--s3)">
+        <label class="field">max cards per term<input id="cmax" type="number" style="width:90px"></label>
+        <label class="field">since<select id="csince"><option>past-24h</option><option>past-week</option><option>past-month</option></select></label>
+        <button class="btn primary" id="save"><svg class="i"><use href="#i-save"/></svg>Save</button><span class="mut" id="saved"></span></div></div>
+  </section>
+</main>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = d => d ? new Date(d).toLocaleString('en-GB', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' }) : '';
+const icon = n => `<svg class="i" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+const rel = ms => { const m = Math.round(Math.abs(ms) / 6e4); if (m < 60) return `${m}m`; const h = Math.round(m / 60); return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`; };
+function toast(msg, bad) { const t = document.createElement('div'); t.className = 'toast' + (bad ? ' bad' : ''); t.textContent = msg; $('#toast').append(t); setTimeout(() => t.remove(), bad ? 8000 : 3500); }
+async function api(path, opts) {
+  const r = await fetch(path, opts && { method: opts.method || 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(opts.body || {}) });
+  const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok) { toast(`${j.error}`, true); throw new Error(j.error); }
+  return j;
+}
+const ask = (q) => { const v = prompt(q); return v === null ? null : v; };
+
+// ---- views ----
+const loaders = { posts: loadPosts, pipeline: () => { loadContacts(); loadGmail(); }, run: loadRun, settings: loadSettings };
+let view = 'posts';
+$$('nav button').forEach(b => b.onclick = () => show(b.dataset.view));
+function show(v) { view = v; $$('nav button').forEach(x => x.classList.toggle('on', x.dataset.view === v)); $$('main .view').forEach(s => s.hidden = s.id !== 'view-' + v);
+  $('#title').textContent = { posts: 'Posts', pipeline: 'Pipeline', run: 'Run', settings: 'Settings' }[v]; loaders[v](); }
+
+// ---- stats + global job status ----
+let state = { lanes: { scrape: {}, draft: {} }, queue: [] }, jobPoll, lastDone = {};
+const laneRunning = l => !!state.lanes[l]?.current?.running;
+const queuedKeys = () => new Set([...state.queue.filter(q => q.kind === 'draft' && q.args?.key).map(q => q.args.key), ...(state.lanes.draft.current?.args?.keys || [])]);
+async function loadStats() {
+  const s = await api('/api/stats');
+  $('#b-posts').textContent = s.unprocessed; $('#b-pipe').textContent = s.drafts_waiting + s.followups_due;
+  $('#foot').textContent = s.last_scrape ? `last scrape ${fmt(s.last_scrape)}` : 'no scrape yet';
+  $('#kpis').innerHTML = [
+    ['posts', s.posts, ''], ['unprocessed', s.unprocessed, ''], ['in scope, 7+, clean', s.usable, 'ok'],
+    ['drafts to send', s.drafts_waiting, s.drafts_waiting ? 'warn' : ''], ['follow-ups due', s.followups_due, s.followups_due ? 'warn' : ''], ['replied', s.replied, s.replied ? 'ok' : ''],
+  ].map(([l, n, c]) => `<div class="kpi ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+}
+async function refreshJob() {
+  state = await api('/api/job');
+  const parts = [];
+  for (const lane of ['scrape', 'draft']) {
+    const c = state.lanes[lane].current, q = state.queue.filter(x => x.lane === lane).length;
+    if (c?.running) parts.push(`<span class="pulse" aria-hidden="true"></span><span>${lane === 'scrape' ? 'scraping' : c.kind === 'sync' ? 'syncing' : `drafting ${c.args?.keys ? c.args.keys.length + ' post' + (c.args.keys.length > 1 ? 's' : '') : 'top ' + (c.args?.n || 10)}`} · ${rel(Date.now() - new Date(c.startedAt))}${q ? ` · ${q} queued` : ''}</span><button class="btn sm danger" data-stop="${lane}">${icon('stop')}Stop</button>`);
+    else if (q) parts.push(`<span>${q} queued in ${lane} lane</span>`);
+  }
+  $('#jobbar').innerHTML = parts.join('<span class="mut"> · </span>') || '<span>idle</span>';
+  $$('[data-stop]').forEach(b => b.onclick = async () => { await api('/api/job/stop', { body: { lane: b.dataset.stop } }); toast('stop requested'); refreshJob(); });
+  $$('[data-final]').forEach(b => b.disabled = laneRunning('draft'));
+  if (view === 'run') renderRun();
+  for (const lane of ['scrape', 'draft']) { const k = state.lanes[lane].last?.endedAt || null;
+    if (lastDone[lane] !== undefined && k && lastDone[lane] !== k) { const l = state.lanes[lane].last; toast(`${l.kind} finished (exit ${l.exit})`, l.exit !== 0); loadStats(); loaders[view](); }
+    lastDone[lane] = k; }
+  clearTimeout(jobPoll); if (laneRunning('scrape') || laneRunning('draft') || state.queue.length) jobPoll = setTimeout(refreshJob, 2500);
+}
+function renderRun() {
+  for (const lane of ['scrape', 'draft']) { const j = state.lanes[lane].current || state.lanes[lane].last;
+    $(`#logtitle-${lane}`).textContent = j ? `${lane} lane · ${j.kind} · started ${fmt(j.startedAt)}${j.endedAt ? ` · finished ${fmt(j.endedAt)} · exit ${j.exit}` : ' · running'}` : `${lane} lane · no job yet`;
+    $(`#log-${lane}`).textContent = j ? (j.log.join('\n') || (j.running ? 'running… the drafter prints only when it finishes' : '')) : 'no job yet'; }
+  $('#qtab').innerHTML = state.queue.map(q => `<tr><td class="mono">${q.id}</td><td>${esc(q.lane)}</td><td>${esc(q.kind)}${q.args?.key ? ` <span class="mono">${q.args.key.slice(0, 8)}</span>` : q.args?.n ? ` top ${q.args.n}` : q.args?.terms ? ` ${esc(q.args.terms)}` : ''}</td><td class="mut">${fmt(q.queuedAt)}</td><td><button class="btn sm" data-cancel="${q.id}">${icon('x')}Cancel</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty">queue is empty</td></tr>';
+  $$('[data-cancel]').forEach(b => b.onclick = async () => { await api(`/api/queue/${b.dataset.cancel}/cancel`, {}); toast('cancelled'); refreshJob(); });
+}
+
+// ---- posts ----
+async function loadPosts() {
+  const qs = new URLSearchParams({ min: $('#min').value, mena: +$('#mena').checked, remote: +$('#remote').checked, unprocessed: +$('#unproc').checked, unflagged: +$('#unflag').checked, q: $('#q').value });
+  const rows = await api('/api/posts?' + qs); $('#count').textContent = `${rows.length} posts`;
+  $('#ptab').innerHTML = rows.length ? rows.map(r => `<tr class="row" data-key="${r.key}" aria-expanded="false">
+    <td><span class="pill ${r.score >= 8 ? 'hi' : r.score >= 6 ? 'mid' : ''}">${r.score ?? '–'}</span></td>
+    <td><div class="title">${esc(r.title)}</div><div class="sub">${esc(r.company)}</div></td>
+    <td>${esc(r.location)}<div>${r.mena ? '<span class="chip info">MENA</span>' : ''}${r.remote ? '<span class="chip info">remote</span>' : ''}</div></td>
+    <td>${(r.flags || []).map(f => `<span class="chip flag">${esc(f)}</span>`).join('') || '<span class="mut">–</span>'}</td>
+    <td><div class="mono" style="font-size:.8rem">${esc(r.emails?.[0])}</div>${r.stage ? `<span class="chip ${stageClass(r.stage)}">${esc(r.stage)}</span>` : ''}</td>
+    <td class="mono" style="font-size:.8rem" title="${r.posted_at ? esc(fmt(r.posted_at)) : ''}">${r.posted_at ? rel(Date.now() - new Date(r.posted_at)) : esc(r.posted_age)}</td>
+    <td>${r.verdict ? `<span class="chip ${r.verdict === 'drafted' ? 'ok' : ''}">${esc(r.verdict)}</span><div class="sub">${esc(r.verdict_reason).slice(0, 60)}</div>` : '<span class="chip">new</span>'}</td>
+    <td><div class="actions">${r.verdict === 'drafted' ? '' : `<button class="btn sm" data-skip="${r.key}" title="Skip this post">${icon('x')}Skip</button>`}${r.verdict ? '' : queuedKeys().has(r.key) ? `<span class="chip info">${state.lanes.draft.current?.args?.keys?.includes(r.key) ? 'drafting' : 'queued'}</span>` : `<button class="btn sm primary" data-draft="${r.key}" title="Queue this post for the drafter">${icon('mail')}Draft</button>`}</div></td></tr>`).join('')
+    : '<tr><td colspan="8" class="empty">nothing matches these filters</td></tr>';
+  $$('#ptab tr.row').forEach(tr => tr.onclick = e => { if (!e.target.closest('button,a')) toggleDetail(tr); });
+  $$('[data-skip]').forEach(b => b.onclick = async () => { const reason = ask('Reason for skipping?'); if (reason === null) return; await api(`/api/posts/${b.dataset.skip}/skip`, { body: { reason } }); toast('skipped'); loadPosts(); loadStats(); });
+  $$('[data-draft]').forEach(b => b.onclick = async () => { await api('/api/run/draft', { body: { key: b.dataset.draft } }); toast('queued for drafting; queued posts run as one batch'); await refreshJob(); loadPosts(); });
+}
+const stageClass = s => ({ drafted: 'flag', contacted: 'info', followed_up: 'info', replied: 'ok', final: 'bad' })[s] || '';
+async function toggleDetail(tr) {
+  const next = tr.nextElementSibling; if (next?.classList.contains('detail-row')) { next.remove(); tr.setAttribute('aria-expanded', 'false'); return; }
+  const p = await api('/api/posts/' + tr.dataset.key); tr.setAttribute('aria-expanded', 'true');
+  const d = document.createElement('tr'); d.className = 'detail-row';
+  d.innerHTML = `<td colspan="8" style="padding:0"><div class="detail"><pre>${esc(p.text)}</pre><div>
+    <dl><dt>author</dt><dd><b>${esc(p.author)}</b> <a href="${esc(p.author_url)}" target="_blank" rel="noopener">profile ${icon('ext')}</a></dd>
+    <dt>emails</dt><dd class="mono">${esc(p.emails?.join(' '))}</dd><dt>location</dt><dd>${esc(p.location)}</dd><dt>company</dt><dd>${esc(p.company)}</dd>
+    <dt>why</dt><dd>${esc(p.reason)}</dd>${p.verdict ? `<dt>verdict</dt><dd>${esc(p.verdict)}: ${esc(p.verdict_reason)}</dd>` : ''}
+    <dt>scraped</dt><dd>${fmt(p.scraped_at)} via “${esc(p.search_term)}”</dd><dt>key</dt><dd class="mono">${p.key.slice(0, 12)}</dd></dl></div></div></td>`;
+  tr.after(d);
+}
+$('#reload').onclick = loadPosts; $('#q').onkeydown = e => e.key === 'Enter' && loadPosts();
+['#min', '#mena', '#remote', '#unproc', '#unflag'].forEach(s => $(s).onchange = loadPosts);
+
+// ---- pipeline ----
+async function loadContacts() {
+  const rows = await api('/api/contacts');
+  const btns = r => `<div class="actions"><button class="btn sm" data-note="${esc(r.email)}">${icon('pen')}Note</button>${r.stage === 'final' ? '' : `<button class="btn sm danger" data-final="${esc(r.email)}" ${laneRunning('draft') ? 'disabled' : ''}>${icon('ban')}Final</button>`}</div>`;
+  const due = r => { if (r.stage !== 'contacted' || !r.due_at) return ''; const ms = new Date(r.due_at) - Date.now(); return ms > 0 ? `<span class="chip">due in ${rel(ms)}</span>` : `<span class="chip flag">due ${rel(ms)} ago · sync to draft</span>`; };
+  const waiting = rows.filter(r => ['drafted', 'followed_up'].includes(r.stage));
+  $('#tosend').innerHTML = waiting.map(r => `<tr><td class="mono" style="font-size:.85rem">${esc(r.email)}</td><td><span class="chip ${stageClass(r.stage)}">${esc(r.stage)}</span></td><td>${r.post_count}</td><td class="sub">${esc(r.note)}</td><td>${btns(r)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">nothing waiting</td></tr>';
+  $('#ctab').innerHTML = rows.map(r => `<tr><td class="mono" style="font-size:.85rem">${esc(r.email)}</td><td><span class="chip ${stageClass(r.stage)}">${esc(r.stage)}</span></td><td style="white-space:nowrap">${fmt(r.last_sent_at)}</td><td>${due(r)}</td><td>${r.post_count}</td><td class="sub">${esc(r.note)}</td><td>${btns(r)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">no recruiters yet; run the drafter</td></tr>';
+  $$('[data-final]').forEach(b => b.onclick = async () => { const note = ask(`Mark ${b.dataset.final} final (no more emails). Note?`); if (note === null) return; await api(`/api/contacts/${encodeURIComponent(b.dataset.final)}/final`, { body: { note } }); toast('marked final'); loadContacts(); loadStats(); });
+  $$('[data-note]').forEach(b => b.onclick = async () => { const note = ask('Note:'); if (note === null) return; await api(`/api/contacts/${encodeURIComponent(b.dataset.note)}/note`, { body: { note } }); loadContacts(); });
+}
+$('#sync').onclick = async () => { await api('/api/run/sync', {}); toast('sync queued'); refreshJob(); };
+async function loadGmail() { const s = await api('/api/gmail/status');
+  $('#gmailstate').textContent = !s.configured ? 'not configured: no google-oauth.json and no gcloud credentials' : s.authorized ? `connected${s.source === 'gcloud' ? ' via gcloud' : ''} as ${s.email || 'your account'}${s.source === 'gcloud' && !s.quotaProject ? ' · quota project missing' : ''} · CV ${s.cvExists ? s.cv : 'MISSING at ' + s.cv}` : 'configured, not connected';
+  $('#gconnect').hidden = !s.configured || s.authorized; $('#gdisconnect').hidden = !s.authorized; $('#gattach').disabled = !s.authorized; }
+$('#gattach').onclick = async () => { const r = await api('/api/gmail/attach', {}); toast(r.skipped ? r.skipped : `${r.results.filter(x => x.status === 'attached').length} attached, ${r.results.filter(x => x.status === 'already attached').length} already had it, ${r.checked} drafts scanned`, !!r.skipped); };
+$('#gdisconnect').onclick = async () => { if (!confirm('Disconnect Gmail? Drafts will need the CV attached by hand until you reconnect.')) return; await api('/api/gmail/disconnect', {}); loadGmail(); };
+window.addEventListener('focus', () => view === 'pipeline' && loadGmail());
+
+// ---- run ----
+async function loadRun() { const c = await api('/api/config'); $('#rterms').value = c.terms.join(', '); $('#rmax').value = c.max; $('#rsince').value = c.since; state = await api('/api/job'); renderRun();
+  const y = await api('/api/yield'); const active = new Set(c.terms);
+  $('#ytab').innerHTML = y.map(r => `<tr><td>${esc(r.search_term)}${active.has(r.search_term) ? '' : ' <span class="chip">not in config</span>'}</td><td class="mono">${r.posts}</td><td class="mono">${r.s7}</td><td class="mono ${r.usable ? 's6' : ''}">${r.usable}</td><td class="mut">${fmt(r.last)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">no posts yet</td></tr>'; }
+$('#scrape').onclick = async () => { await api('/api/run/scrape', { body: { terms: $('#rterms').value, max: Number($('#rmax').value), since: $('#rsince').value } }); toast('scrape queued'); refreshJob(); };
+$('#draft').onclick = async () => { await api('/api/run/draft', { body: { n: Number($('#dn').value) } }); toast('drafter queued'); refreshJob(); };
+
+// ---- settings ----
+async function loadSettings() { const c = await api('/api/config'); $('#cterms').value = c.terms.join('\n'); $('#ctitles').value = c.titles.join('\n'); $('#cmax').value = c.max; $('#csince').value = c.since; }
+$('#save').onclick = async () => { const lines = s => s.split('\n').map(x => x.trim()).filter(Boolean);
+  const c = await api('/api/config', { method: 'PUT', body: { terms: lines($('#cterms').value), titles: lines($('#ctitles').value), max: Number($('#cmax').value), since: $('#csince').value } });
+  $('#saved').textContent = `saved ${c.terms.length} terms, ${c.titles.length} titles`; toast('settings saved'); };
+
+loadStats(); loadPosts(); refreshJob();
+</script>

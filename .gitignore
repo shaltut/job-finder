@@ -1,0 +1,9 @@
+node_modules/
+profile/
+logs/
+.env
+google-oauth.json
+gmail-token.json
+backups/
+drafts/
+jobs.csv
