@@ -1,202 +1,225 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## What this is
 
-Ahmed's personal job-search pipeline, built 2026-09-06. It scrapes LinkedIn **posts** (not the Jobs tab) — content
-search plus, since 2026-09-10, Ahmed's own home feed — for roles that carry a contact email, scores each post against his CV, stores everything in a local Postgres
-database, drafts tailored application emails as Gmail drafts, follows up once after three days of silence, and
-then stops contacting that recruiter. Sending is always manual: Ahmed attaches the CV and presses send.
+Mohamed Maher's personal job-search pipeline. It scrapes LinkedIn **posts** (not the Jobs tab) — content
+search plus his own home feed — for roles that carry a contact email, scores each post against his CV, stores
+everything in a local SQLite database, and drafts tailored application emails. Sending is always manual.
 
-Target: engineering leadership and senior .NET / architect roles, remote or in MENA (Saudi, UAE, Qatar, Egypt).
-Remote roles from India-based employers are in scope since 2026-09-08 (no office days, Cairo-compatible hours);
-on-site or hybrid outside the Gulf and Egypt is not. Personal recruiter addresses (gmail etc.) are treated like
-company addresses. Both are Ahmed's explicit decisions; the skill file encodes them.
-The full decision history is in `docs/superpowers/specs/` (two specs) and `docs/superpowers/plans/`.
+Target: senior frontend roles — Vue/Nuxt primary, React/Next secondary — remote anywhere, on-site or hybrid in
+Egypt, Saudi Arabia, the UAE or Qatar. On-site outside those is out of scope. Personal recruiter addresses
+(gmail etc.) are treated like company addresses: much real Egyptian and Gulf recruiting runs on them.
+
+**This branch (`nuxt-rewrite`) is a rewrite.** `main` holds the original Node + Postgres + vanilla-JS version,
+written for a different person. The design record is `~/.claude/plans/i-just-git-clone-snappy-axolotl.md`;
+`docs/superpowers/` holds the *original* author's specs and describes the pre-rewrite system.
+
+**Milestones: M1-M3 are built. M4 (Gmail) and M5 (cleanup) are not.** See "Not built yet" at the end.
 
 ## The pipeline, end to end
 
 ```
-npm start  ──►  posts (Postgres)  ──►  /job-application-drafter  ──►  Gmail drafts  ──►  Ahmed sends
-jobfinder.js     scored vs CV           .claude/skills/...           applications +      (CV attached by hand)
-(Playwright +    dedupe on key          headless or in-session      contacts tables
- OpenAI)                                                                  ▲
-                          ui.js / ui.html on 127.0.0.1:3939  ───────────────┘  (browse, act, run both)
+npm run dev ──► http://127.0.0.1:3939
+                  │
+   Run view ──────┼──► scraper/run.ts (Playwright + OpenAI)
+                  │      emits NDJSON on stdout, progress on stderr
+                  │           │
+                  │           ▼
+                  │    server ingests ──► data/jobfinder.db (Drizzle/SQLite)
+                  │                              │
+ Posts view ◄─────┴──────────────────────────────┤
+                                                 │
+ Pipeline view ◄── data/drafts/*.json ◄── claude -p (the drafter skill, zero tools)
 ```
 
-1. **Scraper** `jobfinder.js`: drives the installed Chrome (`playwright-core`, `channel: 'chrome'`, headed, its
-   own profile in `./profile`) through LinkedIn content search, one term at a time (the literal term **`feed`**
-   scrapes `linkedin.com/feed/` instead — same cards, same loop, no `datePosted` filter), scrolls until the card count
-   stops growing, expands "… more", keeps posts whose text contains an email, sends survivors to OpenAI
-   (`gpt-5-nano`, Responses API, strict JSON schema) with the CV text in the prompt, inserts into `posts`.
-2. **Drafter skill** `.claude/skills/job-application-drafter/SKILL.md`: screens a post (hard skips, soft flags),
-   checks the recruiter's stage in `contacts` and in Gmail, writes an honest email that declares gaps, saves it as
-   a Gmail draft, records verdicts. It is the source of truth for Ahmed's profile facts, gap list and constraints.
-3. **UI** `ui.js` + `ui.html`: sidebar dashboard (Posts, Pipeline, Run, Settings) with a KPI strip, a global job
-   bar with Stop on every view, row-level Skip/Draft, pipeline stage badges with follow-up countdowns, Sync with
-   Gmail, and the settings editor for `config.json`. Runs the scraper and the headless drafter (`claude -p` with
-   an allow-list). Visual rules come from `design-system/job-finder/MASTER.md` (ui-ux-pro-max, "Data-Dense
-   Dashboard"): tokens at the top of `ui.html`, Fira Sans/Fira Code from Google Fonts with system fallback (offline
-   it just falls back), inline SVG icons, light and dark via `prefers-color-scheme`. `[hidden]{display:none!important}`
-   is load-bearing: the `.view` flex rule would otherwise override it.
+1. **Scraper** `scraper/run.ts`: drives the installed Chrome (`playwright-core`, `channel: 'chrome'`, headed,
+   its own profile in `./profile`) through LinkedIn content search, one term at a time (the literal term
+   **`feed`** scrapes `linkedin.com/feed/` instead — same cards, no `datePosted` filter), scrolls until the
+   card count stops growing, expands "… more", keeps posts whose text contains an email, sends survivors to
+   OpenAI (`gpt-5-nano`, Responses API, strict JSON schema) with the CV text in the prompt.
+   **It never writes the database.** Pure helpers live in `scraper/lib.ts` so the server and the tests share them.
+2. **Ingest** `server/utils/ingest.ts`: the one place scraper output becomes rows. Used by the server (which
+   spawns the scraper from the UI) and by `scraper/ingest.ts` (the CLI pipe), so both behave identically.
+3. **Drafter** `.claude/skills/job-application-drafter/SKILL.md` + `server/utils/drafter.ts`: the server picks
+   the posts, groups them by recruiter, and runs one `claude -p` session per recruiter with **no tools at
+   all**. The skill returns JSON only. The server validates it, writes the email, and records the verdicts.
+4. **UI** `app/`: Nuxt UI v4 dashboard — Posts, Pipeline, Run, Settings.
 
 ## Commands
 
 ```bash
-npm start                                   # scrape + score with config.json defaults
-npm start -- --terms "hl7 fhir,solution architect" --max 20 --since past-week --cv ~/Documents/Other.pdf
-npm start -- --rescore                      # rescore every stored post (after a CV or prompt change)
-npm start -- --reflag                       # recompute pre-screen flags for every stored post (no API)
-npm run dry -- --terms "engineering manager" --max 10   # scrape one term, print cards, no OpenAI, no DB
-npm run login                               # one-time LinkedIn login into ./profile (redo when runs exit 2)
-npm test                                    # self-test of helpers (no browser, no DB, no API)
-npm run ui                                  # http://127.0.0.1:3939
-./scrape.js --since past-week               # or: npm run scrape -- --since past-week
-                                            # starts the UI if it is down, queues a scrape in its lane, follows the log
-npm run schedule / npm run unschedule       # optional launchd daily 08:00 with 0-30 min jitter; off by default
-/opt/homebrew/opt/postgresql@15/bin/psql -d jobfinder   # psql is NOT on PATH (keg-only Homebrew)
-PROFILE_DIR=profile-empty npm run dry       # proves the login guard: exits 2 with "login expired"
+npm run dev                                  # http://127.0.0.1:3939 (port pinned, see gotchas)
+npm test                                     # 46 tests: helpers, ingest, drafter contract, invariants
+npm run lint / npm run typecheck
+npm run login                                # one-time LinkedIn login into ./profile (redo when runs exit 2)
+npm run dry -- --terms "vue nuxt developer" --max 10   # prints cards, stores nothing, no OpenAI call
+node scraper/run.ts | node scraper/ingest.ts # CLI scrape; normally you press Start scrape in the Run view
+npm run db:generate && npm run db:migrate    # after editing server/db/schema.ts
+node scripts/screenshot.mjs [outDir]         # screenshots every view (see the localhost gotcha)
+sqlite3 data/jobfinder.db                    # macOS ships sqlite3 at /usr/bin/sqlite3
 ```
 
-The drafter is a skill, not a script: run `/job-application-drafter` in a session started in this folder ("process
-the top 10 unprocessed posts", or a pasted posting), or press Run drafter in the UI.
+`--rescore` and `--reflag` are carried over. Both *update* existing rows, which the read-only scraper cannot
+do, so they use the same NDJSON channel: the scraper emits `{op:'update'|'reflag', ...}` and the server applies
+it. Trigger them from the Run view's Maintenance row.
 
-## Data model (Postgres `jobfinder`, Homebrew postgresql@15, trust auth, user `ahmedshaltoot`, no password)
+## Data model (SQLite, `data/jobfinder.db`, Drizzle)
 
-- `posts.flags text[]` — regex pre-screen mirroring the skill's hard skips (`residency-gate`, `junior`,
-  `junior-years`, `immediate-start`, `night-shift`). Personal email addresses (gmail etc.) are deliberately not
-  a flag and not a skip: Ahmed's decision on 2026-09-08, since much real Egyptian and Gulf recruiting runs on them. Hints only: the drafter confirms them in the text;
-  the UI and the drafter's queue sort flagged posts last. Rules live in `FLAG_RULES` in `jobfinder.js`.
-- `posts` — one row per scraped post. `key` = sha1(author_url + first 160 chars of text with the drifting header
-  markers stripped: age like `5h`/`1d`, Follow/Following, Edited, connection degree). `score` 0-10 and `reason`
-  are model output against the CV: **ordering hints only, and `reason` overclaims** (it has credited Terraform
-  and HL7 V2 that Ahmed lacks). `emails text[]` comes from a deterministic regex, never from the model.
-- `applications` — one row per post touched by the drafter or the UI: `verdict` drafted|skipped, `reason`.
-  Reasons for drafted posts start with `named in application` / `named in follow-up`; the follow-up query relies
-  on that prefix. A post with a row is never shown as unprocessed again.
-- `contacts` — one row per recruiter email: `stage` drafted → contacted → followed_up → final, or replied.
-  Gmail (sent mail) is the truth for "contacted"; the table only caches the stage. `final` is never reset.
-  Two emails per address, ever. Stages only move when the skill's **stage sweep** runs (Step 1a, at the start of
-  every drafter run, or alone via the Pipeline tab's "Sync with Gmail" button / `POST /api/run/sync`). Sending a
-  draft does not update the page by itself; sync after sending.
+Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied at boot by
+`server/plugins/migrate.ts`. Translated off the original Postgres schema:
 
-All three tables come from `schema.sql`, applied idempotently by both `jobfinder.js` and `ui.js` at startup (the
-skill file carries a copy for reference only). `contacts.email` must be lower-case (constraint) and the skill's
-upsert carries `WHERE contacts.stage <> 'final'`, so `final` is enforced by the database.
+| Postgres | SQLite |
+|---|---|
+| `emails text[]`, `flags text[]` | JSON columns, read with `json_each` / `json_array_length` |
+| `cardinality(flags) = 0` | `json_array_length(flags) = 0` |
+| `$email = ANY(p.emails)` | `EXISTS (SELECT 1 FROM json_each(posts.emails) WHERE value = ?)` |
+| `timestamptz` | `integer({ mode: 'timestamp' })` — epoch **seconds** |
+| lower-case email constraint | `CHECK (email = lower(email))` |
+
+- **`posts`** — one row per scraped post. `key` = sha1(author_url + first 160 chars of text with drifting
+  header markers stripped). `score` 0-10 and `reason` are model output against the CV: **ordering hints only,
+  and `reason` overclaims** — never copy it into an email. `emails` comes from a deterministic regex, never
+  from the model. `in_scope` (was `mena`) means Egypt/Saudi/UAE/Qatar or genuinely location-free remote.
+- **`posts.flags`** — pre-screen hints mirroring the skill's hard skips, produced by `prescreen()` in
+  `scraper/lib.ts`: four regex rules in `FLAG_RULES` (`residency-gate`, `night-shift`, `junior`,
+  `wordpress-only`) plus `junior-years`, which comes from a separate years-of-experience check and is not in
+  that table. Hints only; the drafter confirms them in the text, and the UI and the drafter queue sort flagged
+  posts last. **`immediate-start` was deliberately removed** — Mohamed can start immediately, so flagging it
+  would demote good posts for what is now an advantage.
+- **`applications`** — one row per post touched. `verdict` drafted|skipped. Reasons for drafted posts **must**
+  start with `named in application` / `named in follow-up`; the follow-up query relies on that prefix.
+- **`contacts`** — one row per recruiter email. `stage` drafted → contacted → followed_up → final, or replied.
+  **Two emails per address, ever.** `final` is never reset — enforced by `WHERE contacts.stage <> 'final'` on
+  the upsert, not by prose.
 
 ## Configuration
 
-- `config.json` — `terms` (the home feed plus 8 search terms), `titles` (30 target titles for the scoring prompt), `max` cards per
-  term (40), `since` (past-24h | past-week | past-month). Edited from the UI's Settings tab. CLI flags override.
-  The terms were tuned on 2026-09-07 from one day of data: `engineering manager`, `head of engineering`,
-  `health insurance technology`, `ai engineering manager` were dropped (74 posts, 1 usable) and `hiring .net`,
-  `technical lead .net`, `engineering manager saudi`, `backend lead` added. Re-check yield with:
+**`config.json` is the single source for the profile, constraints and search settings, and the Settings page
+is a form over it.** Nothing here is hardcoded in the source — `test/invariants.test.ts` fails if a contact
+detail appears under `server/`. Both the scoring prompt (`systemPrompt` in `scraper/lib.ts`) and the drafter's
+system prompt (`profileBlock` in `server/utils/drafter.ts`) are built from it at run time, so editing Settings
+changes the next scrape and the next draft.
 
-  ```sql
-  select search_term, count(*) posts, count(*) filter (where score >= 6 and coalesce(cardinality(flags),0) = 0
-    and (mena or remote)) usable from posts group by 1 order by usable desc;
-  ```
-- `.env` — `OPENAI_API_KEY`; optionally `DATABASE_URL` (default `postgres://localhost/jobfinder`). Loaded with
-  Node's `--env-file-if-exists`, no dotenv. Never write the key into this file for Ahmed; he does it himself.
-- `jobfinder.js` config block — `MODEL`, `CV_PATH` (default `~/Documents/AhmedShaltootCV1.pdf`), `MENA` list,
-  the OpenAI `systemPrompt`. The CV PDF is read by the model itself once per run (`input_file`), no PDF library.
-- The skill file holds Ahmed's profile facts, evidence, gap list, relocation and level constraints as a snapshot
-  dated 2026-09-06. If the CV changes, update the skill's Steps 3-5 too, or drafts keep hedging on stale gaps.
-- `ui.js` — `DRAFT_ALLOW` / `DRAFT_DENY` for the headless drafter, run with `--permission-mode dontAsk`. **The
-  headless run inherits the user-level allow list in `~/.claude/settings.local.json`** (it accumulates
-  `Bash(curl:*)`, `Bash(rm:*)`, `Bash(echo:*)`, `Bash(npm:*)` ... from past approvals), and neither `dontAsk` nor
-  `--permission-prompts none` overrides an allow rule. Deny rules do, so `DRAFT_DENY` lists the shell prefixes and
-  every sending tool; only `Bash(/opt/homebrew/opt/postgresql@15/bin/psql:*)` is allowed, which is why the skill
-  must call `psql` by its literal full path. When new prefixes get approved at user level, extend the deny list.
-  Probe it with a `claude -p` that tries psql, curl and echo; only psql should run.
+- `profile` — name, title, location, email, phone, LinkedIn, GitHub, languages, years.
+- `constraints` — `remoteAnywhere`, `onsiteCountries`, `willRelocate`, `canStartImmediately`, `workingHours`,
+  `stackWeighting` (`vue-primary` | `equal` | `react-primary`).
+- `cv` — path to the CV PDF. The scoring model reads the PDF itself once per run (`input_file`); no PDF library.
+- `terms` (the home feed plus 8 searches), `titles` (30, for the scoring prompt), `max`, `since`.
+- Validated server-side by `server/utils/config.ts`; a bad CV path or an empty terms list is refused with a
+  readable message and `config.json` is left untouched.
+- **`.env`** — `OPENAI_API_KEY`; optionally `JOBFINDER_DB`, `JOBFINDER_MODEL`, `PROFILE_DIR`. Loaded with
+  Node's `--env-file-if-exists`. Never write the key into a tracked file.
+
+The skill file holds Mohamed's evidence, gaps and screening rules as a snapshot from
+`/Volumes/Data/projects/CV/app/mohamed-maher-cv/app/data/resume.ts`. **If the CV changes, update the skill's
+Evidence and Gaps sections**, or drafts keep hedging on stale gaps.
 
 ## Gotchas (each cost real time)
 
-- **Do not add `contentType=["jobs"]` to the LinkedIn search URL.** It means "posts embedding a Job card" and
-  returns almost nothing with no emails. Only `datePosted` is used.
+### LinkedIn and the scraper
+
+- **Do not add `contentType=["jobs"]` to the search URL.** It means "posts embedding a Job card" and returns
+  almost nothing with no emails. Only `datePosted` is used.
 - **LinkedIn's DOM has hashed class names and no post URN.** Cards are found structurally (the container whose
-  children each hold an author link) and read via `innerText`. The results live inside a scrolling `<main>`;
+  children each hold an author link) and read via `innerText`. Results live inside a scrolling `<main>`;
   scroll with `page.mouse.wheel`, not `window.scrollTo`. Emails render as `mailto:` links.
-- **Locale is pinned to en-US** in the scraper, but it does not hold: LinkedIn renders the first ~10 cards of any
-  page server-side in the *account's* language (Arabic) and the scroll-loaded ones in English. `normalize()` folds
-  the Arabic age back into its English form (`٣ من الساعات` → `3h`) before the age regex or the dedupe key see the
-  text, so those cards no longer land with a NULL `posted_at` and a key that drifts as the post ages. The two
-  render paths still key the same post twice — both copies sit in the DOM at once, and which path serves a given
-  post changes between runs, so a post scored yesterday can come back with a fresh key today (the `ponytail:` note
-  on `normalize()` names the fix: map the wrapper words, strip the RTL marks). Rare enough to leave alone: 2 extra
-  rows in 515 on 2026-09-10, one of them cross-run. The email is identical either way, so no recruiter is
-  contacted twice.
+- **Locale is pinned to en-US but it does not hold**: LinkedIn renders the first ~10 cards in the *account's*
+  language (Arabic) and scroll-loaded ones in English. `normalize()` folds the Arabic age back into English
+  (`٣ من الساعات` → `3h`) before the age regex or the dedupe key see it. The two render paths can still key the
+  same post twice; rare, and the email is identical either way, so no recruiter is contacted twice.
 - **The feed's reposts name the wrong author** unless you look: a card opening with "X reposted this" links X
-  first, so keying on the first link stores one row per resharer. `readCards` picks the **most repeated** href
-  instead — the real author is linked three times (avatar, name, menu), a resharer twice.
-- **The drifting-header dedupe bug:** the first key included "21h", so the same post came back as "22h". Anything
-  added to the key must be stable across runs.
-- **Rate-limit posture:** 9 terms (the feed plus 8 searches), 40 cards, randomized pauses, headed Chrome, `--enable-automation` off. A
-  LinkedIn checkpoint page is treated as a lost login (exit 2, `login expired` in `logs/err.log`, nobody is
-  notified). Fix with `npm run login`. Avoid running many manual scrapes on one day.
-- **Two job lanes and a queue** in `ui.js`: the scrape lane (one at a time, Chrome profile lock) and the draft lane
-  (drafter runs and syncs, one at a time) run concurrently; everything else queues (`POST /api/run/*` returns 202
-  and never 409). Single-post Draft requests waiting in the queue are batched into one `claude -p` session, since
-  each session costs 3-5 minutes of setup regardless of post count. `GET /api/job` returns `{lanes, queue}`;
-  `POST /api/job/stop {lane}` and `POST /api/queue/:id/cancel`. The daily sync just enqueues. Stop sends SIGTERM; Playwright's own handler only closes Chrome, so
-  `jobfinder.js` keeps a `stopping` flag and throws `stopped` at the next loop check (exit 1, notification says
-  failed). Scoring failures are not stored any more: the post is retried on the next run instead of sitting with
-  a NULL score.
-- **The API refuses cross-site and wrong-Host requests** (Origin / Sec-Fetch-Site / Host checks in `route()`).
-  GETs are exempt because they have to be — Google's OAuth redirect into `/api/gmail/callback` *is* a cross-site
-  GET — so that callback carries its own one-shot `state` nonce minted by `authUrl()`. Without it any page open in
-  the browser could feed the server its own `code` and point the drafts at its mailbox. It also
-  validates `n` for drafter runs, and Skip cannot overwrite a `drafted` verdict (409). Local `curl` is unaffected.
-- **Postgres on this Mac broke once** (`dyld: libicui18n.73.dylib` missing after a Homebrew upgrade); fixed with
-  `brew reinstall postgresql@15`. It was also simply not running on 2026-09-08 (clean log, no crash), fixed with
-  `brew services restart postgresql@15`. If `npm start` or `npm run ui` says the database is not ready, run
-  `pg_isready` and read `/opt/homebrew/var/log/postgresql@15.log` before anything else. Other Postgres containers on this Mac (5433,
-  `tactai-pg`) belong to other projects.
-- **A macOS notification** ("Job Finder") fires at the end of every non-dry scrape with the row count, or
-  `failed: login expired`, and after each automatic daily sync with the report's first line. There is no email or push.
-- **Daily housekeeping lives in `ui.js`** (`dailyTick`, hourly check, state in `logs/daily.json`): once a day while
-  the UI is up and idle it runs the Gmail stage sweep (so follow-ups fire without anyone remembering) and writes a
-  dated `pg_dump` to `backups/` (newest 14 kept). Nothing runs when the UI server is down. At startup, if Postgres
-  is unreachable, `ui.js` runs `brew services start postgresql@15` once and retries for 20 s.
-- **`posts.posted_at`** is computed from LinkedIn's relative age at scrape time (`postedAt()` in `jobfinder.js`;
-  `--reflag` backfills it) and is the secondary sort in the Posts view. `GET /api/yield` and the Run view's
-  "Yield by search term" table replace the psql query for term tuning.
-- **Scoring prompt credits only what the CV text contains** (rule added 2026-09-08 after the `reason` column
-  credited Terraform and HL7 V2 twice); `reason` is now "Match: …; Gaps: …". Rescore after any prompt change.
-- **Headless drafter (`claude -p`)** sees the Gmail MCP tools and the project skill only when started from this
-  folder with the CLI on PATH. Its stdout is the final report only, so the UI log is empty for 3-5 minutes.
-- **CV attachment is done by `ui.js`, not by the model.** The Gmail MCP tool takes base64 in the call parameters,
-  which corrupts a 75 KB PDF. `ui.js` uses the Gmail REST API (OAuth Desktop client in `google-oauth.json`, tokens in
-  `gmail-token.json`, both gitignored, scope `gmail.compose`, never calls send): after every drafter or sync run,
-  and from the Pipeline view's button, it lists drafts addressed to recruiters in `contacts`, rebuilds the ones
-  without a PDF with the file bytes, updates them in place, and verifies the attachment size. Only recruiters at
-  stage `drafted` or `followed_up` are touched (drafts listed with `q=to:<email>`), so hand-written mail to replied
-  or final recruiters is never rewritten; PDF presence is judged by MIME type, not by any filename. If Google shows the
-  OAuth app as "Testing", refresh tokens die after 7 days; set publishing status to In production.
-  The OAuth client lives in Google Cloud project `jobfinder-507910` (personal account); **the Gmail API must be
-  enabled on the project that owns the client**, or every call fails with "Gmail API has not been used in project
-  <number>". gcloud cannot create the consent screen or a Desktop client (IAP brand API needs an org and is shut
-  down), and Google blocks its own gcloud client from the Gmail scope, so `gcloud auth application-default login
-  --scopes=gmail.compose` is a dead end. The isolated gcloud config for the personal account is
-  `CLOUDSDK_CONFIG=~/.config/gcloud-jobfinder`; `jobfinder-260907` is an unused leftover project.
-- **Gmail rewrites bare URLs** in plain-text drafts into `google.com/url?q=` redirects; two applications were sent
-  that way. The skill now sends an `htmlBody` with real anchors for the signature links. Still glance at the
-  signature before sending.
-- **`search_threads` never returns drafts**, even with `in:draft`. Pending drafts are confirmed with `list_drafts`
-  or `get_draft` on the stored `gmail_draft_id`.
-- **The Claude-in-Chrome extension cannot open localhost**; verify the UI with Playwright screenshots
-  (`chromium.launch({ channel: 'chrome', headless: true })` from this folder's `node_modules`).
-- **Git repository since 2026-09-10** (it was deliberately not one before, when nothing left this Mac). Never
-  commit `profile/` (a live LinkedIn session), `.env`, `google-oauth.json`, `gmail-token.json`, `backups/`,
-  `logs/`, `drafts/` or `jobs.csv` (scraped recruiter addresses) — `.gitignore` covers all of them. `SETUP.md` is
-  the handover doc for anyone else running this; it carries the list of things that must be swapped, starting with
-  the drafter skill's profile facts and identity block.
+  first. `readCards` picks the **most repeated** href — the real author is linked three times (avatar, name,
+  menu), a resharer twice.
+- **The drifting-header dedupe bug:** the first key included "21h", so the same post came back as "22h".
+  Anything added to the key must be stable across runs. Covered by tests.
+- **Rate-limit posture:** 9 terms, 40 cards, randomized pauses, headed Chrome, `--enable-automation` off. A
+  LinkedIn checkpoint page is treated as a lost login (**exit 2**, `login expired`). Fix with `npm run login`.
+  Avoid many manual scrapes in one day.
+- **Scoring failures are not stored**: the post is retried next run rather than sitting with a NULL score.
 
-## Conventions in this codebase
+### The headless drafter (`claude -p`)
 
-Single-file tools, no framework, no build step, dependencies limited to `playwright-core`, `openai`, `pg`. Node
-22 built-ins for everything else (`parseArgs`, `--env-file-if-exists`, `node:http`). Deliberate ceilings are
-marked with `ponytail:` comments. Each non-trivial change ships with one runnable check (`npm test`, a curl, or a
-dry run) rather than a test suite. Specs and plans under `docs/superpowers/` are the design record; update the
-spec when a decision changes.
+- **`--allowed-tools` and `--disallowed-tools` are variadic.** A flag that follows one with no values of its
+  own is swallowed as a tool name — this silently dropped `--append-system-prompt` *and* left Bash enabled.
+  `--allowed-tools` also refuses an empty list, so the allow list names a tool that does not exist
+  (`NoToolsPermitted`) and the deny list is explicit.
+- **`claude -p` loads the CLAUDE.md of its working directory.** Running the drafter in the project root leaked
+  the previous owner's name into a report. It now spawns from an empty temp directory (`neutralCwd()`): it has
+  no tools, so it needs nothing from this folder, and the injected identity is the only one it can see.
+- **`--strict-mcp-config` with an empty MCP config cuts startup from 3-5 minutes to ~30s** on this machine,
+  which has ~10 MCP servers. It also removes all tool risk, so the old allow-list-inheritance problem is gone.
+- **The skill must never see a tool.** `test/invariants.test.ts` asserts the deny list and the neutral cwd.
+- **A skip must never downgrade a `drafted` verdict.** Re-drafting a recruiter with a pending draft once
+  rewrote the verdict to `skipped`, destroying the `named in ...` prefix the follow-up query needs — the
+  recruiter would later have been told about a role the first email already covered. The skip insert carries
+  `WHERE applications.verdict <> 'drafted'`.
+
+### The server and the UI
+
+- **Nitro's dev HMR reloads server modules on every edit**, which would forget a running job: the scraper kept
+  writing rows while the UI showed an idle lane and Stop had nothing to kill. Job lane state lives on
+  `globalThis` (`__jobfinderRunner`) so it outlives module reloads. **Any long-lived server state needs the
+  same treatment.**
+- **Port 3939 is pinned** in `nuxt.config.ts`. Port 3000 is taken on this machine, and Nuxt silently drifting
+  to 3001 would invalidate the Gmail OAuth redirect URI.
+- **The server is the sole writer of the database.** The scraper opens it read-only and streams rows back.
+  Keep it that way: two writers is how you get `SQLITE_BUSY` under a long scrape.
+- **`UDashboardPanel`'s `#body` is a flex column** — cards need `class="shrink-0"` or they get clipped
+  instead of scrolling.
+- **The Claude-in-Chrome extension cannot open localhost.** Verify the UI with `node scripts/screenshot.mjs`,
+  which drives headless Chrome through `playwright-core`.
+- **Two job lanes and a queue** in `server/utils/jobs.ts`: the scrape lane (one at a time, Chrome profile lock)
+  and the draft lane run concurrently; everything else queues, so `POST /api/run/*` returns 202 and never 409.
+  Single-post draft requests waiting in the queue are batched into one `claude` session. Stop sends SIGTERM;
+  Playwright's own handler only closes Chrome, so the scraper keeps a `stopping` flag and throws at the next
+  loop check (exit 1).
+
+### Environment
+
+- **PostgreSQL is not installed and Docker owns port 5432** (`onebench-postgres`, another project). That is
+  why this branch moved to SQLite rather than following the original `SETUP.md`.
+- **npm, not pnpm.** The Nuxt UI dashboard template ships `packageManager: pnpm@12.3.4`, `pnpm-lock.yaml` and
+  `pnpm-workspace.yaml`; all three were removed. A standalone pnpm 10 exists on this machine, but the pinned
+  v12 is what breaks corepack.
+- **`@unovis` was dropped** from the template: it pulls `maplibre-gl` with a critical XSS advisory whose fix
+  needs a major bump `@unovis` cannot take, and nothing here renders a map or a chart.
+- **The CV PDF is ~1.4 MB** (the original was built around 75 KB). Fine for the OpenAI file read and for
+  Gmail, but every application carries it.
+
+## Conventions
+
+Single-purpose files, no build step beyond Nuxt's. Dependencies limited to what the template ships plus
+`playwright-core`, `openai`, `better-sqlite3` and `drizzle-orm`. The scraper is TypeScript run directly by
+Node 22's native type stripping — no compile step, and `scraper/lib.ts` is importable by the server and the
+tests. Deliberate ceilings are marked with `ponytail:` comments. Every non-trivial change ships with one
+runnable check (`npm test`, a curl, or a dry run). Prefer a test over a comment for anything that would be
+silently expensive if reintroduced — that is what `test/invariants.test.ts` is for.
+
+## Not built yet
+
+- **M4 — Gmail.** OAuth loopback flow, `gmail.drafts.create` with the CV attached, the 8-row stage machine,
+  follow-up countdowns, `scheduledTasks` cron, `.db` backups. Until then the Pipeline view reads drafts from
+  `data/drafts/*.json` and nothing is ever sent.
+  - **When you build the callback, port the `state` nonce** from upstream commit `e8be7b6`. Google's redirect
+    into the callback is itself a cross-site GET, so an Origin / Sec-Fetch-Site guard must exempt GETs and
+    cannot protect it; without a one-shot random `state`, any page open in the browser could feed the server
+    its own `code` and have the drafts written into its mailbox. Verify with a forged callback: 400, and
+    `gmail-token.json` untouched.
+  - Scopes: `gmail.compose` **and** `gmail.readonly` (the metadata scope rejects the `q=` search the sweep
+    needs). `gmail.compose` includes permission to *send*, so never-sending is a property of this code —
+    `test/invariants.test.ts` fails if a send call appears under `server/`.
+- **M5 — cleanup.** Delete `jobfinder.js`, `ui.js`, `ui.html`, `scrape.js`, `schema.sql`,
+  `com.jobfinder.plist` and their `eslint.config.mjs` ignore entries. They are kept only as porting references
+  for M4's Gmail OAuth and MIME building. **`SETUP.md` still describes the Postgres version and is wrong.**
+
+## Never commit
+
+`profile/` (a live LinkedIn session), `.env`, `data/` (the database and drafts), `google-oauth.json`,
+`gmail-token.json`, `backups/`, `logs/`, `jobs.csv`. `.gitignore` covers all of them — verify with
+`git check-ignore <path>` rather than by eye, and note that a trailing-slash pattern only matches a directory
+that already exists.
+
+**The git remote is `git@github.com:shaltut/job-finder.git` — the original author's repository, not
+Mohamed's.** `config.json` now carries his phone and email. Do not push without confirming the remote.
