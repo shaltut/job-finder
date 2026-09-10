@@ -242,7 +242,15 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
 client**, consent screen **In production** (in Testing, refresh tokens die after 7 days), an OAuth client of
 type **Desktop app** (which has no redirect URI field — loopback is permitted automatically), downloaded as
 `google-oauth.json` in the project folder. The app listens on `http://127.0.0.1:3939/api/gmail/callback`;
-`localhost` is deliberately avoided because it resolves to `::1` first while the dev server binds IPv4 only. Settings shows these steps when the file is missing.
+`localhost` is deliberately avoided because it resolves to `::1` first while the dev server binds IPv4 only.
+
+**The full walkthrough, with every trap the Console throws, lives in two places that must stay in step:**
+`SETUP.md` ("Connecting Gmail") and `app/components/GmailSetup.vue`, which Settings shows when
+`google-oauth.json` is missing. The four traps, in order: the post-enable "Create credentials" banner can
+build a **service account**, which cannot reach a personal Gmail at all; **Publish stays greyed out** until
+Branding is complete; publishing to production **demands a real homepage and privacy-policy URL**; and a
+Desktop client **has no redirect URI field**, so its file says `["http://localhost"]` while the app calls
+back on a different host, port and path — which Google accepts.
 
 ## Known gaps
 

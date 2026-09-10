@@ -338,21 +338,29 @@ async function disconnectGmail() {
 
           <div
             v-if="gmail.authorized"
-            class="flex flex-wrap items-center gap-3 text-sm"
+            class="space-y-3"
           >
-            <UIcon
-              name="i-lucide-check-circle-2"
-              class="size-5 text-success"
-            />
-            <span class="text-highlighted font-mono text-xs">{{ gmail.email }}</span>
-            <UButton
-              label="Disconnect"
-              size="xs"
-              color="neutral"
-              variant="outline"
-              class="ml-auto"
-              @click="disconnectGmail"
-            />
+            <div class="flex flex-wrap items-center gap-3 text-sm">
+              <UIcon
+                name="i-lucide-check-circle-2"
+                class="size-5 text-success"
+              />
+              <span class="text-highlighted font-mono text-xs">{{ gmail.email }}</span>
+              <UButton
+                label="Disconnect"
+                size="xs"
+                color="neutral"
+                variant="outline"
+                class="ml-auto"
+                @click="disconnectGmail"
+              />
+            </div>
+            <p class="text-xs text-muted">
+              Holds <code>gmail.compose</code> and <code>gmail.readonly</code>: it can create drafts and read
+              your mail. It cannot delete anything, and it never sends &mdash; that is enforced in the code, not
+              by the scope. If your Google app is in Testing rather than In production, this lapses after 7 days
+              and you press Connect again.
+            </p>
           </div>
 
           <div
@@ -368,37 +376,10 @@ async function disconnectGmail() {
             <span class="text-sm text-muted">Opens Google's consent screen.</span>
           </div>
 
-          <div
+          <GmailSetup
             v-else
-            class="space-y-2 text-sm"
-          >
-            <p class="text-highlighted">
-              <UIcon
-                name="i-lucide-circle-alert"
-                class="size-4 align-text-bottom"
-              />
-              <code class="text-xs">google-oauth.json</code> is missing.
-            </p>
-            <ol class="list-decimal ml-5 space-y-1 text-muted">
-              <li>Create a Google Cloud project and <strong>enable the Gmail API on that same project</strong>.</li>
-              <li>
-                OAuth consent screen &rarr; publishing status <strong>In production</strong>
-                (in Testing, refresh tokens die after 7 days).
-              </li>
-              <li>
-                Scopes <code class="text-xs">gmail.compose</code> and <code class="text-xs">gmail.readonly</code>.
-              </li>
-              <li>
-                Create an OAuth client of type <strong>Desktop app</strong>. There is no redirect URI field
-                for this type &mdash; loopback is allowed automatically, and this app uses
-                <code class="text-xs">{{ gmail.redirect }}</code>.
-              </li>
-              <li>
-                Download the client JSON as <code class="text-xs">google-oauth.json</code> in the project folder,
-                then reload this page.
-              </li>
-            </ol>
-          </div>
+            :redirect="gmail.redirect"
+          />
         </div>
       </UCard>
     </template>
