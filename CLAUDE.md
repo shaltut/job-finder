@@ -143,7 +143,10 @@ upsert carries `WHERE contacts.stage <> 'final'`, so `final` is enforced by the 
   `jobfinder.js` keeps a `stopping` flag and throws `stopped` at the next loop check (exit 1, notification says
   failed). Scoring failures are not stored any more: the post is retried on the next run instead of sitting with
   a NULL score.
-- **The API refuses cross-site and wrong-Host requests** (Origin / Sec-Fetch-Site / Host checks in `route()`),
+- **The API refuses cross-site and wrong-Host requests** (Origin / Sec-Fetch-Site / Host checks in `route()`).
+  GETs are exempt because they have to be — Google's OAuth redirect into `/api/gmail/callback` *is* a cross-site
+  GET — so that callback carries its own one-shot `state` nonce minted by `authUrl()`. Without it any page open in
+  the browser could feed the server its own `code` and point the drafts at its mailbox. It also
   validates `n` for drafter runs, and Skip cannot overwrite a `drafted` verdict (409). Local `curl` is unaffected.
 - **Postgres on this Mac broke once** (`dyld: libicui18n.73.dylib` missing after a Homebrew upgrade); fixed with
   `brew reinstall postgresql@15`. It was also simply not running on 2026-09-08 (clean log, no crash), fixed with

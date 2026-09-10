@@ -89,9 +89,13 @@ function readToken() {
 }
 const writeToken = t => fs.writeFileSync(TOKEN_FILE, JSON.stringify(t, null, 2), { mode: 0o600 });
 function gmailStatus() { const t = readToken(); return { configured: !!oauthClient() || fs.existsSync(ADC_FILE), authorized: !!t?.refresh_token, source: t?.source || (t ? 'oauth-client' : null), quotaProject: t?.quota_project_id || null, email: t?.email || null, cv: CV_PATH(), cvExists: fs.existsSync(CV_PATH()) }; }
+// The callback is a cross-site GET (Google redirects into it), so the Origin/Sec-Fetch guard cannot cover it:
+// without a state nonce any page open in the browser could feed us its own code and point our drafts at its mailbox.
+let authState = null;
 function authUrl() { const c = oauthClient(); if (!c) throw bad(`${OAUTH_FILE} missing: download the OAuth client JSON from Google Cloud Console into the project folder`);
   const u = new URL(c.auth_uri || 'https://accounts.google.com/o/oauth2/v2/auth');
-  u.search = new URLSearchParams({ client_id: c.client_id, redirect_uri: REDIRECT, response_type: 'code', scope: SCOPES, access_type: 'offline', prompt: 'consent' }); return u.toString(); }
+  authState = crypto.randomUUID();
+  u.search = new URLSearchParams({ client_id: c.client_id, redirect_uri: REDIRECT, response_type: 'code', scope: SCOPES, access_type: 'offline', prompt: 'consent', state: authState }); return u.toString(); }
 async function tokenRequest(params, t) { const c = t?.client_id ? t : oauthClient();
   const r = await fetch(c.token_uri || 'https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: c.client_id, client_secret: c.client_secret, ...params }) });
   const j = await r.json(); if (!r.ok) throw new Error(`oauth: ${j.error_description || j.error}`); return j; }
@@ -279,7 +283,10 @@ async function route(req, res) {
   if (m === 'POST' && p === '/api/run/sync') { const item = enqueue('sync', { sync: true }); return send(res, item ? 202 : 200, { ...stateView(), queued: !!item, note: item ? undefined : 'a sync is already queued or running' }); }
   if (m === 'GET' && p === '/api/gmail/status') return send(res, 200, gmailStatus());
   if (m === 'GET' && p === '/api/gmail/auth') { res.writeHead(302, { location: authUrl() }); return res.end(); }
-  if (m === 'GET' && p === '/api/gmail/callback') { const code = q('code'); if (!code) throw bad(`google returned: ${q('error') || 'no code'}`); await exchangeCode(code);
+  if (m === 'GET' && p === '/api/gmail/callback') { const code = q('code'); if (!code) throw bad(`google returned: ${q('error') || 'no code'}`);
+    if (!authState || q('state') !== authState) throw bad('state mismatch: start from Connect Gmail in the Pipeline tab');
+    authState = null; // one shot: a replayed callback fails too
+    await exchangeCode(code);
     return send(res, 200, '<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;padding:40px"><h2>Gmail connected</h2><p>You can close this tab and go back to Job Finder.</p>', 'text/html; charset=utf-8'); }
   if (m === 'POST' && p === '/api/gmail/attach') return send(res, 200, await attachCv());
   if (m === 'POST' && p === '/api/gmail/disconnect') { fs.rmSync(TOKEN_FILE, { force: true }); return send(res, 200, gmailStatus()); }
@@ -297,6 +304,8 @@ if (process.argv[2] === '--self-test') { // the MIME builder is the only logic h
   const pdfPart = parts[2]; assert.match(pdfPart, /filename="cv.pdf"/); assert.deepEqual(Buffer.from(pdfPart.split('\r\n\r\n')[1].replace(/\r\n/g, ''), 'base64'), pdf);
   assert.equal(Buffer.from(parts[1].split('Content-Transfer-Encoding: base64\r\n\r\n')[1].split('\r\n--')[0].replace(/\r\n/g, ''), 'base64').toString(), 'hello & bye');
   assert.throws(() => validateConfig({ terms: ['a'], titles: [], max: 5, since: 'past-24h' }), /titles/);
+  if (fs.existsSync(OAUTH_FILE)) { const s1 = new URL(authUrl()).searchParams.get('state'), s2 = new URL(authUrl()).searchParams.get('state');
+    assert.ok(s1 && s1 !== s2 && s2 === authState); } // every Connect Gmail press mints a fresh state, and it is the one the callback checks
   assert.ok(gmailStatus().cv.endsWith('.pdf') && typeof attachSummary({ skipped: 'x' }) === 'string'); // touches CV_PATH and the attach helpers
   assert.equal(validateConfig({ terms: ['a'], titles: ['t'], max: 5, since: 'past-24h' }).cv, undefined);
   assert.match(buildMime({ to: 'a@b.com', bcc: 'me@x.com', replyTo: 'r@x.com', subject: 's', text: 't' }, 'cv.pdf', Buffer.from('x')), /^Bcc: me@x\.com\r\nReply-To: r@x\.com/m);
