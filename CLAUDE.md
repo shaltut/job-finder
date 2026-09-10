@@ -240,8 +240,9 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
 
 **Setting Gmail up:** a Google Cloud project with the **Gmail API enabled on the project that owns the
 client**, consent screen **In production** (in Testing, refresh tokens die after 7 days), an OAuth client of
-type **Desktop app**, redirect URI `http://localhost:3939/api/gmail/callback`, downloaded as
-`google-oauth.json` in the project folder. Settings shows these steps when the file is missing.
+type **Desktop app** (which has no redirect URI field — loopback is permitted automatically), downloaded as
+`google-oauth.json` in the project folder. The app listens on `http://127.0.0.1:3939/api/gmail/callback`;
+`localhost` is deliberately avoided because it resolves to `::1` first while the dev server binds IPv4 only. Settings shows these steps when the file is missing.
 
 ## Known gaps
 

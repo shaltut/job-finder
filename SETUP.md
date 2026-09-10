@@ -59,8 +59,9 @@ to copy.
    and you reconnect every week.
 3. Scopes: `gmail.compose` **and** `gmail.readonly`. The second is needed to read your sent mail so the tool
    knows what you actually sent; `gmail.metadata` is not enough, it rejects the search.
-4. Create an OAuth client of type **Desktop app**, redirect URI
-   `http://localhost:3939/api/gmail/callback`.
+4. Create an OAuth client of type **Desktop app**. **There is no redirect URI field for this type** —
+   Google allows loopback redirects automatically, so there is nothing here to match. This app listens on
+   `http://127.0.0.1:3939/api/gmail/callback`.
 5. Download the client JSON as `google-oauth.json` in the project folder, reload Settings, press
    **Connect Gmail**.
 

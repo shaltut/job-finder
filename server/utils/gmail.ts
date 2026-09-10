@@ -20,7 +20,15 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email'
 ].join(' ')
 
-export const REDIRECT = process.env.JOBFINDER_REDIRECT || 'http://localhost:3939/api/gmail/callback'
+/**
+ * 127.0.0.1, not localhost: the dev server binds IPv4 only, while `localhost` resolves to ::1 first on this
+ * machine. Browsers usually fall back, but Google's own guidance is the literal loopback IP, and a callback
+ * that silently fails to connect is a miserable thing to debug.
+ *
+ * A Desktop-app OAuth client accepts any loopback port and path without registering one, so there is
+ * nothing to configure in the Cloud console to match this.
+ */
+export const REDIRECT = process.env.JOBFINDER_REDIRECT || 'http://127.0.0.1:3939/api/gmail/callback'
 
 interface OAuthClient { client_id: string, client_secret: string, auth_uri?: string, token_uri?: string }
 interface Token {

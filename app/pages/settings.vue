@@ -389,8 +389,9 @@ async function disconnectGmail() {
                 Scopes <code class="text-xs">gmail.compose</code> and <code class="text-xs">gmail.readonly</code>.
               </li>
               <li>
-                Create an OAuth client of type <strong>Desktop app</strong>, with redirect URI
-                <code class="text-xs">{{ gmail.redirect }}</code>
+                Create an OAuth client of type <strong>Desktop app</strong>. There is no redirect URI field
+                for this type &mdash; loopback is allowed automatically, and this app uses
+                <code class="text-xs">{{ gmail.redirect }}</code>.
               </li>
               <li>
                 Download the client JSON as <code class="text-xs">google-oauth.json</code> in the project folder,
