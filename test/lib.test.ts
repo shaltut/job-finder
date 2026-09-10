@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  ageOf, dedupeKey, extractEmails, FLAG_RULES, normalize, postedAt, prescreen, searchUrl, systemPrompt
+  ageOf, dedupeKey, extractEmails, FLAG_RULES, normalize, postedAt, postUrlFrom, prescreen, resolveUrls,
+  searchUrl, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
 import { emptySettings } from '../shared/settings.ts'
@@ -131,3 +132,45 @@ test('systemPrompt: honours the stack weighting setting', () => {
 
 // The stored settings replaced config.json; their completeness is covered by settings.test.ts,
 // which can assert it against an in-memory database instead of one person's real file.
+
+// ---------------- post permalinks ----------------
+
+test('a card id yields its post token, in either expanded state', () => {
+  const tok = 'W8muNvdII1bJGTDSGso9kVJPJmx0ylFVm5PrAqphQZI'
+  assert.equal(tokenFromId(`expanded${tok}FeedType_FLAGSHIP_SEARCH`), tok)
+  assert.equal(tokenFromId(`collapsed${tok}FeedType_MAIN_FEED_RELEVANCE`), tok)
+  // ids that are not a card's: short posts have no expander at all, and cards carry plenty of other ids
+  assert.equal(tokenFromId('person-accent-4'), null)
+  assert.equal(tokenFromId(null), null)
+  assert.equal(tokenFromId(undefined), null)
+})
+
+test('urnMap pairs each card token with the URN that precedes its UpdateState key', () => {
+  // the shape a search payload has: one state block per card, the post's own URN just before its key
+  const body = '"id":"reactionState-urn:li:activity:111"}},"id":"UpdateState' + 'A'.repeat(24)
+    + '"}},"id":"reactionState-urn:li:ugcPost:222"}},"id":"UpdateState' + 'B'.repeat(24) + '"}}'
+  assert.deepEqual([...urnMap(body)], [['A'.repeat(24), 'urn:li:activity:111'], ['B'.repeat(24), 'urn:li:ugcPost:222']])
+  assert.equal(urnMap('nothing here').size, 0)
+})
+
+test('a post URN becomes a permalink, and anything else becomes null', () => {
+  assert.equal(postUrlFrom('urn:li:activity:7503713927348764672'),
+    'https://www.linkedin.com/feed/update/urn:li:activity:7503713927348764672/')
+  assert.equal(postUrlFrom('urn:li:ugcPost:7503685320660590592'),
+    'https://www.linkedin.com/feed/update/urn:li:ugcPost:7503685320660590592/')
+  assert.equal(postUrlFrom('urn:li:member:12345'), null)
+  assert.equal(postUrlFrom('javascript:alert(1)'), null)
+  assert.equal(postUrlFrom(null), null)
+  // the matcher must not be a stateful global regex: the same input twice must answer the same twice
+  assert.equal(postUrlFrom('urn:li:activity:1'), postUrlFrom('urn:li:activity:1'))
+})
+
+test('a URN two cards both claim is dropped rather than linked to the wrong post', () => {
+  const urns = new Map([['A'.repeat(24), 'urn:li:activity:111'], ['B'.repeat(24), 'urn:li:activity:111'],
+    ['C'.repeat(24), 'urn:li:activity:333']])
+  const id = (t: string) => `expanded${t}FeedType_FLAGSHIP_SEARCH`
+  assert.deepEqual(
+    resolveUrls([id('A'.repeat(24)), id('B'.repeat(24)), id('C'.repeat(24)), id('D'.repeat(24)), null], urns),
+    [null, null, 'https://www.linkedin.com/feed/update/urn:li:activity:333/', null, null]
+  )
+})

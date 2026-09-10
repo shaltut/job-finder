@@ -8,6 +8,7 @@ export interface PostRow {
   searchTerm: string | null
   author: string | null
   authorUrl: string | null
+  postUrl: string | null
   postedAge: string | null
   postedAt: string | null
   title: string | null

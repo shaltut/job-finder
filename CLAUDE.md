@@ -61,7 +61,7 @@ npm run dev ──► http://127.0.0.1:3939
 
 ```bash
 npm run dev                                  # http://127.0.0.1:3939 (port pinned, see gotchas)
-npm test                                     # 94 tests: helpers, settings, ingest, drafter, stages, MIME, invariants
+npm test                                     # 99 tests: helpers, settings, ingest, drafter, stages, MIME, invariants
 npm run lint / npm run typecheck
 npm run login                                # one-time LinkedIn login into ./profile (redo when runs exit 2)
 npm run dry -- --terms "vue nuxt developer" --max 10   # prints cards, stores nothing, no OpenAI call
@@ -90,7 +90,8 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
 | lower-case email constraint | `CHECK (email = lower(email))` |
 
 - **`posts`** — one row per scraped post. `key` = sha1(author_url + first 160 chars of text with drifting
-  header markers stripped). `score` 0-10 and `reason` are model output against the CV: **ordering hints only,
+  header markers stripped). `post_url` is the permalink, null when the run could not resolve one — see the
+  URN gotcha below. `score` 0-10 and `reason` are model output against the CV: **ordering hints only,
   and `reason` overclaims** — never copy it into an email. `emails` comes from a deterministic regex, never
   from the model. `in_scope` (was `mena`) means Egypt/Saudi/UAE/Qatar or genuinely location-free remote.
 - **`posts.flags`** — pre-screen hints mirroring the skill's hard skips, produced by `prescreen()` in
@@ -168,6 +169,16 @@ Evidence and Gaps sections**, or drafts keep hedging on stale gaps.
 - **LinkedIn's DOM has hashed class names and no post URN.** Cards are found structurally (the container whose
   children each hold an author link) and read via `innerText`. Results live inside a scrolling `<main>`;
   scroll with `page.mouse.wheel`, not `window.scrollTo`. Emails render as `mailto:` links.
+- **The post permalink is recovered from the network, not the DOM.** LinkedIn strips URNs from the rendered
+  HTML; the only id on a card is `expanded<token>FeedType_...`, whose token is an opaque hash. The URNs are
+  still in the React-server payloads that render the page, so `scrapeTerm` reads response bodies passively
+  (no extra request) and `urnMap` in `scraper/lib.ts` pairs token to URN: **in a search payload the URN
+  immediately before a card's `UpdateState<token>` key is that card's own.** Measured, not assumed — the
+  obvious "nearest URN" rule was tried first and mapped every card on a page to one URN.
+  **The home feed cannot be resolved at all**: it packs every `UpdateState` key into one consecutive array
+  with the URNs elsewhere, so `term === 'feed'` deliberately stores no URL rather than a wrong one. The same
+  reasoning drives `resolveUrls`, which drops any URN two cards both claim — a permalink pointing at the post
+  *next to* the job is worse than none. Verify with `npm run dry`, which prints the URL per card.
 - **Locale is pinned to en-US but it does not hold**: LinkedIn renders the first ~10 cards in the *account's*
   language (Arabic) and scroll-loaded ones in English. `normalize()` folds the Arabic age back into English
   (`٣ من الساعات` → `3h`) before the age regex or the dedupe key see it. The two render paths can still key the
@@ -314,6 +325,13 @@ back on a different host, port and path — which Google accepts.
   written and unit tested but untested against Google, because `google-oauth.json` does not exist yet.
 - The **Usable** KPI counts `score >= 6 AND no flags AND (in_scope OR remote)`, so a strong role whose post
   never states a location is missing from the headline number. It still appears in the Posts list.
+- **`resolveUrls` only dedupes within one search term**, and nothing constrains `post_url` to be unique, so a
+  post mispaired under one term and paired correctly under another would keep both rows' URLs. Not observed —
+  the search-path rule resolved 26/26 cards uniquely across the runs that established it.
+- **Posts scraped from the home feed carry no permalink**, and neither do rows stored before `post_url`
+  existed until a search re-encounters them (the scraper emits `op:'posturl'` for a post it already knows,
+  which is the only backfill path — a re-scrape skips known posts before scoring, so the insert's own
+  `ON CONFLICT` backfill never fires during a normal run).
 - **No repair path for a draft created with a wrong CV path.** The CV is attached at creation and the byte
   count verified, so the fix is to delete the Gmail draft and re-run rather than retrofit it.
 

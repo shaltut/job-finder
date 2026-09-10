@@ -209,6 +209,19 @@ const columns: TableColumn<PostRow>[] = [
       >
         <template #expanded="{ row }">
           <div class="p-4 space-y-3 text-sm whitespace-pre-wrap">
+            <p v-if="row.original.postUrl">
+              <ULink
+                :to="row.original.postUrl"
+                target="_blank"
+                class="inline-flex items-center gap-1 text-xs"
+              >
+                View post on LinkedIn
+                <UIcon
+                  name="i-lucide-external-link"
+                  class="size-3 shrink-0"
+                />
+              </ULink>
+            </p>
             <p
               v-if="row.original.reason"
               class="text-muted"

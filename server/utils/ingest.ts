@@ -8,6 +8,7 @@ export type ScraperRecord
   = | ({ op: 'post' } & PostRecord)
     | { op: 'update', key: string, title: string, company: string, location: string, remote: boolean, inScope: boolean, score: number, reason: string }
     | { op: 'reflag', key: string, flags: string[], postedAt: string | null }
+    | { op: 'posturl', key: string, postUrl: string }
     | { op: 'done', added: number }
 
 export interface PostRecord {
@@ -15,6 +16,7 @@ export interface PostRecord {
   searchTerm: string
   author: string
   authorUrl: string
+  postUrl: string | null
   postedAge: string | null
   postedAt: string | null
   title: string
@@ -49,16 +51,17 @@ export function openWritableDb(path = process.env.JOBFINDER_DB || 'data/jobfinde
 export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' | 'update' | null {
   if (rec.op === 'post') {
     const r = db.prepare(`
-      INSERT INTO posts (key, search_term, author, author_url, posted_age, posted_at, title, company,
-                         location, remote, in_scope, emails, score, reason, text, flags)
-      VALUES (@key, @searchTerm, @author, @authorUrl, @postedAge, @postedAt, @title, @company,
-              @location, @remote, @inScope, @emails, @score, @reason, @text, @flags)
+      INSERT INTO posts (key, search_term, author, author_url, post_url, posted_age, posted_at, title,
+                         company, location, remote, in_scope, emails, score, reason, text, flags)
+      VALUES (@key, @searchTerm, @author, @authorUrl, @postUrl, @postedAge, @postedAt, @title,
+              @company, @location, @remote, @inScope, @emails, @score, @reason, @text, @flags)
       ON CONFLICT (key) DO NOTHING
     `).run({
       key: rec.key,
       searchTerm: rec.searchTerm,
       author: rec.author,
       authorUrl: rec.authorUrl,
+      postUrl: rec.postUrl ?? null, // better-sqlite3 throws on a missing named binding, and older NDJSON has none
       postedAge: rec.postedAge,
       postedAt: secs(rec.postedAt),
       title: rec.title,
@@ -72,6 +75,8 @@ export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' |
       text: rec.text,
       flags: JSON.stringify(rec.flags)
     })
+    // A known post never reaches here twice in practice: the scraper skips it before scoring and emits
+    // 'posturl' instead, which is the one path that backfills a URL. DO NOTHING keeps that true.
     return r.changes ? 'post' : null
   }
 
@@ -98,6 +103,12 @@ export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' |
       UPDATE posts SET flags = @flags, posted_at = coalesce(posted_at, @postedAt) WHERE key = @key
     `).run({ key: rec.key, flags: JSON.stringify(rec.flags), postedAt: secs(rec.postedAt) })
     return r.changes ? 'update' : null
+  }
+
+  if (rec.op === 'posturl') { // a known post seen again, whose row predates permalinks or came from the feed
+    const r = db.prepare(`UPDATE posts SET post_url = @postUrl WHERE key = @key AND post_url IS NULL`)
+      .run({ key: rec.key, postUrl: rec.postUrl })
+    return r.changes ? 'update' : null // never overwrites a URL already stored
   }
 
   return null // 'done' carries a count for the caller to report, not a row

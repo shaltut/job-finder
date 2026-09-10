@@ -43,6 +43,7 @@ export default defineEventHandler(async (event) => {
       searchTerm: posts.searchTerm,
       author: posts.author,
       authorUrl: posts.authorUrl,
+      postUrl: posts.postUrl,
       postedAge: posts.postedAge,
       postedAt: posts.postedAt,
       title: posts.title,

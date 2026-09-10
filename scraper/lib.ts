@@ -18,6 +18,67 @@ const trimLabel = (e: string) => e.replace(/\.([A-Z][a-z]+)$/, '')
 export const extractEmails = (text: string, mailtos: string[] = []): string[] =>
   [...new Set([...mailtos, ...(text.match(EMAIL_RE) || []).map(trimLabel)].map(e => e.toLowerCase()))]
 
+// ---------------- post permalinks ----------------
+
+// LinkedIn's rendered DOM carries no post URN: cards are hashed markup, and the only id on a card is
+// `expanded<token>FeedType_...`, where <token> is an opaque per-post hash we cannot turn into a URL.
+// The URN is still shipped — in the React-server payload that renders the page — so the scraper reads
+// the response bodies and builds the token -> URN map here. Measured, not guessed: in that payload each
+// card contributes a state block whose `UpdateState<token>` key is preceded by that same post's
+// `reactionState-urn:li:...`, so the last URN before the anchor is the card's own. Verified across five
+// live payloads (14 cards, every one resolved, no two sharing a URN) — "nearest URN" was tried first and
+// was wrong, mapping every card on a page to a single URN.
+/**
+ * The opaque per-post token in a card's DOM id, or null. The id belongs to the post's expandable-text
+ * block and is rendered in either state, so both prefixes count: `expanded<token>FeedType_X` and
+ * `collapsed<token>FeedType_X`. A post short enough to need no "…more" has neither, and gets no URL.
+ */
+export const tokenFromId = (id: string | null | undefined): string | null =>
+  /^(?:expanded|collapsed)([A-Za-z0-9_-]{20,60})FeedType_[A-Z_]+$/.exec(id ?? '')?.[1] ?? null
+
+/**
+ * token -> post URN, parsed out of one React-server payload. Entries are merged across responses by the
+ * caller: the first page arrives in the search document, later ones in the pagination endpoint.
+ *
+ * Search payloads interleave one state block per card, so the URN immediately before a card's
+ * `UpdateState<token>` key is that card's own. **The home feed does not**: there every `UpdateState` key
+ * is packed into one consecutive array whose values are just "Expanded"/"Collapsed", with the URNs
+ * elsewhere and no association to recover — measured, and the reason `feed` posts are left with no URL
+ * rather than a guessed one. `resolveUrls` is the second line of defence if that ever slips.
+ */
+export function urnMap(body: string): Map<string, string> {
+  const out = new Map<string, string>()
+  // one pass, document order: remember the most recent URN, and claim it when its UpdateState key arrives
+  const scan = /urn:li:(?:activity|ugcPost|share):\d+|UpdateState([A-Za-z0-9_-]{20,60})/g
+  let urn: string | null = null
+  for (const m of body.matchAll(scan)) {
+    if (!m[1]) urn = m[0]
+    else if (urn && !out.has(m[1])) out.set(m[1], urn)
+  }
+  return out
+}
+
+/**
+ * Card tokens -> permalinks, dropping any URN that two cards on the same page both claim. A duplicate means
+ * the pairing slipped, and one of the two links is certainly wrong; a wrong permalink is worse than none,
+ * because it points at the post next to the job. Both are dropped rather than guessed between.
+ *
+ * The guard is per call, so it sees one term's cards: a post mispaired under one search term and paired
+ * correctly under another would not be caught, since nothing constrains post_url to be unique.
+ */
+export function resolveUrls(tokens: (string | null)[], urns: Map<string, string>): (string | null)[] {
+  const claimed = tokens.map(t => urns.get(tokenFromId(t) ?? '') ?? null)
+  const seen = new Map<string, number>()
+  for (const u of claimed) if (u) seen.set(u, (seen.get(u) ?? 0) + 1)
+  return claimed.map(u => (u && seen.get(u) === 1 ? postUrlFrom(u) : null))
+}
+
+/** The public permalink for a post URN. Null for anything that is not one, so a bad parse stores nothing. */
+export const postUrlFrom = (urn: string | null | undefined): string | null =>
+  /^urn:li:(?:activity|ugcPost|share):\d+$/.test(urn ?? '')
+    ? `https://www.linkedin.com/feed/update/${urn}/`
+    : null
+
 // ---------------- dedupe key ----------------
 
 // Card text starts with a header that drifts between runs ("5h" -> "1d", Follow -> Following, Edited),

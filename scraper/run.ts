@@ -15,7 +15,8 @@ import Database from 'better-sqlite3'
 import OpenAI from 'openai'
 import { chromium } from 'playwright-core'
 import {
-  ageOf, dedupeKey, extractEmails, normalize, postedAt, prescreen, rand, SCORE_SCHEMA, searchUrl, sleep, systemPrompt
+  ageOf, dedupeKey, extractEmails, normalize, postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl,
+  sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
 import { emptySettings, readSettingsFrom } from '../shared/settings.ts'
@@ -119,8 +120,10 @@ async function login() {
 }
 
 // ---------------- scraping ----------------
-// Runs inside the page. LinkedIn's class names are hashed and there is no post URN in the DOM, so cards are
-// found structurally: the container whose children each hold an author link.
+// Runs inside the page. LinkedIn's class names are hashed and the rendered DOM carries no post URN, so cards
+// are found structurally: the container whose children each hold an author link. The one usable id on a card
+// is `expanded<token>FeedType_...`; the token is opaque, but `urnMap` in lib.ts resolves it to the post's URN
+// from the React-server payload that rendered the page — LinkedIn strips URNs from the HTML, not from that.
 function readCards() {
   const main = document.querySelector('main')
   if (!main) return []
@@ -143,41 +146,62 @@ function readCards() {
       author: links.find(l => l.href === authorUrl && l.text)?.text || '',
       authorUrl,
       text: (card as HTMLElement).innerText.slice(0, 3000),
-      mailtos: [...card.querySelectorAll('a[href^="mailto:"]')].map(m => (m as HTMLAnchorElement).href.slice(7).split('?')[0]!)
+      mailtos: [...card.querySelectorAll('a[href^="mailto:"]')].map(m => (m as HTMLAnchorElement).href.slice(7).split('?')[0]!),
+      // never card.closest(): that walks up to a shared ancestor and would give every card one id
+      token: card.querySelector('[id^="expanded"],[id^="collapsed"]')?.id ?? null
     }]
   })
 }
 
-type Card = { author: string, authorUrl: string, text: string, mailtos: string[] }
+type Card = { author: string, authorUrl: string, text: string, mailtos: string[], token: string | null }
 
-async function scrapeTerm(page: import('playwright-core').Page, term: string): Promise<Card[]> {
-  // the literal term 'feed' scrapes the home feed instead of a content search: same cards, no datePosted filter
-  await page.goto(term === 'feed' ? 'https://www.linkedin.com/feed/' : searchUrl(term, SINCE), { waitUntil: 'domcontentloaded' })
-  await sleep(rand(3000, 5000))
-  if (/\/(login|authwall|checkpoint)/.test(page.url())) throw Object.assign(new Error('login expired'), { code: 2 })
-  await page.waitForSelector('main a[href*="/in/"], main a[href*="/company/"]', { timeout: 20_000 }).catch(() => {})
-  await page.mouse.move(500, 400) // over the results column; <main> is the scroll container
-  let last = -1
-  let stable = 0
-  let cards: Card[] = []
-  while (stable < 4 && cards.length < MAX_CARDS) {
-    checkStop()
-    await page.mouse.wheel(0, 4000)
-    await sleep(rand(2000, 5000))
-    cards = await page.evaluate(readCards) as Card[]
-    stable = cards.length === last ? stable + 1 : 0
-    last = cards.length
+async function scrapeTerm(page: import('playwright-core').Page, term: string): Promise<(Card & { postUrl: string | null })[]> {
+  // Post permalinks: the URNs ride in the payloads that render the results — the document itself, then the
+  // pagination endpoint as scrolling loads more — so they are collected passively here, with no extra
+  // request. Search only: the home feed batches its state keys and offers no way to tell which URN belongs
+  // to which card (see urnMap), so feed posts are stored with no URL rather than a wrong one.
+  // The page is reused across terms, so the listener comes off again in the finally below: left on, one
+  // would accumulate per term and every payload would be parsed nine times over.
+  const urns = new Map<string, string>()
+  const collect = async (res: import('playwright-core').Response) => {
+    if (!/linkedin\.com/.test(res.url()) || /\.(js|css|png|jpe?g|svg|gif|woff2?)(\?|$)/.test(res.url())) return
+    try {
+      for (const [tok, urn] of urnMap(await res.text())) if (!urns.has(tok)) urns.set(tok, urn)
+    } catch { /* body already discarded: the next scroll response carries the same cards */ }
   }
-  // reverse order: each click removes a button, so a forward loop over index locators skips every other one
-  const more = await page.locator('main button', { hasText: /…\s*more$/ }).all()
-  for (const b of more.reverse()) await b.click({ timeout: 2000 }).catch(() => {})
-  await sleep(1000)
-  cards = (await page.evaluate(readCards) as Card[]).slice(0, MAX_CARDS)
-  if (!cards.length) {
-    fs.mkdirSync('logs', { recursive: true })
-    await page.screenshot({ path: `logs/zero-${term.replace(/\W+/g, '-')}.png` }).catch(() => {}) // what did LinkedIn show?
+  if (term !== 'feed') page.on('response', collect)
+  try {
+    // the literal term 'feed' scrapes the home feed instead of a content search: same cards, no datePosted filter
+    await page.goto(term === 'feed' ? 'https://www.linkedin.com/feed/' : searchUrl(term, SINCE), { waitUntil: 'domcontentloaded' })
+    await sleep(rand(3000, 5000))
+    if (/\/(login|authwall|checkpoint)/.test(page.url())) throw Object.assign(new Error('login expired'), { code: 2 })
+    await page.waitForSelector('main a[href*="/in/"], main a[href*="/company/"]', { timeout: 20_000 }).catch(() => {})
+    await page.mouse.move(500, 400) // over the results column; <main> is the scroll container
+    let last = -1
+    let stable = 0
+    let cards: Card[] = []
+    while (stable < 4 && cards.length < MAX_CARDS) {
+      checkStop()
+      await page.mouse.wheel(0, 4000)
+      await sleep(rand(2000, 5000))
+      cards = await page.evaluate(readCards) as Card[]
+      stable = cards.length === last ? stable + 1 : 0
+      last = cards.length
+    }
+    // reverse order: each click removes a button, so a forward loop over index locators skips every other one
+    const more = await page.locator('main button', { hasText: /…\s*more$/ }).all()
+    for (const b of more.reverse()) await b.click({ timeout: 2000 }).catch(() => {})
+    await sleep(1000)
+    cards = (await page.evaluate(readCards) as Card[]).slice(0, MAX_CARDS)
+    if (!cards.length) {
+      fs.mkdirSync('logs', { recursive: true })
+      await page.screenshot({ path: `logs/zero-${term.replace(/\W+/g, '-')}.png` }).catch(() => {}) // what did LinkedIn show?
+    }
+    const urls = resolveUrls(cards.map(c => c.token), urns)
+    return cards.map((c, i) => ({ ...c, postUrl: urls[i] ?? null }))
+  } finally {
+    page.off('response', collect)
   }
-  return cards
 }
 
 // ---------------- scoring ----------------
@@ -253,10 +277,16 @@ async function run({ dry }: { dry: boolean }) {
         const emails = extractEmails(text, c.mailtos)
         const key = dedupeKey(c.authorUrl, text)
         if (dry) {
-          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${emails.join(' ') || '-'} | ${text.replace(/\s+/g, ' ').slice(0, 100)}`)
+          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${emails.join(' ') || '-'} | ${c.postUrl || 'NO URL'} | ${text.replace(/\s+/g, ' ').slice(0, 80)}`)
           continue
         }
-        if (!emails.length || seen.has(key)) continue
+        if (!emails.length) continue
+        if (seen.has(key)) {
+          // Already stored, so it is deliberately not scored again — but a row from before permalinks
+          // existed, or from the feed, may still have no URL. This is the only moment the URL is in hand.
+          if (c.postUrl) emit({ op: 'posturl', key, postUrl: c.postUrl })
+          continue
+        }
         seen.add(key)
         let s: Score
         try {
@@ -273,6 +303,7 @@ async function run({ dry }: { dry: boolean }) {
           searchTerm: term,
           author: c.author,
           authorUrl: c.authorUrl,
+          postUrl: c.postUrl,
           postedAge: age || null,
           postedAt: postedAt(age)?.toISOString() ?? null,
           title: s.title,

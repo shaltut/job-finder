@@ -15,6 +15,12 @@ export const posts = sqliteTable('posts', {
   searchTerm: text('search_term'),
   author: text('author'),
   authorUrl: text('author_url'),
+  /**
+   * Permalink to the post itself. Null when the scrape could not resolve one: the rendered DOM carries no
+   * URN, so it is recovered from the page's own React-server payload (see `urnMap` in scraper/lib.ts), and
+   * the home feed offers no card-to-URN association at all.
+   */
+  postUrl: text('post_url'),
   /** LinkedIn's relative age as scraped ('5h', '2d'); postedAt pins it to an instant. */
   postedAge: text('posted_age'),
   postedAt: integer('posted_at', { mode: 'timestamp' }),

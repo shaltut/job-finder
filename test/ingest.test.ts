@@ -17,6 +17,7 @@ const post = (over: Partial<Record<string, unknown>> = {}): ScraperRecord => ({
   searchTerm: 'vue nuxt developer',
   author: 'Heba Zaki',
   authorUrl: 'https://www.linkedin.com/in/heba',
+  postUrl: 'https://www.linkedin.com/feed/update/urn:li:activity:7503713927348764672/',
   postedAge: '3h',
   postedAt: '2026-09-10T09:00:00.000Z',
   title: 'Senior Frontend Engineer',
@@ -105,4 +106,34 @@ test('contacts upsert never resets a recruiter who is \'final\'', () => {
   `).run('rec@acme.sa', 'drafted')
   const row = db.prepare('SELECT stage FROM contacts WHERE email = ?').get('rec@acme.sa') as { stage: string }
   assert.equal(row.stage, 'final', 'final is enforced by the database, not by prose')
+})
+
+test('the post URL is stored on insert, and a conflicting record changes nothing', () => {
+  const key = 'c'.repeat(40)
+  const url = 'https://www.linkedin.com/feed/update/urn:li:ugcPost:7503685320660590592/'
+  assert.equal(applyRecord(db, post({ key, postUrl: url })), 'post')
+  assert.equal((db.prepare('SELECT post_url FROM posts WHERE key = ?').get(key) as { post_url: string }).post_url, url)
+
+  // ON CONFLICT DO NOTHING: a re-ingest neither counts as a new row nor clears the URL already stored
+  assert.equal(applyRecord(db, post({ key, postUrl: null, title: 'CHANGED' })), null)
+  const row = db.prepare('SELECT post_url, title FROM posts WHERE key = ?').get(key) as { post_url: string, title: string }
+  assert.equal(row.post_url, url)
+  assert.equal(row.title, 'Senior Frontend Engineer')
+})
+
+test('a posturl record fills a missing URL and never overwrites one', () => {
+  const key = 'd'.repeat(40)
+  const url = 'https://www.linkedin.com/feed/update/urn:li:activity:7503894663280623621/'
+  applyRecord(db, post({ key, postUrl: null }))
+
+  // the scraper emits this for a post it already knows, which it skips before scoring
+  assert.equal(applyRecord(db, { op: 'posturl', key, postUrl: url }), 'update')
+  assert.equal((db.prepare('SELECT post_url FROM posts WHERE key = ?').get(key) as { post_url: string }).post_url, url)
+
+  // seen again on a later run: the row already has a URL, so nothing changes and nothing is counted
+  assert.equal(applyRecord(db, { op: 'posturl', key, postUrl: 'https://www.linkedin.com/feed/update/urn:li:activity:1/' }), null)
+  assert.equal((db.prepare('SELECT post_url FROM posts WHERE key = ?').get(key) as { post_url: string }).post_url, url)
+
+  // an unknown key touches nothing
+  assert.equal(applyRecord(db, { op: 'posturl', key: 'f'.repeat(40), postUrl: url }), null)
 })
