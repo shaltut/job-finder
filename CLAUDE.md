@@ -13,11 +13,16 @@ Egypt, Saudi Arabia, the UAE or Qatar. On-site outside those is out of scope. Pe
 (gmail etc.) are treated like company addresses: much real Egyptian and Gulf recruiting runs on them.
 
 **This branch (`nuxt-rewrite`) is a rewrite.** `main` holds the original Node + Postgres + vanilla-JS version,
-written for a different person. The design record is `~/.claude/plans/i-just-git-clone-snappy-axolotl.md`;
-`docs/superpowers/` holds the *original* author's specs and describes the pre-rewrite system.
+written for a different person. The design record, including what changed during implementation and the
+known gaps, is `docs/superpowers/specs/2026-09-10-nuxt-rewrite-design.md`; the two `2026-09-06-*` specs
+beside it describe the pre-rewrite system.
 
-**Milestones: M1-M4 are built; M5 (cleanup) is not.** Gmail works but needs `google-oauth.json` — see
-Configuration. Until it is connected, drafts fall back to `data/drafts/*.json`.
+**The rewrite is complete (M1-M5).** Gmail works but needs `google-oauth.json` — see Gmail below. Until it
+is connected, drafts fall back to `data/drafts/*.json` and everything else works unchanged.
+
+The pre-rewrite implementation (`jobfinder.js`, `ui.js`, `ui.html`, `scrape.js`, `schema.sql`,
+`com.jobfinder.plist`) is **deleted here but preserved in git** — read one with `git show main:ui.js`. Source
+comments that mention those files are historical attribution, not live references.
 
 ## The pipeline, end to end
 
@@ -238,11 +243,14 @@ client**, consent screen **In production** (in Testing, refresh tokens die after
 type **Desktop app**, redirect URI `http://localhost:3939/api/gmail/callback`, downloaded as
 `google-oauth.json` in the project folder. Settings shows these steps when the file is missing.
 
-## Not built yet
+## Known gaps
 
-- **M5 — cleanup.** Delete `jobfinder.js`, `ui.js`, `ui.html`, `scrape.js`, `schema.sql`,
-  `com.jobfinder.plist` and their `eslint.config.mjs` ignore entries. **`SETUP.md` still describes the
-  Postgres version and is wrong.**
+- The **Google round trip has never run** — token exchange, refresh, real draft creation, a real sweep are
+  written and unit tested but untested against Google, because `google-oauth.json` does not exist yet.
+- The **Usable** KPI counts `score >= 6 AND no flags AND (in_scope OR remote)`, so a strong role whose post
+  never states a location is missing from the headline number. It still appears in the Posts list.
+- **No repair path for a draft created with a wrong CV path.** The CV is attached at creation and the byte
+  count verified, so the fix is to delete the Gmail draft and re-run rather than retrofit it.
 
 ## Never commit
 
