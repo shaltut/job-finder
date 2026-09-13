@@ -137,9 +137,11 @@ that motivated the feature.
   post still drafts it. Pre-existing for every flag, and it reads as a deliberate owner override.
 - **Two open tabs can clobber an exclude** — Settings in one, a row action in the other. Same class as
   the CV-upload bug.
-- **"Mark applied" moved into the row's ⋯ menu**, so it is now two clicks rather than one. Deliberate:
-  a sixth button in that column truncated the Status cell to "unproce", and this column is already the
-  first thing to go off-screen on a laptop. The row is narrower than before the change, not wider.
+- **The per-row verdicts moved into a ⋯ menu** — Mark applied, Dismiss, Exclude… — so each is two
+  clicks rather than one, leaving Draft as the only button. A sixth button in that column truncated the
+  Status cell to "unproce", and this column is already the first thing to go off-screen on a laptop.
+  The menu is ordered by how far each verdict reaches: this post, this post for good, this source
+  forever. A dismissed row offers Restore beside a menu holding only Exclude…
 
 ## Out of scope
 

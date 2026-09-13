@@ -348,9 +348,10 @@ const columns: TableColumn<PostRow>[] = [
               disabled: queued.value.has(r.key),
               onClick: () => draft(r.key)
             }),
-        // Everything that is not the primary action lives behind one trigger. These used to be
-        // separate buttons; adding a sixth squeezed the Status column until 'unprocessed' truncated,
-        // and this column is already the first thing to go off-screen on a laptop.
+        // Every per-row verdict lives behind one trigger, leaving Draft as the only button. Keeping
+        // them as separate buttons squeezed the Status column until 'unprocessed' truncated to
+        // 'unproce', and this column is already the first thing to go off-screen on a laptop.
+        // Ordered by how far each one reaches: this post, this post for good, this source forever.
         h(UDropdownMenu, {
           items: [
             r.dismissedAt
@@ -362,6 +363,14 @@ const columns: TableColumn<PostRow>[] = [
                   icon: r.appliedAt ? 'i-lucide-undo-2' : 'i-lucide-check',
                   disabled: busy.value,
                   onSelect: () => setApplied([r.key], !r.appliedAt)
+                },
+            r.dismissedAt
+              ? null
+              : {
+                  label: 'Dismiss',
+                  icon: 'i-lucide-x',
+                  disabled: busy.value,
+                  onSelect: () => setDismissed([r.key], true)
                 },
             {
               label: 'Exclude…',
