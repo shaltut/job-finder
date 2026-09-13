@@ -108,10 +108,15 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   scored before the column existed, so every consumer reads `coalesce(post_type, 'hiring')` — without that
   the migration empties the UI until a rescore finishes. `--rescore` is the only path that fills it.
 - **`posts.flags`** — pre-screen hints mirroring the skill's hard skips, produced by `prescreen()` in
-  `scraper/lib.ts`: five regex rules in `FLAG_RULES` (`residency-gate`, `night-shift`, `junior`,
-  `wordpress-only`, `seeking-work`) plus `junior-years`, which comes from a separate years-of-experience check
-  and is not in that table. Hints only; the drafter confirms them in the text, and the UI hides flagged posts
-  by default. **The drafter queue now excludes them outright** rather than sorting them last — see below.
+  `scraper/lib.ts`. Three static regex rules in `FLAG_RULES` (`residency-gate`, `night-shift`,
+  `seeking-work`), plus everything `flagRules(config)` derives from the settings row — `junior` above a
+  seniority floor of 3, the country half of `residency-gate`, the time-zone half of `night-shift`, and
+  **`excluded`** — plus `junior-years`, which comes from a separate years-of-experience check and is in
+  neither table. Hints only; the drafter confirms them in the text, and the UI hides flagged posts
+  by default. **The drafter queue excludes them outright** rather than sorting them last — pinned by
+  `test/invariants.test.ts`, because `excluded` makes that predicate a user-facing promise.
+  **Every derived rule fails open**: an unset setting yields no rule rather than a broad one, since a
+  false positive costs a lead while a false negative only costs a sort position.
   **`immediate-start` is deliberately absent** — whether an immediate start is a problem depends on the
   candidate, not the posting, and the drafter already states the real availability from
   `constraints.canStartImmediately`.
@@ -122,6 +127,19 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   must fire on exactly the three seeker rows of **`backups/pre-wipe-2026-09-13.db`** and nothing else — the
   live database was wiped and re-scraped, so it no longer contains that corpus (measured: 3 hits in the
   backup, 0 live).
+- **`excluded`** — the one flag the owner writes themselves, from the `excludes` settings list via
+  `excludeRule()` in `scraper/lib.ts`. It is the deterministic counterpart to `scope.excludedRoles`,
+  which is only prose the scoring model is *asked* to honour — the same reasoning that put
+  `gateOnPostType()` in code. Matched against the whole post text, which begins with the LinkedIn card
+  header, so one list covers a domain in the prose, a company name and a recruiter's name.
+  **Word boundaries are not optional and are conditional on the needle's own edges.** Measured over the
+  42 stored posts: bare `ai` matches 36 of them and 9 with boundaries, `intern` 12 and 7, `micro1.ai` 2
+  either way. But `\b` is ASCII-only in a JS regex, so a boundary is added only where the edge character
+  is one `\b` can see — wrapping `C#` or an Arabic needle would stop it matching at all. Needles are
+  escaped literals, never patterns. Changing it to a substring match would empty the queue; re-measure
+  against the stored corpus first.
+  **It hides, it never deletes.** Deleting a rule and re-flagging brings the posts back, which is why
+  this is a flag rather than an admission-time drop or a `dismissed_at` write.
 - **`posts.dismissed_at`** — the owner's own triage from the Posts view, written by
   `POST /api/posts/dismiss` (the one endpoint that writes a post row) through `setDismissed()` in
   `server/utils/ingest.ts`. NULL means live. It is **orthogonal to `applications`**, not a third verdict:
@@ -185,6 +203,13 @@ and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
 - `cv` — repo-relative path under `data/cv/`, written by the upload endpoint rather than typed. The scoring
   model reads the PDF itself once per run (`input_file`); no PDF library.
 - `terms` (the home feed plus 8 searches), `titles` (30, for the scoring prompt), `max`, `since`.
+- `excludes` — words, names or domains that disqualify a post outright, becoming the `excluded` flag
+  (see the data model above). Read by the pre-screen only: it never reaches a prompt, because a hard
+  rule the owner wrote does not need the model's opinion. `min(2)` per entry, because a
+  one-character needle matches every post ever scraped. `parseSettings` folds case when deduping, since
+  the match does. Two ways in: the Settings list, or **Exclude…** in a post row's ⋯ menu, which posts
+  to `/api/settings/excludes` rather than PUTting the whole config back from a page that never loaded
+  it to edit — the same trap the CV upload documents below. Both then wait for a re-flag.
 - `contactChannels` — which contact routes admit a post, `['email' | 'link' | 'phone']`, default `['email']`
   so an existing install is unchanged. `CONTACT_CHANNELS` in `shared/settings.ts` is the one definition
   (`scraper/lib.ts` re-exports it — it imports `node:crypto` and cannot be what a browser bundle reads).
@@ -431,6 +456,17 @@ back on a different host, port and path — which Google accepts.
   existed until a search re-encounters them (the scraper emits `op:'posturl'` for a post it already knows,
   which is the only backfill path — a re-scrape skips known posts before scoring, so the insert's own
   `ON CONFLICT` backfill never fires during a normal run).
+- **An exclude rule matches prose, never a link's destination.** `micro1.ai` works because the post
+  spells out `jobs.micro1.ai`; the anchor itself is an opaque `lnkd.in` hash, as the outbound-link gotcha
+  above explains. A post that links to an excluded company without naming it is not caught.
+- **A short needle is still the owner's own foot.** `ai` matches 9 of 42 posts even with word boundaries.
+  `min(2)` only blocks the pathological single character; **Flags: Excluded** in the Posts view is the
+  audit that catches a rule which is too broad, and `npm run dry` marks what a rule would catch before
+  it is saved. Note that view respects the deliberately unconditional `dismissed_at IS NULL` clause in
+  `posts.get.ts`, so a post that is both dismissed and excluded appears only under Status: Dismissed —
+  which is why the count reported after a save comes from the re-flag job, not from that query.
+- **Two open tabs can clobber an exclude.** Settings open in one tab, a row action adding a rule in
+  another, then Save in the first writes the stale list back. Same class as the CV-upload bug.
 - **No repair path for a draft created with a wrong CV path.** The CV is attached at creation and the byte
   count verified, so the fix is to delete the Gmail draft and re-run rather than retrofit it.
 
