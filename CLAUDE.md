@@ -4,13 +4,20 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## What this is
 
-Mohamed Maher's personal job-search pipeline. It scrapes LinkedIn **posts** (not the Jobs tab) — content
-search plus his own home feed — for roles that carry a contact email, scores each post against his CV, stores
-everything in a local SQLite database, and drafts tailored application emails. Sending is always manual.
+A personal job-search pipeline, for whoever runs it. It scrapes LinkedIn **posts** (not the Jobs tab) —
+content search plus the account's own home feed — for roles that carry a contact email, scores each post
+against the owner's CV, stores everything in a local SQLite database, and drafts tailored application emails.
+Sending is always manual.
 
-Target: senior frontend roles — Vue/Nuxt primary, React/Next secondary — remote anywhere, on-site or hybrid in
-Egypt, Saudi Arabia, the UAE or Qatar. On-site outside those is out of scope. Personal recruiter addresses
-(gmail etc.) are treated like company addresses: much real Egyptian and Gulf recruiting runs on them.
+**Single-tenant, and deliberately so.** Each person clones the repo and runs their own copy: one settings row
+(`CHECK (id = 1)`), one Chrome profile, one Gmail token, one CV. There is no auth and no accounts, and the
+server binds to `127.0.0.1`.
+
+**Nothing in the source names a profession, a country or a person.** The target — field of work, skills,
+seniority floor, countries, target titles — is the `settings` row, and `test/identity.test.ts` fails the
+build if the owner's own name, email, phone or handles appear in any tracked file. Personal recruiter
+addresses (gmail etc.) are treated like company addresses: much real recruiting, in many markets, runs on
+them.
 
 **This branch (`nuxt-rewrite`) is a rewrite.** `main` holds the original Node + Postgres + vanilla-JS version,
 written for a different person. The design record, including what changed during implementation and the
@@ -53,7 +60,7 @@ npm run dev ──► http://127.0.0.1:3939
    **It never writes the database.** Pure helpers live in `scraper/lib.ts` so the server and the tests share them.
 2. **Ingest** `server/utils/ingest.ts`: the one place scraper output becomes rows. Used by the server (which
    spawns the scraper from the UI) and by `scraper/ingest.ts` (the CLI pipe), so both behave identically.
-3. **Drafter** `.claude/skills/job-application-drafter/SKILL.md` + `server/utils/drafter.ts`: the server picks
+3. **Drafter** `server/prompts/drafter-procedure.md` + `server/utils/drafter.ts`: the server picks
    the posts, groups them by recruiter, and runs one `claude -p` session per recruiter with **no tools at
    all**. The skill returns JSON only. The server validates it, writes the email, and records the verdicts.
 4. **UI** `app/`: Nuxt UI v4 dashboard — Posts, Pipeline, Run, Settings.
@@ -62,7 +69,7 @@ npm run dev ──► http://127.0.0.1:3939
 
 ```bash
 npm run dev                                  # http://127.0.0.1:3939 (port pinned, see gotchas)
-npm test                                     # 99 tests: helpers, settings, ingest, drafter, stages, MIME, invariants
+npm test                                     # helpers, settings, ingest, drafter, background, stages, MIME, invariants, identity
 npm run lint / npm run typecheck
 npm run login                                # one-time LinkedIn login into ./profile (redo when runs exit 2)
 npm run dry -- --terms "vue nuxt developer" --max 10   # prints cards, stores nothing, no OpenAI call
@@ -104,13 +111,16 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   `wordpress-only`, `seeking-work`) plus `junior-years`, which comes from a separate years-of-experience check
   and is not in that table. Hints only; the drafter confirms them in the text, and the UI hides flagged posts
   by default. **The drafter queue now excludes them outright** rather than sorting them last — see below.
-  **`immediate-start` was deliberately removed** — Mohamed can start immediately, so flagging it
-  would demote good posts for what is now an advantage.
+  **`immediate-start` is deliberately absent** — whether an immediate start is a problem depends on the
+  candidate, not the posting, and the drafter already states the real availability from
+  `constraints.canStartImmediately`.
   **`seeking-work` must stay first-person** (`I'm #OpenToWork`, `I am actively seeking`, `Services I offer`).
   The scored text includes the LinkedIn card header, so a bare `/open to work/` also matches the *headline*
   of a recruiter who happens to be job hunting — one stored row is a genuine DecipherZone req posted by
   someone whose headline ends `| Open to Work`. Run the rule over the stored posts before changing it: it
-  must fire on exactly the three seeker rows and nothing else.
+  must fire on exactly the three seeker rows of **`backups/pre-wipe-2026-09-13.db`** and nothing else — the
+  live database was wiped and re-scraped, so it no longer contains that corpus (measured: 3 hits in the
+  backup, 0 live).
 - **`applications`** — one row per post touched. `verdict` drafted|skipped. Reasons for drafted posts **must**
   start with `named in application` / `named in follow-up`; the follow-up query relies on that prefix.
 - **`settings`** — exactly one row (`id = 1`), holding the whole config as JSON. One column rather than
@@ -139,7 +149,13 @@ and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
 
 - `profile` — name, title, location, email, phone, LinkedIn, GitHub, languages, years.
 - `constraints` — `remoteAnywhere`, `onsiteCountries`, `willRelocate`, `canStartImmediately`, `workingHours`,
-  `stackWeighting` (`vue-primary` | `equal` | `react-primary`).
+  and `workingHours`. (`stackWeighting` is gone — see `scope` below.)
+- `scope` — `roleFamily`, `primarySkills`, `secondarySkills`, `excludedRoles`, `seniorityFloor`. **Read by
+  the scorer, the pre-screen and the drafter**, which is why it is separate from `background`. Every one is
+  omitted from its prompt when empty rather than emitted blank.
+- `background` — `evidence`, `gaps`, `strengths`, `neverClaim`. Read by the drafter only, and the content
+  that used to be hand-written into the skill file. `gaps` is a list, not prose, so each entry can be
+  deleted on its own — that per-item review is the defence against a generated gap nobody actually has.
 - `cv` — repo-relative path under `data/cv/`, written by the upload endpoint rather than typed. The scoring
   model reads the PDF itself once per run (`input_file`); no PDF library.
 - `terms` (the home feed plus 8 searches), `titles` (30, for the scoring prompt), `max`, `since`.
@@ -167,9 +183,9 @@ model reads the PDF and fills only the fields that are still empty; it is never 
 `onsiteCountries`, `willRelocate`, `workingHours` or the switches, because a CV cannot know them and a model
 asked for them invents an answer that then goes out in an email. Nothing is saved until you press Save.
 
-The skill file holds Mohamed's evidence, gaps and screening rules as a snapshot from
-`/Volumes/Data/projects/CV/app/mohamed-maher-cv/app/data/resume.ts`. **If the CV changes, update the skill's
-Evidence and Gaps sections**, or drafts keep hedging on stale gaps.
+Evidence, gaps and strengths live in the `background` settings block, not in any file. **If the CV changes,
+re-upload it and press "Generate from CV" in Settings**, then review every line before saving — otherwise
+drafts keep arguing from a stale CV.
 
 ## Gotchas (each cost real time)
 
@@ -362,7 +378,9 @@ covers all of them — verify with `git check-ignore <path>` rather than by eye,
 pattern only matches a directory that already exists.
 
 **The git remote is `git@github.com:shaltut/job-finder.git` — the original author's repository, not
-Mohamed's.** Confirm the remote before pushing. Retiring `config.json` took the phone number and email out of
-the *code*, but **`docs/superpowers/specs/2026-09-10-nuxt-rewrite-design.md` still quotes them** (the config
-example at ~line 198 and the injected-identity paragraph at ~line 259) — it is a design record from before the
-move. Scrub it or drop the file before this repo goes anywhere public.
+the current owner's.** Confirm the remote before pushing.
+
+The design specs under `docs/` were scrubbed of the real phone number, email and profile URLs, and
+`test/identity.test.ts` now fails if any of them come back. **But git history still holds them**, along with
+the old `SKILL.md` and its CV evidence, in every commit up to `63aed17` — which is already pushed. Sharing
+this repo publicly means either accepting that or starting a fresh history.

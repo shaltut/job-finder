@@ -8,7 +8,7 @@
 were wrong with that:
 
 1. **It was git-tracked and carried real contact details** — a phone number and an email address in a
-   repository whose remote is `git@github.com:shaltut/job-finder.git`, the original author's.
+   repository whose remote is `the original author's repository`, the original author's.
    `CLAUDE.md` carried a "do not push without confirming the remote" warning that existed largely
    because of this file.
 2. **A fresh install started with someone else's data.** Retargeting the tool was meant to be data

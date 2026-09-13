@@ -137,3 +137,33 @@ export function withAliases(names: string[]): string {
     return `${c.name} (${c.aliases.join(', ')})`
   }).join(', ')
 }
+
+/**
+ * The country a free-text location sits in — "Cairo, Egypt" -> Egypt. Segments are tried right to
+ * left, because a location is conventionally written narrowest-first. Returns undefined rather than
+ * guessing: the rules that depend on this must fail OPEN, since a wrong home country turns every
+ * local posting into a residency gate.
+ */
+export function homeCountryOf(location: string): Country | undefined {
+  const parts = location.split(',').map(s => s.trim()).filter(Boolean).reverse()
+  for (const part of parts) {
+    const hit = resolveCountry(part)
+    if (hit) return hit
+  }
+  return undefined
+}
+
+/** Every written form of these countries — display name plus aliases — for building a matcher. */
+export function nameFormsFor(names: string[]): string[] {
+  const out = new Set<string>()
+  for (const n of names) {
+    const c = resolveCountry(n)
+    if (!c) {
+      out.add(n)
+      continue
+    }
+    out.add(c.name)
+    for (const a of c.aliases) out.add(a)
+  }
+  return [...out].filter(Boolean)
+}

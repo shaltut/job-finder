@@ -54,16 +54,20 @@ test('the schema keeps the lower-case email constraint', () => {
   assert.match(read('server/db/schema.ts'), /lower\(/, 'contacts.email must be constrained to lower case')
 })
 
-test('no server file hardcodes an identity: it all comes from the stored settings', () => {
-  // retargeting this tool must stay data entry. A name or address in the source is how it stops being that.
-  const offenders: string[] = []
-  for (const f of serverFiles) {
-    const src = read(f)
-    // the drafter's comments explain the leak that motivated neutralCwd(), so strip comments first
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-    if (/@gmail\.com|@qhslab\.com|linkedin\.com\/in\//.test(code)) offenders.push(f)
-  }
-  assert.deepEqual(offenders, [], `these files hardcode contact details: ${offenders.join(', ')}`)
+// The identity scan that used to live here is now test/identity.test.ts. It was replaced rather than
+// widened: it matched three literals over server/ + shared/, one of which was the previous owner's
+// company domain — so the guard against hardcoded identities hardcoded an identity. It also could not
+// have caught the bug that motivated the rewrite, a name spelled out in the drafter's prompt.
+
+test('drafting refuses to start without the background it argues from', () => {
+  // missingForDrafting() existed with no consumer for one commit, while the Settings badge already
+  // said 'drafting blocked' and SETUP.md promised a refusal. A gate nothing calls is worse than no
+  // gate: it reads as enforced everywhere it is described.
+  const src = read('server/utils/jobs.ts')
+  assert.match(src, /const config = readConfigForDraft\(\)/, 'runDraftJob must gate on readConfigForDraft()')
+  assert.match(read('server/utils/config.ts'), /missingForDrafting\(cfg\)/, 'the draft gate must consult missingForDrafting')
+  // the sweep only reads sent mail and makes no new claims, so it must NOT be gated on evidence
+  assert.match(src, /const config = readConfig\(\)/, 'runSyncJob must keep the looser gate')
 })
 
 test('a skip can never downgrade a post an email already names', () => {

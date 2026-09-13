@@ -317,7 +317,7 @@ async function run({ dry }: { dry: boolean }) {
           score: s.score,
           reason: s.reason,
           text,
-          flags: prescreen(text, emails)
+          flags: prescreen(text, CONFIG)
         })
         added++
       }
@@ -339,7 +339,7 @@ function reflag() {
   db.close()
   let flagged = 0
   for (const r of rows) {
-    const flags = prescreen(r.text, JSON.parse(r.emails || '[]'))
+    const flags = prescreen(r.text, CONFIG)
     if (flags.length) flagged++
     emit({ op: 'reflag', key: r.key, flags, postedAt: postedAt(r.posted_age, new Date(r.scraped_at * 1000))?.toISOString() ?? null })
   }

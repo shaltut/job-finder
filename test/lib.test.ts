@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  ageOf, dedupeKey, extractEmails, FLAG_RULES, gateOnPostType, normalize, postedAt, postUrlFrom, prescreen,
-  resolveUrls, SCORE_SCHEMA, searchUrl, systemPrompt, tokenFromId, urnMap
+  ageOf, dedupeKey, extractEmails, fieldRule, FLAG_RULES, gateOnPostType, normalize, postedAt, postUrlFrom,
+  prescreen, resolveUrls, SCORE_SCHEMA, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
 import { emptySettings } from '../shared/settings.ts'
@@ -11,10 +11,20 @@ import { emptySettings } from '../shared/settings.ts'
 // hold for any config, and a test that reads one person's settings cannot run on a fresh clone.
 const config: Config = {
   ...emptySettings(),
+  // `location` is load-bearing for the flag rules now: it is where the home country comes from, and
+  // a gate is only a gate somewhere you do not already live.
+  profile: { ...emptySettings().profile, location: 'Cairo, Egypt' },
   constraints: {
     ...emptySettings().constraints,
     onsiteCountries: ['Egypt', 'Saudi Arabia', 'UAE', 'Qatar'],
     willRelocate: ['Saudi Arabia', 'UAE', 'Qatar']
+  },
+  scope: {
+    roleFamily: 'frontend engineering',
+    primarySkills: ['Vue', 'Nuxt'],
+    secondarySkills: ['React', 'Next.js'],
+    excludedRoles: ['pure UI/UX design', 'pure backend'],
+    seniorityFloor: 5
   },
   cv: 'data/cv/test.pdf',
   terms: ['feed', 'vue nuxt developer'],
@@ -76,27 +86,54 @@ test('searchUrl: encodes the term and the date filter', () => {
 })
 
 test('prescreen: years-of-experience only counts phrases tied to experience wording', () => {
-  assert.deepEqual(prescreen('Senior Frontend Lead, 8-12 years, Riyadh. Send CV to hr@acme.sa'), [])
-  assert.deepEqual(prescreen('Head of Frontend, Riyadh. We grew 3x in 2 years. CV to hr@acme.sa'), [])
-  assert.deepEqual(prescreen('Requires 2+ years of experience in Vue. hr@acme.sa'), ['junior-years'])
-  assert.deepEqual(prescreen('Experience: 3-5 years hands-on. hr@acme.sa'), ['junior-years'])
-  assert.deepEqual(prescreen('10+ years of experience as a frontend architect. hr@acme.sa'), [])
+  assert.deepEqual(prescreen('Senior Frontend Lead, 8-12 years, Riyadh. Send CV to hr@acme.sa', config), [])
+  assert.deepEqual(prescreen('Head of Frontend, Riyadh. We grew 3x in 2 years. CV to hr@acme.sa', config), [])
+  assert.deepEqual(prescreen('Requires 2+ years of experience in Vue. hr@acme.sa', config), ['junior-years'])
+  assert.deepEqual(prescreen('Experience: 3-5 years hands-on. hr@acme.sa', config), ['junior-years'])
+  assert.deepEqual(prescreen('10+ years of experience as a frontend architect. hr@acme.sa', config), [])
+})
+
+test('prescreen: the seniority floor drives both junior rules, and 0 turns them off', () => {
+  // Someone whose floor is unset IS in the market these postings serve. Flagging them would remove
+  // every suitable post from their drafter queue, which is the opposite of what a hint is for.
+  const graduate = { ...config, scope: { ...config.scope, seniorityFloor: 0 } }
+  assert.deepEqual(prescreen('Requires 2+ years of experience. hr@acme.sa', graduate), [])
+  assert.deepEqual(prescreen('Hiring fresh graduates. hr@acme.sa', graduate), [])
+  // and a higher floor catches more
+  const principal = { ...config, scope: { ...config.scope, seniorityFloor: 8 } }
+  assert.ok(prescreen('Requires 7 years of experience. hr@acme.sa', principal).includes('junior-years'))
 })
 
 test('prescreen: flags residency gates, night shifts and junior reqs', () => {
-  assert.ok(prescreen('Must have transferable Iqama. hr@acme.sa').includes('residency-gate'))
-  assert.ok(prescreen('US EST shift required. hr@acme.sa').includes('night-shift'))
-  assert.ok(prescreen('Hiring fresh graduates. hr@acme.sa').includes('junior'))
+  assert.ok(prescreen('Must have transferable Iqama. hr@acme.sa', config).includes('residency-gate'))
+  assert.ok(prescreen('US EST shift required. hr@acme.sa', config).includes('night-shift'))
+  assert.ok(prescreen('Hiring fresh graduates. hr@acme.sa', config).includes('junior'))
+  assert.ok(prescreen('Nationals only. hr@acme.sa', config).includes('residency-gate'))
 })
 
-test('prescreen: WordPress-only piecework is flagged, headless WordPress is not', () => {
-  assert.ok(prescreen('WordPress developer needed for theme work. hr@acme.sa').includes('wordpress-only'))
-  assert.ok(!prescreen('Headless WordPress with a Next.js frontend. hr@acme.sa').includes('wordpress-only'))
+test('a residency gate is only a gate somewhere you do not already live', () => {
+  // "UAE-based candidates only" excludes a Cairo-based applicant. The same sentence about Egypt does
+  // not — and onsiteCountries contains Egypt, so deriving straight from that list would have flagged
+  // every posting in this person's own city.
+  assert.ok(prescreen('UAE-based candidates only. hr@acme.sa', config).includes('residency-gate'))
+  assert.ok(!prescreen('Egypt-based candidates only. hr@acme.sa', config).includes('residency-gate'))
+  // and a US-hours post is not a night shift for someone living in the US
+  const us = { ...config, profile: { ...config.profile, location: 'Austin, United States' } }
+  assert.ok(!prescreen('US EST shift required. hr@acme.sa', us).includes('night-shift'))
+  assert.ok(prescreen('IST timings required. hr@acme.sa', us).includes('night-shift'))
 })
 
-test('immediate-start is NOT a flag: Mohamed can start immediately', () => {
+test('a home country that cannot be resolved fails open rather than flagging everything', () => {
+  const vague = { ...config, profile: { ...config.profile, location: 'remote' } }
+  // no country clause is emitted at all; the generic half still works
+  assert.ok(prescreen('Must have transferable Iqama. hr@acme.sa', vague).includes('residency-gate'))
+})
+
+test('immediate-start is NOT a flag: it is not universally a negative', () => {
+  // Whether an immediate start is good or bad is a property of the candidate, not of the posting, and
+  // the drafter already states the real availability from the injected constraints.
   assert.ok(!('immediate-start' in FLAG_RULES))
-  assert.deepEqual(prescreen('Immediate joiners only. Send CV to hr@acme.sa'), [])
+  assert.deepEqual(prescreen('Immediate joiners only. Send CV to hr@acme.sa', config), [])
 })
 
 // The three below are the real stored text of the posts that scored 7/10 and sat at the top of the drafter
@@ -182,9 +219,40 @@ test('systemPrompt: country aliases are inlined so the model matches post text',
   assert.match(systemPrompt('cv', config), /UAE \(United Arab Emirates/)
 })
 
-test('systemPrompt: honours the stack weighting setting', () => {
-  assert.match(systemPrompt('cv', { ...config, constraints: { ...config.constraints, stackWeighting: 'vue-primary' } }), /Vue\/Nuxt roles are the best fit/)
-  assert.match(systemPrompt('cv', { ...config, constraints: { ...config.constraints, stackWeighting: 'react-primary' } }), /React\/Next roles are the best fit/)
+test('systemPrompt: the weighting is composed from the configured skills, not a fixed stack', () => {
+  // The Vue-vs-React enum this replaced could only ever describe one person's trade.
+  const engineer = {
+    ...config,
+    titles: ['Senior Structural Engineer', 'Bridge Design Engineer'],
+    scope: {
+      ...config.scope, roleFamily: 'structural engineering',
+      primarySkills: ['ETABS', 'SAP2000'], secondarySkills: ['Revit'],
+      excludedRoles: ['architectural drafting']
+    }
+  }
+  const p = systemPrompt('cv', engineer)
+  assert.match(p, /Roles built on ETABS, SAP2000 are the best fit and score highest/)
+  assert.match(p, /Roles built on Revit score well, but one point lower/)
+  assert.match(p, /The candidate's field is structural engineering/)
+  assert.match(p, /architectural drafting roles score 0-2/)
+  assert.ok(!/Vue|React|frontend/i.test(p), 'no stack may survive a change of skills')
+})
+
+test('systemPrompt: an unset skill or field emits no rule rather than a rule with a hole in it', () => {
+  const blank = systemPrompt('cv', emptySettings())
+  assert.ok(!blank.includes('undefined'))
+  assert.ok(!/Roles built on \./.test(blank))
+  assert.ok(!/The candidate's field is \./.test(blank))
+  assert.ok(!/\n\n\n/.test(blank), 'a dropped clause must not leave a blank line behind')
+  // and the ordering that matters still holds on a fresh install
+  assert.ok(blank.indexOf('not named above are out of scope') < blank.indexOf('post_type — who is posting'))
+})
+
+test('skillRule and fieldRule each drop the clause whose setting is empty', () => {
+  assert.equal(skillRule({ ...config.scope, primarySkills: [], secondarySkills: [] }), '')
+  assert.equal(fieldRule({ ...config.scope, roleFamily: '' }), '')
+  assert.ok(!fieldRule({ ...config.scope, excludedRoles: [] }).includes('In particular'))
+  assert.ok(!skillRule({ ...config.scope, secondarySkills: [] }).includes('one point lower'))
 })
 
 // The stored settings replaced config.json; their completeness is covered by settings.test.ts,

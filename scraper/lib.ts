@@ -1,8 +1,9 @@
 // Pure helpers ported from the original jobfinder.js. No browser, no database, no API — so the Nitro
 // server, the scraper child process and `npm test` can all import them.
 import { createHash } from 'node:crypto'
-import { tldsFor, withAliases } from '../shared/countries.ts'
-import type { Constraints, Profile, StoredSettings } from '../shared/settings.ts'
+import { homeCountryOf, nameFormsFor, resolveCountry, tldsFor, withAliases } from '../shared/countries.ts'
+import { emptySettings } from '../shared/settings.ts'
+import type { Profile, Scope, StoredSettings } from '../shared/settings.ts'
 
 // These used to be declared here as a third copy of the same shape, kept in sync by hand with the
 // server's Zod schema and the browser's types. One definition now, in shared/settings.ts.
@@ -133,24 +134,93 @@ export const searchUrl = (term: string, since: string) =>
 // Personal email addresses (gmail etc.) are deliberately NOT a flag: much real Egyptian and Gulf recruiting
 // runs on them.
 //
-// `immediate-start` was removed when this was retargeted: Mohamed can start immediately, and a flag would
-// demote such posts in both the UI sort and the drafter queue for what is now an advantage.
+// `immediate-start` is deliberately absent: whether an immediate start is a problem depends on the
+// candidate, not the posting, and a flag would demote such posts in both the UI sort and the drafter
+// queue for what is an advantage to anyone who can take it. The real availability is injected into
+// the drafter prompt from `constraints.canStartImmediately`.
 export const FLAG_RULES: Record<string, RegExp> = {
-  'residency-gate': /transferable (iqama|qid|visa|sponsorship)|locally available|local(ly)?[- ](candidates?|applicants?|based)( only)?|must (have|hold|be) (a )?(valid )?(work (permit|authori[sz]ation)|resident|residency)|visa[- ]independent|(inside|within) (the )?(uae|ksa|qatar|saudi|kuwait|bahrain|oman)( only)?\b|(uae|ksa|qatar|saudi)[- ]based (candidates?|applicants?) only|work authori[sz]ation (is )?(required|mandatory)/i,
-  'night-shift': /night shifts?|\b(us|uk|est|pst|cst|ist|eastern|pacific) (shift|hours|timings?|time ?zone|working hours)\b|rotational shifts?/i,
-  'junior': /\bfresh(ers?|\s+graduates?)\b|\bjuniors?\b|\bintern(ship)?s?\b|\bentry[- ]level\b|\btrainees?\b/i,
-  // Frontend searches surface heavy WordPress/Shopify piecework; that experience is 2014-2017 and dated.
-  'wordpress-only': /\b(wordpress|woocommerce|shopify)\b(?![^.]*\b(react|vue|nuxt|next\.?js|headless)\b)/i,
+  // Phrases that gate on residency or work authorisation WITHOUT naming a country. True for anyone,
+  // anywhere — the country-specific half is derived per install in flagRules() below.
+  'residency-gate': /transferable (iqama|qid|visa|sponsorship)|locally available|local(ly)?[- ](candidates?|applicants?|based)( only)?|must (have|hold|be) (a )?(valid )?(work (permit|authori[sz]ation)|resident|residency)|visa[- ]independent|work authori[sz]ation (is )?(required|mandatory)|\b(nationals?|citizens?) only\b/i,
+  // Shift work as such. The "US hours"/"IST timings" half is derived in flagRules(): a US-hours post
+  // is not a night shift for somebody living in the US, and flagging it would empty their queue.
+  'night-shift': /night shifts?|graveyard shift|shift work|rotational shifts?/i,
   // The author advertising themselves rather than a vacancy: a peer's self-description is the best possible
-  // match for this CV, which is exactly why it used to score 7. First person on purpose — the scored text
+  // match for any CV, which is exactly why it used to score 7. First person on purpose — the scored text
   // includes the LinkedIn card header, and a bare /open to work/ buries a genuine req posted by someone
   // whose own headline ends '| Open to Work'. 'available for' is narrowed for the same reason: a recruiter
   // writes "I'm available for any questions". Both apostrophes: LinkedIn emits ASCII and typographic.
-  'seeking-work': /\bI(?:'m|’m| am)\s+(?:currently\s+)?(?:#?open[ _]?to[ _]?(?:work|opportunities)|actively (?:seeking|looking)|looking for (?:my next|a new)|available for (?:hire|freelance|work|new opportunities|immediate))|\bservices I offer\b|\b(?:hire|refer) me\b|\bmy (?:cv|resume) is attached\b/i
+  //
+  // DO NOT GENERALISE THIS ONE. It is already profession-neutral, it was tuned against real stored
+  // posts, and its regression corpus is backups/pre-wipe-2026-09-13.db, where it must fire on exactly
+  // three rows and no others.
+  'seeking-work': /\bI(?:'m|\u2019m| am)\s+(?:currently\s+)?(?:#?open[ _]?to[ _]?(?:work|opportunities)|actively (?:seeking|looking)|looking for (?:my next|a new)|available for (?:hire|freelance|work|new opportunities|immediate))|\bservices I offer\b|\b(?:hire|refer) me\b|\bmy (?:cv|resume) is attached\b/i
 }
 
-export function prescreen(text: string, _emails: string[] = []): string[] {
-  const flags = Object.entries(FLAG_RULES).filter(([, re]) => re.test(text)).map(([f]) => f)
+const escapeRe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Time-zone demands that are only a night shift for somebody outside that region. Three entries is
+ * enough: these are the coverage demands that actually appear in postings.
+ */
+const TZ_DEMANDS: { tokens: string, codes: string[] }[] = [
+  // alpha-2 codes, not display names: the display name for US is 'USA', and matching on prose here
+  // fails silently — the rule simply keeps firing for someone who lives in that region.
+  { tokens: 'us|est|pst|cst|eastern|pacific', codes: ['US', 'CA'] },
+  { tokens: 'uk|gmt|bst|british', codes: ['GB', 'IE'] },
+  { tokens: 'ist|india', codes: ['IN', 'LK'] }
+]
+
+/**
+ * The rules that only exist once the settings say who this is. Merged onto FLAG_RULES by name, so a
+ * stored `flags` value keeps meaning across the change.
+ *
+ * Every one of these fails OPEN — an unset setting produces no rule rather than a broad one. That is
+ * deliberate: a flag removes a post from the drafter queue outright (jobs.ts: `json_array_length(flags) = 0`),
+ * so a false positive costs a lead while a false negative only costs a sort position.
+ */
+export function flagRules(config: Config): Record<string, RegExp> {
+  const rules: Record<string, RegExp> = {}
+  const home = homeCountryOf(config.profile.location)
+
+  // "UAE-based candidates only" is a gate only if the candidate is NOT UAE-based, and onsiteCountries
+  // is by definition where they WOULD work — including where they live. Deriving from it directly
+  // would flag every posting in their own city.
+  const away = [...config.constraints.onsiteCountries, ...config.constraints.willRelocate]
+    .filter((n) => {
+      if (!home) return true
+      const c = resolveCountry(n)
+      return !c || c.code !== home.code // compare codes: 'UAE' and 'United Arab Emirates' are one country
+    })
+  const forms = nameFormsFor(away).map(escapeRe)
+  if (forms.length) {
+    const alt = forms.join('|')
+    rules['residency-gate'] = new RegExp(
+      `(?:inside|within|based in|located in|resident in)\\s+(?:the\\s+)?(?:${alt})\\b`
+      + `|(?:${alt})[- ]based\\s+(?:candidates?|applicants?)\\s+only`, 'i')
+  }
+
+  const foreign = TZ_DEMANDS.filter(d => !home || !d.codes.includes(home.code))
+  if (foreign.length) {
+    rules['night-shift'] = new RegExp(
+      `\\b(?:${foreign.map(d => d.tokens).join('|')}) (?:shift|hours|timings?|time ?zone|working hours)\\b`, 'i')
+  }
+
+  // Someone whose floor is one or two years IS in the market these postings serve; flagging them
+  // would hide every suitable post from a graduate.
+  if (config.scope.seniorityFloor >= 3) {
+    rules['junior'] = /\bfresh(ers?|\s+graduates?)\b|\bjuniors?\b|\bintern(ship)?s?\b|\bentry[- ]level\b|\btrainees?\b/i
+  }
+  return rules
+}
+
+export function prescreen(text: string, config: Config = emptySettings()): string[] {
+  const rules = { ...FLAG_RULES }
+  for (const [name, re] of Object.entries(flagRules(config))) {
+    // same name, so a derived rule widens the static one rather than shadowing it
+    rules[name] = name in rules ? new RegExp(`${rules[name]!.source}|${re.source}`, 'i') : re
+  }
+  const flags = Object.entries(rules).filter(([, re]) => re.test(text)).map(([f]) => f)
   // required experience: only year phrases tied to experience wording, so "we grew 3x in 2 years" does not
   // count; take the largest number of each "N-M years" / "N+ years" phrase ("+" counts as two more).
   const YRS = /(\d{1,2})\s*(\+)?\s*(?:-|–|to)?\s*(\d{1,2})?\s*(\+)?\s*(?:years?|yrs?)/.source
@@ -159,16 +229,40 @@ export function prescreen(text: string, _emails: string[] = []): string[] {
     const [a, plus, b, plus2] = m[1] !== undefined ? [m[1], m[2], m[3], m[4]] : [m[5], m[6], m[7], m[8]]
     return Math.max(Number(a), Number(b || 0)) + (plus || plus2 ? 2 : 0)
   })
-  if (yrs.length && Math.max(...yrs) <= 5) flags.push('junior-years')
+  const floor = config.scope.seniorityFloor
+  if (floor > 0 && yrs.length && Math.max(...yrs) <= floor) flags.push('junior-years')
   return flags
 }
 
 // ---------------- scoring prompt ----------------
 
-const STACK_RULE: Record<Constraints['stackWeighting'], string> = {
-  'vue-primary': 'Vue/Nuxt roles are the best fit and score highest. React/Next roles score well but one point lower when they demand more React years than the CV shows. Angular-only roles score mid at best: that experience is dated.',
-  'equal': 'Vue/Nuxt and React/Next roles are equally good fits and score the same.',
-  'react-primary': 'React/Next roles are the best fit and score highest. Vue/Nuxt roles score well but one point lower.'
+/**
+ * Replaces a closed Vue/React enum. Each clause disappears when its list is empty, so a fresh install
+ * gets no weighting sentence at all rather than a confidently wrong one. The wording is carried over
+ * from the enum deliberately — it was tuned against this model, and only the stack names are new.
+ */
+export function skillRule(s: Scope): string {
+  const out: string[] = []
+  if (s.primarySkills.length) {
+    out.push(`Roles built on ${s.primarySkills.join(', ')} are the best fit and score highest.`)
+  }
+  if (s.secondarySkills.length) {
+    out.push(`Roles built on ${s.secondarySkills.join(', ')} score well, but one point lower when they demand more depth in them than the CV shows.`)
+  }
+  return out.join(' ')
+}
+
+/**
+ * Replaces "this candidate builds frontends" and a hardcoded list of engineering disciplines. The
+ * exclusions matter more than they look: the model latches onto a title word like "engineer", and
+ * naming the neighbouring professions is what holds it. Empty list, no clause.
+ */
+export function fieldRule(s: Scope): string {
+  if (!s.roleFamily) return ''
+  const ex = s.excludedRoles.length
+    ? ` In particular, ${s.excludedRoles.join(', ')} roles score 0-2 even when the title words match.`
+    : ''
+  return `The candidate's field is ${s.roleFamily}. Roles outside that field score 0-2 regardless of title words: judge by the work the post describes, not by words in the title.${ex}`
 }
 
 export function systemPrompt(cv: string, config: Config): string {
@@ -177,25 +271,26 @@ export function systemPrompt(cv: string, config: Config): string {
   // post text happens to use
   const onsite = withAliases(c.onsiteCountries)
   const tlds = tldsFor(c.onsiteCountries)
+  // filtered so an unset setting leaves no blank line, and no rule with a hole in it
+  const rules = [skillRule(config.scope), fieldRule(config.scope)].filter(Boolean).join('\n')
   return `You screen LinkedIn job posts for one candidate. Extract fields from the post text and score how well the post matches the candidate's CV, 0-10.
 Candidate CV:
 """
 ${cv}
 """
 Candidate target titles: ${titles.join('; ')}.
-Location scope: ${c.remoteAnywhere ? 'genuinely location-free remote roles from anywhere, plus ' : ''}on-site or hybrid roles in ${onsite}. ${c.willRelocate.length ? `The candidate will relocate to ${withAliases(c.willRelocate)}.` : 'The candidate will not relocate.'} On-site or hybrid roles in any country not named above are out of scope and score 0-2 however good the stack match.
-${STACK_RULE[c.stackWeighting]}
-Non-software-engineering roles (mechanical, electrical, civil, MEP, construction, sales engineering, procurement, QA/QC, BIM) score 0-2 regardless of title words. Pure UI/UX design, graphic design and pure backend/data roles also score 0-2: this candidate builds frontends.
+Location scope: ${c.remoteAnywhere ? 'genuinely location-free remote roles from anywhere, plus ' : ''}on-site or hybrid roles in ${onsite}. ${c.willRelocate.length ? `The candidate will relocate to ${withAliases(c.willRelocate)}.` : 'The candidate will not relocate.'} On-site or hybrid roles in any country not named above are out of scope and score 0-2 however good the skill match.
+${rules}
 is_remote: true only if the post says remote or work from home.
 is_in_scope: true if the location, the company, or${tlds.length ? ` the contact email domain (${tlds.join(' ')}) or` : ''} anything else in the post points to one of the countries named above, or the role is genuinely location-free remote.
-score: 9-10 the role fits the CV's seniority, stack and domain and the location fits; 6-8 strong stack match with one gap (seniority a step off, adjacent stack, location unclear); 3-5 related software role with a major gap; 0-2 unrelated or out of location scope.
+score: 9-10 the role fits the CV's seniority, skills and domain and the location fits; 6-8 strong skill match with one gap (seniority a step off, adjacent skills, location unclear); 3-5 a related role in the same field with a major gap; 0-2 unrelated or out of location scope.
 Credit a skill, tool, standard or domain only if the CV text explicitly contains it; never infer or assume it. Anything the post asks for that the CV does not mention is a gap.
 Use "unknown" for strings you cannot find. reason, for a hiring post: one sentence in the form "Match: <what the CV shows that the post asks for>; Gaps: <what the post asks for that the CV lacks, or none>".
 Finally, post_type — who is posting. The text you were given starts with the LinkedIn card header (the author's name, their profile headline, the age, "Connect" or "Follow"); judge the body, not the header, and never take the title or company from the header.
 - "hiring": the author is advertising a vacancy, their own company's or a client's. Someone else would apply. An author whose own headline says "Open to Work" may still be posting a real vacancy for their employer — that is still "hiring".
 - "seeking": the author is advertising themselves — open to work, looking for their next role, available for hire, or offering freelance services. The author would be the applicant and the contact address is their own.
 - "other": neither. News, a course or bootcamp ad, a tool or security advisory, general networking.
-If post_type is not "hiring", that overrides everything above: score 0, is_remote false, is_in_scope false, company and location "unknown", title the role the author is seeking or "unknown", and reason one sentence naming what the post actually is. Do not score stack overlap in that case — a peer's self-description matches this CV almost perfectly, and that is the mistake this field exists to prevent.`
+If post_type is not "hiring", that overrides everything above: score 0, is_remote false, is_in_scope false, company and location "unknown", title the role the author is seeking or "unknown", and reason one sentence naming what the post actually is. Do not score skill overlap in that case — a peer's self-description matches this CV almost perfectly, and that is the mistake this field exists to prevent.`
 }
 
 /**

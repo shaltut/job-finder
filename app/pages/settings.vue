@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { COUNTRIES } from '#shared/countries'
+import type { EditorToolbarItem } from '@nuxt/ui'
 import type { AppConfig, GmailStatus, SettingsStatus } from '~/types'
 
 useDashboard()
@@ -128,6 +129,74 @@ async function prefill() {
     })
   } finally {
     prefilling.value = false
+  }
+}
+
+/**
+ * Evidence is edited as rich text but STORED as markdown — `content-type="markdown"` on the editor,
+ * not the default. The stored string goes verbatim into the drafter's system prompt, and the whole
+ * point of that prompt is that a human can read it and check what the model was told; a wall of
+ * serialised HTML would end that.
+ *
+ * Bubble layout rather than a fixed bar: this sits inside a settings form, and a permanent toolbar
+ * reads as another control to fill in rather than as formatting for the text you selected.
+ */
+const evidenceTools: EditorToolbarItem[][] = [[
+  { kind: 'mark', mark: 'bold', icon: 'i-lucide-bold', tooltip: { text: 'Bold' } },
+  { kind: 'mark', mark: 'italic', icon: 'i-lucide-italic', tooltip: { text: 'Italic' } },
+  { kind: 'bulletList', icon: 'i-lucide-list', tooltip: { text: 'Bullet list' } },
+  { kind: 'heading', level: 2, icon: 'i-lucide-heading-2', tooltip: { text: 'Heading' } },
+  { kind: 'clearFormatting', icon: 'i-lucide-remove-formatting', tooltip: { text: 'Clear formatting' } }
+]]
+
+const generating = ref(false)
+const discarded = ref<string[]>([])
+const discardedCount = ref(0)
+
+/**
+ * Proposes the evidence, gaps and strengths an application argues from. Same contract as prefill —
+ * the proposal lands in the form and nothing is stored until you press Save.
+ *
+ * `replace` is the difference. Filling only what is blank is right the first time and wrong every
+ * time after: update your CV, press Generate, and a fill-if-empty merge would silently do nothing.
+ * So a second press asks first, and then overwrites.
+ */
+async function generateBackground() {
+  const hasContent = !!form.value.background.evidence || form.value.background.gaps.length > 0
+
+  if (hasContent && !confirm('Replace the evidence and gaps below with a fresh reading of your CV?')) return
+
+  generating.value = true
+  discarded.value = []
+  discardedCount.value = 0
+  try {
+    const r = await $fetch<{
+      config: AppConfig
+      filled: string[]
+      dropped: { why: string }[]
+    }>('/api/settings/background', { method: 'POST', body: { ...form.value, replace: hasContent } })
+    form.value = structuredClone(r.config)
+    // surfaced rather than swallowed: a rising count is how you notice the prompt drifting
+    discardedCount.value = (r.dropped ?? []).length
+    discarded.value = [...new Set((r.dropped ?? []).map(d => d.why))]
+    toast.add({
+      title: r.filled.length ? 'Background generated' : 'Nothing changed',
+      description: r.filled.length
+        ? `${r.filled.join(', ')}. Read every gap before saving — a gap you do not have makes every email apologise for nothing.`
+        : 'The model proposed nothing new.',
+      color: r.filled.length ? 'success' : 'neutral',
+      icon: r.filled.length ? 'i-lucide-sparkles' : 'i-lucide-info',
+      duration: 10000
+    })
+  } catch (e) {
+    toast.add({
+      title: 'Could not generate the background',
+      description: (e as { data?: { message?: string } })?.data?.message ?? String(e),
+      color: 'error',
+      duration: 8000
+    })
+  } finally {
+    generating.value = false
   }
 }
 
@@ -297,20 +366,6 @@ async function disconnectGmail() {
 
           <div class="grid gap-4 sm:grid-cols-2">
             <UFormField
-              label="Stack weighting"
-              help="Which stack scores highest."
-            >
-              <USelect
-                v-model="form.constraints.stackWeighting"
-                :items="[
-                  { label: 'Vue/Nuxt primary, React secondary', value: 'vue-primary' },
-                  { label: 'Weight both equally', value: 'equal' },
-                  { label: 'React/Next primary', value: 'react-primary' }
-                ]"
-                class="w-full"
-              />
-            </UFormField>
-            <UFormField
               label="Working hours"
               help="Roles outside this window get flagged."
             >
@@ -393,6 +448,177 @@ async function disconnectGmail() {
       <UCard class="shrink-0">
         <template #header>
           <h2 class="font-semibold text-highlighted">
+            Field and level
+          </h2>
+          <p class="text-sm text-muted">
+            What counts as a match. These reach the scoring prompt and the drafter, so a role in
+            another field scores low instead of competing with real ones.
+          </p>
+        </template>
+
+        <div class="space-y-4">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <UFormField
+              label="Field of work"
+              help="Two or three words, as someone in it would say. Any profession."
+            >
+              <UInput
+                v-model="form.scope.roleFamily"
+                placeholder="e.g. frontend engineering"
+                class="w-full"
+              />
+            </UFormField>
+            <UFormField
+              label="Seniority floor"
+              help="Postings asking for this many years or fewer are flagged as junior. 0 turns it off."
+            >
+              <UInput
+                v-model.number="form.scope.seniorityFloor"
+                type="number"
+                :min="0"
+                :max="50"
+                class="w-full"
+              />
+            </UFormField>
+          </div>
+
+          <UFormField
+            label="Primary skills"
+            help="What you would be hired for. Roles built on these score highest."
+          >
+            <UInputTags
+              v-model="form.scope.primarySkills"
+              class="w-full"
+            />
+          </UFormField>
+
+          <UFormField
+            label="Secondary skills"
+            help="Things you also work with, but less, or less recently."
+          >
+            <UInputTags
+              v-model="form.scope.secondarySkills"
+              class="w-full"
+            />
+          </UFormField>
+
+          <UFormField
+            label="Out of scope"
+            help="Neighbouring jobs that are not yours. Naming them is what stops a shared title word pulling them in."
+          >
+            <UInputTags
+              v-model="form.scope.excludedRoles"
+              class="w-full"
+            />
+          </UFormField>
+        </div>
+      </UCard>
+
+      <UCard class="shrink-0">
+        <template #header>
+          <div class="flex items-center gap-2">
+            <h2 class="font-semibold text-highlighted">
+              Application background
+            </h2>
+            <UBadge
+              :color="form.background.evidence ? 'success' : 'warning'"
+              variant="subtle"
+              size="sm"
+            >
+              {{ form.background.evidence ? 'ready to draft' : 'drafting blocked' }}
+            </UBadge>
+          </div>
+          <p class="text-sm text-muted">
+            The only facts an application email may use, and the gaps it must declare. Drafting will
+            not start without evidence — an email with nothing behind it is the one this tool exists
+            to avoid.
+          </p>
+        </template>
+
+        <div class="space-y-4">
+          <UFormField
+            label="Evidence"
+            help="Roles, dates, named work, scale, qualifications — in the CV's own words. Every claim in every email must trace to something here."
+          >
+            <UEditor
+              v-slot="{ editor }"
+              v-model="form.background.evidence"
+              content-type="markdown"
+              placeholder="Generate from CV, then edit."
+              class="w-full min-h-80 max-h-[32rem] overflow-y-auto rounded-md ring ring-accented p-3 text-sm"
+            >
+              <UEditorToolbar
+                :editor="editor"
+                :items="evidenceTools"
+                layout="bubble"
+              />
+            </UEditor>
+          </UFormField>
+
+          <UFormField
+            label="Gaps"
+            help="Declared honestly in the email, never papered over. Delete any that are not true of you — an invented gap makes every application apologise for nothing."
+          >
+            <UInputTags
+              v-model="form.background.gaps"
+              class="w-full"
+            />
+          </UFormField>
+
+          <div class="grid gap-4 sm:grid-cols-2">
+            <UFormField
+              label="Strengths"
+              help="Scarce in your market. A posting asking for these ranks higher."
+            >
+              <UInputTags
+                v-model="form.background.strengths"
+                class="w-full"
+              />
+            </UFormField>
+            <UFormField
+              label="Never claim"
+              help="Figures your CV marks as estimates. The email uses hard numbers instead."
+            >
+              <UInputTags
+                v-model="form.background.neverClaim"
+                class="w-full"
+              />
+            </UFormField>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-3">
+            <UButton
+              icon="i-lucide-sparkles"
+              :loading="generating"
+              :disabled="!status.cvExists || generating || !form.titles.length"
+              @click="generateBackground"
+            >
+              Generate from CV
+            </UButton>
+            <p class="text-sm text-muted">
+              <template v-if="!status.cvExists">
+                Upload a CV first.
+              </template>
+              <template v-else-if="!form.titles.length">
+                Add target titles below first — they are what gaps are measured against.
+              </template>
+              <template v-else>
+                Reads your CV against your target titles. Review every line, then press Save.
+              </template>
+            </p>
+          </div>
+          <p
+            v-if="discarded.length"
+            class="text-xs text-muted"
+          >
+            {{ discardedCount }} proposed gap(s) discarded: {{ discarded.join('; ') }}
+          </p>
+        </div>
+      </UCard>
+
+      <UCard class="shrink-0">
+        <template #header>
+          <h2 class="font-semibold text-highlighted">
             Search
           </h2>
           <p class="text-sm text-muted">
@@ -408,7 +634,7 @@ async function disconnectGmail() {
           >
             <UInputTags
               v-model="form.terms"
-              placeholder="e.g. vue nuxt developer"
+              placeholder="e.g. senior &lt;your role&gt; hiring"
               class="w-full"
             />
           </UFormField>
@@ -419,7 +645,7 @@ async function disconnectGmail() {
           >
             <UInputTags
               v-model="form.titles"
-              placeholder="e.g. Senior Frontend Engineer"
+              placeholder="e.g. Senior &lt;Your Title&gt;"
               class="w-full"
             />
           </UFormField>

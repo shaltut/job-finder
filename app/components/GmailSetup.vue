@@ -62,7 +62,7 @@ const steps = [
 
 const errors = [
   ['Gmail API has not been used in project <number>', 'The API is enabled on a different project than the client. Redo step 2 in the right project.'],
-  ['redirect_uri_mismatch', 'Rare for Desktop clients. Set JOBFINDER_REDIRECT=http://localhost:3939/api/gmail/callback in .env and restart.'],
+  ['redirect_uri_mismatch', `Rare for Desktop clients. Set JOBFINDER_REDIRECT=${props.redirect} in .env and restart.`],
   ['state mismatch: start from Connect Gmail…', 'You reached the callback without starting from Connect, or the server restarted mid-consent. Press Connect again — this is a deliberate CSRF guard.'],
   ['access_denied', 'The app is in Testing and your address is not a test user. Step 5.'],
   ['Connected, then "not connected" a week later', 'Testing mode: refresh tokens expire after 7 days. Reconnect, or publish the app.']

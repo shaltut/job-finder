@@ -24,7 +24,7 @@ Needs **Node 22+** and **Google Chrome**. No database server: SQLite is a file.
 npm install
 printf 'OPENAI_API_KEY=sk-...\n' > .env
 npm run db:migrate      # creates data/jobfinder.db
-npm test                # 72 tests; no browser, no network, no API key needed
+npm test                # no browser, no network, no API key needed
 npm run login           # log in inside the Chrome window that opens
 npm run dev             # http://127.0.0.1:3939
 ```
@@ -36,16 +36,22 @@ Then open **Settings** and make it yours (below), and press **Start scrape** in 
 | # | What | Where | Why it matters |
 |---|------|-------|----------------|
 | 1 | **Your profile and constraints** | **Settings view** (writes the `settings` row in the database) | Drop your CV on the upload area, press **Prefill from CV**, then fill in the rest: which countries are in scope, whether you will relocate, whether you can start immediately. Prefill fills only blank fields and never the constraints — a CV cannot know them. These are injected into both the scoring prompt and the drafter, so every email states them. **Do this first.** |
-| 2 | **Your evidence and gaps** | `.claude/skills/job-application-drafter/SKILL.md` | The drafter's honesty depends on this: it declares the gaps listed here and may claim nothing else. Left unedited, every draft claims someone else's projects. |
+| 2 | **Your evidence and gaps** | **Settings view**, Application background | Press **Generate from CV**: it reads your CV against your target titles and proposes the facts an email may cite and the gaps it must declare. Then read every line. The drafter may claim nothing outside this, and will declare every gap in it — so an overclaim here goes out under your name, and a gap you do not have makes every application apologise for nothing. Drafting refuses to start until evidence is set. |
 | 3 | Your CV PDF | `cv` in Settings | The scoring model reads the PDF itself once per run, and it is attached to every draft. |
 | 4 | `OPENAI_API_KEY` | a new `.env` file | Scoring runs on `gpt-5-nano`; a full 9-term run costs a few cents. |
-| 5 | Search terms and target titles | **Settings view** | Shipped tuned for senior frontend (Vue/Nuxt, React/Next) in Egypt and the Gulf. `terms` also contains the literal `feed`, which scrapes your own LinkedIn home feed — drop it if your feed is noise. |
+| 5 | Search terms and target titles | **Settings view** | Ships empty; **Prefill from CV** proposes both. Add the literal term `feed` to scrape your own LinkedIn home feed as well as the searches — drop it if your feed is noise. |
+| 5b | **Field of work and out-of-scope roles** | **Settings view**, Field and level | Naming the neighbouring jobs that are *not* yours is what stops a shared title word pulling them in: search "engineer" without it and you will get every discipline that shares the word. The seniority floor works the same way — set it to 0 if you do not want junior postings hidden. |
 | 6 | Your Google OAuth client | `google-oauth.json` | Only needed for Gmail drafting; see below. Until then drafts are written to `data/drafts/`. |
 | 7 | Your LinkedIn session | `npm run login` | Logs you into the tool's own Chrome profile in `./profile`. Redo it whenever a run exits with code 2. |
 
-**Points 1 and 2 are different jobs.** Settings holds the facts that change (contact details, where you will
-work). The skill holds the argument: what you have actually built, and what you must declare that you have
-not. Neither is optional, and the second one is the one that keeps your emails honest.
+**Points 1 and 2 are different jobs**, even though both now live in Settings. The first is the facts that
+change: contact details, where you will work, when you can start. The second is the argument: what you have
+actually built, and what you must declare that you have not. Neither is optional, and the second is the one
+that keeps your emails honest.
+
+There is no prompt file to edit. The drafter's procedure (`server/prompts/drafter-procedure.md`) is identical
+on every install and states no fact about anybody; everything about you is injected above it from the
+settings row at run time. If your CV changes, re-upload it and press **Generate from CV** again.
 
 ## Connecting Gmail
 

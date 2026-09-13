@@ -11,7 +11,24 @@ import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import type { AppConfig } from './config'
 
-const SKILL_PATH = resolve(process.cwd(), '.claude/skills/job-application-drafter/SKILL.md')
+/**
+ * Procedure only — how to screen and how to write. Every fact about the candidate is injected above
+ * it from the settings row, so this file is identical on every install.
+ *
+ * It deliberately does NOT live in `.claude/skills/`. The drafter spawns in an empty directory and
+ * the CLI never discovered it as a skill anyway; all sitting there achieved was making a server data
+ * file appear as an interactive skill, described in terms of one person, in every Claude session
+ * opened in this repo.
+ */
+const PROCEDURE_PATH = resolve(process.cwd(), 'server/prompts/drafter-procedure.md')
+
+export function readProcedure(): string {
+  try {
+    return readFileSync(PROCEDURE_PATH, 'utf8')
+  } catch {
+    throw new Error(`drafter procedure not found at ${PROCEDURE_PATH} — the server must run from the repo root`)
+  }
+}
 
 /**
  * `--allowed-tools` and `--disallowed-tools` are variadic: a flag that follows one with no values of its
@@ -71,6 +88,8 @@ const responseSchema = z.object({
 export type DraftResult = z.infer<typeof resultSchema>
 export type DraftResponse = z.infer<typeof responseSchema>
 
+export const PROMPT_SEPARATOR = '\n\n---\n\n'
+
 /** The identity and constraints the skill deliberately does not hardcode. */
 export function profileBlock(config: AppConfig): string {
   const p = config.profile
@@ -91,14 +110,65 @@ export function profileBlock(config: AppConfig): string {
     `Accepts location-free remote roles from anywhere: ${c.remoteAnywhere ? 'yes' : 'no'}`,
     `On-site or hybrid roles are in scope only in: ${c.onsiteCountries.join(', ')}`,
     `Willing to relocate to: ${c.willRelocate.length ? c.willRelocate.join(', ') : 'nowhere'}`,
-    `Can start immediately: ${c.canStartImmediately ? 'yes' : 'no — he has a notice period'}`,
-    `Acceptable working hours: ${c.workingHours}`,
-    `Stack weighting: ${c.stackWeighting}`
+    `Can start immediately: ${c.canStartImmediately ? 'yes' : 'no — there is a notice period'}`,
+    `Acceptable working hours: ${c.workingHours}`
   ].filter(Boolean).join('\n')
 }
 
+/** Shown in place of a section the user has not filled in yet. */
+const NONE = '(none provided — do not invent one; say so in `reason` if you need it)'
+
+const bullets = (xs: string[]): string => xs.length ? xs.map(x => `- ${x}`).join('\n') : NONE
+
+/**
+ * What counts as a match. Every line is omitted when its setting is empty, so a half-filled install
+ * gets no rule rather than a rule with a blank in it — an empty "Field of work:" reads to the model
+ * as a field named nothing, and it will screen against it.
+ */
+export function scopeBlock(config: AppConfig): string {
+  const s = config.scope
+  return [
+    '# Field and level',
+    '',
+    s.roleFamily ? `Field of work: ${s.roleFamily}` : '',
+    s.seniorityFloor > 0
+      ? `Seniority floor: a posting asking for ${s.seniorityFloor} years or fewer is below this candidate's level`
+      : '',
+    s.primarySkills.length ? `Primary skills: ${s.primarySkills.join(', ')}` : '',
+    s.secondarySkills.length ? `Secondary skills: ${s.secondarySkills.join(', ')}` : '',
+    s.excludedRoles.length ? `Out of scope — these are other people's jobs: ${s.excludedRoles.join('; ')}` : ''
+  ].filter(Boolean).join('\n')
+}
+
+export function evidenceBlock(config: AppConfig): string {
+  return `# Evidence — the only facts the candidate may claim\n\n${config.background.evidence || NONE}`
+}
+
+export function gapsBlock(config: AppConfig): string {
+  const b = config.background
+  const never = b.neverClaim.length
+    ? `\n\n## Never claim\n\n${bullets(b.neverClaim)}`
+    : ''
+  return `# Gaps — declare these, never paper over them\n\n${bullets(b.gaps)}${never}`
+}
+
+export function strengthsBlock(config: AppConfig): string {
+  return `# Strengths to lead with — rank a posting higher when it asks for these\n\n${bullets(config.background.strengths)}`
+}
+
+/**
+ * Everything about this person. The half of the prompt that changes per install — the procedure file
+ * below the separator is byte-identical for everyone, and a test asserts exactly that.
+ */
+export function candidateBlock(config: AppConfig): string {
+  return [
+    profileBlock(config), scopeBlock(config), evidenceBlock(config),
+    gapsBlock(config), strengthsBlock(config)
+  ].join('\n\n')
+}
+
 export function buildSystemPrompt(config: AppConfig): string {
-  return `${profileBlock(config)}\n\n---\n\n${readFileSync(SKILL_PATH, 'utf8')}`
+  return `${candidateBlock(config)}${PROMPT_SEPARATOR}${readProcedure()}`
 }
 
 /** Strips a ```json fence if the model adds one despite being told not to. */

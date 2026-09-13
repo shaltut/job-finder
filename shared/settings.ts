@@ -31,15 +31,41 @@ export const settingsSchema = z.object({
     onsiteCountries: z.array(z.string().trim().min(1)),
     willRelocate: z.array(z.string().trim().min(1)),
     canStartImmediately: z.boolean(),
-    workingHours: z.string().trim(),
-    stackWeighting: z.enum(['vue-primary', 'equal', 'react-primary'])
+    workingHours: z.string().trim()
+  }),
+  // What counts as a match. Read by the scorer, the pre-screen AND the drafter — which is why it is
+  // separate from `background` below, whose only consumer is the drafter. Nothing here names a
+  // profession: `roleFamily` is whatever the person does, and an empty list means "no such rule",
+  // never a hardcoded default.
+  scope: z.object({
+    roleFamily: z.string().trim().max(120),
+    primarySkills: z.array(z.string().trim().min(1).max(60)).max(20),
+    secondarySkills: z.array(z.string().trim().min(1).max(60)).max(20),
+    excludedRoles: z.array(z.string().trim().min(1).max(120)).max(20),
+    // 0 turns the check off, and 0 is the default: the tool does not know your level until you say.
+    seniorityFloor: z.number().int().min(0).max(50)
   }),
   // existence of the file is checked by assertComplete() on the server, not here: this module has no fs
   cv: z.string().trim(),
   terms: z.array(z.string().trim().min(1)),
   titles: z.array(z.string().trim().min(1)),
   max: z.number().int().min(1).max(200),
-  since: z.enum(['past-24h', 'past-week', 'past-month'])
+  since: z.enum(['past-24h', 'past-week', 'past-month']),
+  // What an application email may say. Replaces the hand-written Evidence and Gaps sections that
+  // used to live in the drafter skill file, so retargeting this tool stays data entry.
+  //
+  // `gaps` is a LIST, not prose, because each entry is an atomic claim the user must be able to
+  // delete on its own — that per-item review is the defence against a generated gap nobody has.
+  // `evidence` is prose because its structure is nested (roles, then work, then tools per piece of
+  // work) and any flattening loses the grouping that stops the model attaching one project's tools
+  // to another. The caps are not cosmetic: this is spliced into a system prompt spawned once per
+  // recruiter, so an uncapped blob is a token bill and a prompt-length failure.
+  background: z.object({
+    strengths: z.array(z.string().trim().min(1).max(120)).max(20),
+    evidence: z.string().trim().max(8000),
+    gaps: z.array(z.string().trim().min(1).max(600)).max(30),
+    neverClaim: z.array(z.string().trim().min(1).max(200)).max(20)
+  })
 })
 
 export type StoredSettings = z.infer<typeof settingsSchema>
@@ -47,6 +73,8 @@ export type StoredSettings = z.infer<typeof settingsSchema>
 export type AppConfig = StoredSettings
 export type Profile = StoredSettings['profile']
 export type Constraints = StoredSettings['constraints']
+export type Scope = StoredSettings['scope']
+export type Background = StoredSettings['background']
 
 /**
  * A fresh install. No contact details, so this is safe under server/ where invariants.test.ts scans
@@ -66,14 +94,15 @@ export const EMPTY_SETTINGS: StoredSettings = {
     onsiteCountries: [],
     willRelocate: [],
     canStartImmediately: true,
-    workingHours: '',
-    stackWeighting: 'vue-primary'
+    workingHours: ''
   },
+  scope: { roleFamily: '', primarySkills: [], secondarySkills: [], excludedRoles: [], seniorityFloor: 0 },
   cv: '',
   terms: [],
   titles: [],
   max: 40,
-  since: 'past-24h'
+  since: 'past-24h',
+  background: { strengths: [], evidence: '', gaps: [], neverClaim: [] }
 }
 
 /** Deep clone, so callers cannot mutate the shared default. */
@@ -94,6 +123,98 @@ export function missingFields(cfg: StoredSettings): string[] {
   if (!cfg.terms.length) missing.push('terms: at least one search term')
   if (!cfg.titles.length) missing.push('titles: at least one target title')
   return missing
+}
+
+/**
+ * The EXTRAS a draft needs on top of missingFields(). Deliberately does not repeat the base list, so
+ * the status endpoint can show two tiers without de-duplicating them.
+ *
+ * Evidence blocks and gaps only warns. A draft with no evidence cannot be written honestly at all;
+ * a draft with no gaps degrades gracefully to "declare none", which is correct for someone who has
+ * none. And a required field that people satisfy with junk is worse than an unrequired one.
+ */
+export function missingForDrafting(cfg: StoredSettings): string[] {
+  const missing: string[] = []
+  if (!cfg.background.evidence) missing.push('background.evidence: nothing for the email to draw on')
+  return missing
+}
+
+/** Non-blocking. Things that make every run worse but must never stop one. */
+export function settingsWarnings(cfg: StoredSettings): string[] {
+  const w: string[] = []
+  if (!cfg.background.gaps.length) w.push('background.gaps is empty — every email will read as if you have no gaps at all')
+  if (!cfg.scope.roleFamily) w.push('scope.roleFamily is not set — the scorer cannot rule out roles from other fields')
+  if (!cfg.scope.primarySkills.length) w.push('scope.primarySkills is empty — nothing scores higher than anything else')
+  return w
+}
+
+// ---------------- shape upgrade ----------------
+
+type Plain = Record<string, unknown>
+const isPlain = (v: unknown): v is Plain => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/** Rebuild in the DEFAULT's key order, keeping a stored value only when its type matches. */
+function shapeOver(def: Plain, src: Plain): Plain {
+  const out: Plain = {}
+  for (const [k, d] of Object.entries(def)) {
+    const v = src[k]
+    if (isPlain(d)) out[k] = shapeOver(d, isPlain(v) ? v : {})
+    else if (Array.isArray(d)) out[k] = Array.isArray(v) ? v : d
+    else if (typeof v === typeof d) out[k] = v
+    else out[k] = d
+  }
+  return out
+}
+
+/**
+ * Any stored object into the CURRENT shape. SHAPE ONLY: a value that fails its *format* check — a
+ * malformed email — is preserved untouched, because readConfigRaw()'s whole job is to show you the
+ * thing you have to fix.
+ *
+ * Applied on every read rather than once at boot, so it also covers a database restored from
+ * backups/ and the scraper child's own read-only handle, whichever process opens it first. That
+ * matters more than it looks: scraper/run.ts swallows a settings read failure and falls back to
+ * emptySettings(), so a row that merely predates a new field would make a scrape report "no search
+ * terms configured" against a settings row that is completely full.
+ *
+ * Total and idempotent. `undefined` passes through UNCHANGED and that is load-bearing — importLegacy
+ * uses "the raw read returned undefined" as its "no row yet" guard, and handing back EMPTY_SETTINGS
+ * here would make the legacy import impossible to ever fire.
+ */
+export function upgradeSettings(stored: unknown): unknown {
+  if (!isPlain(stored)) return stored
+  return shapeOver(emptySettings() as unknown as Plain, stored)
+}
+
+/**
+ * Trusted, user-written seed data — the curated evidence and gaps that used to live in the drafter
+ * skill file, carried into the settings row once.
+ *
+ * Fills a leaf ONLY while it still holds its EMPTY_SETTINGS default, so it can never overwrite an
+ * edit and re-running it is a no-op. Not mergeEmpty(): that one guards against MODEL output and so
+ * refuses numbers and booleans outright. A seed is a file you wrote yourself, so it may set
+ * scope.seniorityFloor. The guard is per LEAF rather than per section — otherwise generating from
+ * the CV once before the seed lands would silently skip everything beside it.
+ */
+export function seedDefaults(current: StoredSettings, seed: unknown): StoredSettings {
+  if (!isPlain(seed)) return current
+  const def = EMPTY_SETTINGS as unknown as Plain
+  const next = structuredClone(current) as unknown as Plain
+  const walk = (d: Plain, cur: Plain, src: Plain) => {
+    for (const [k, v] of Object.entries(src)) {
+      if (!(k in d)) continue
+      const dv = d[k]
+      if (isPlain(dv)) {
+        if (isPlain(v) && isPlain(cur[k])) walk(dv, cur[k] as Plain, v)
+        continue
+      }
+      const atDefault = Array.isArray(dv) ? (cur[k] as unknown[]).length === 0 : cur[k] === dv
+      if (!atDefault) continue
+      if (Array.isArray(dv) ? Array.isArray(v) : typeof v === typeof dv) cur[k] = v
+    }
+  }
+  walk(def, next, seed)
+  return next as unknown as StoredSettings
 }
 
 /** Parse, normalising country names to their display form so aliases collapse on the way in. */
@@ -130,7 +251,7 @@ export function readSettingsFrom(handle: SqlHandle): StoredSettings | undefined 
   }
   if (!row?.json) return undefined
   try {
-    return parseSettings(JSON.parse(row.json))
+    return parseSettings(upgradeSettings(JSON.parse(row.json)))
   } catch {
     return undefined // stored config drifted out of schema; callers fall back to the raw read
   }
@@ -140,7 +261,10 @@ export function readSettingsFrom(handle: SqlHandle): StoredSettings | undefined 
 export function readSettingsRawFrom(handle: SqlHandle): unknown {
   try {
     const row = handle.prepare('SELECT json FROM settings WHERE id = 1').get() as { json?: string } | undefined
-    return row?.json ? JSON.parse(row.json) : undefined
+    // upgraded, so a row written before a field existed still hands the Settings form every key it
+    // binds to. Shape only — an invalid stored value is still shown to you, because fixing it is
+    // exactly what this read is for.
+    return row?.json ? upgradeSettings(JSON.parse(row.json)) : undefined
   } catch {
     return undefined
   }
@@ -172,9 +296,14 @@ export function importLegacy(handle: SqlHandle, legacy: unknown): boolean {
  */
 export interface PrefillProposal {
   profile?: Record<string, unknown>
+  scope?: Record<string, unknown>
+  background?: Record<string, unknown>
   terms?: unknown[]
   titles?: unknown[]
 }
+
+/** The sections a model is allowed to propose into. Numbers and booleans are never filled here. */
+const MERGE_SECTIONS = ['profile', 'scope', 'background'] as const
 
 /**
  * Fill only the fields that are currently empty. This is what makes prefill-from-CV safe to press
@@ -182,11 +311,20 @@ export interface PrefillProposal {
  */
 export function mergeEmpty(current: StoredSettings, proposal: PrefillProposal): StoredSettings {
   const next = structuredClone(current)
-  const p = proposal.profile ?? {}
-  for (const [key, v] of Object.entries(p)) {
-    const k = key as keyof Profile
-    if (!(k in next.profile)) continue // the model invented a field; ignore it
-    if (typeof v === 'string' && v.trim() && !next.profile[k]) next.profile[k] = v.trim()
+  for (const section of MERGE_SECTIONS) {
+    const proposed = proposal[section] ?? {}
+    const target = next[section] as unknown as Record<string, unknown>
+    for (const [k, v] of Object.entries(proposed)) {
+      if (!(k in target)) continue // the model invented a field; ignore it
+      const cur = target[k]
+      if (typeof cur === 'string' && typeof v === 'string' && v.trim() && !cur) target[k] = v.trim()
+      else if (Array.isArray(cur) && Array.isArray(v) && !cur.length) {
+        const items = [...new Set(v.map(x => String(x).trim()).filter(Boolean))]
+        if (items.length) target[k] = items
+      }
+      // numbers and booleans are never model-filled: the same rule that keeps a model out of
+      // willRelocate and canStartImmediately keeps it out of scope.seniorityFloor.
+    }
   }
   for (const k of ['terms', 'titles'] as const) {
     const v = proposal[k]
@@ -202,9 +340,13 @@ export function mergeEmpty(current: StoredSettings, proposal: PrefillProposal): 
     if (check.success) return check.data
     const bad = check.error.issues
       .map(iss => iss.path)
-      .filter(path => path[0] === 'profile' && typeof path[1] === 'string')
+      .filter(path => (MERGE_SECTIONS as readonly unknown[]).includes(path[0]) && typeof path[1] === 'string')
     if (!bad.length) return current // nothing attributable: keep what the user had
-    for (const path of bad) result.profile[path[1] as keyof Profile] = current.profile[path[1] as keyof Profile]
+    for (const [section, key] of bad) {
+      const sec = section as typeof MERGE_SECTIONS[number]
+      ;(result[sec] as unknown as Record<string, unknown>)[key as string]
+        = (current[sec] as unknown as Record<string, unknown>)[key as string]
+    }
   }
   return current
 }

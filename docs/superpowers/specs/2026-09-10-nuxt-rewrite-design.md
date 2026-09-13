@@ -6,11 +6,11 @@ immediately after it records what changed once the code met reality.
 
 ---
 
-# Job Finder → Nuxt rewrite, retargeted to Mohamed Maher
+# Job Finder → Nuxt rewrite, retargeted to a new owner
 
 ## Context
 
-`shaltoot-job-finder` was cloned fresh. It is Ahmed Shaltoot's personal job-search pipeline: a Playwright
+`shaltoot-job-finder` was cloned fresh. It is the original author's personal job-search pipeline: a Playwright
 scraper drives real Chrome through LinkedIn **posts**, keeps the ones carrying a contact email, scores them
 against a CV with `gpt-5-nano`, stores them in Postgres, and a Claude Code skill drafts application emails as
 Gmail drafts. Every profile fact, search term and screening rule in it is Ahmed's.
@@ -18,7 +18,7 @@ Gmail drafts. Every profile fact, search term and screening rule in it is Ahmed'
 Two jobs, and they are entangled:
 
 1. **Make it mine.** Every hardcoded fact is wrong for this machine and this person. The tool targets senior
-   .NET / architect / healthcare-claims roles for a Director of Engineering in Cairo. Mohamed Maher is a
+   .NET / architect / healthcare-claims roles for a Director of Engineering in Cairo. <the owner> is a
    Senior Frontend Engineer in Damietta — Vue/Nuxt primary, React/Next secondary, 10+ years, led six
    engineers without ever holding the title.
 2. **Rewrite the stack.** Nuxt 4 + Nuxt UI dashboard template, Nitro server routes for the API, SQLite
@@ -53,7 +53,7 @@ same behaviour as the original and roughly half the hand-rolled machinery.
 | CV metrics | The `~30% / ~40% / ~35%` figures are **never quoted** — `resume.ts` flags them as unverified estimates |
 | Availability | Can start immediately |
 | Languages | Arabic native, English professional |
-| Sending account | `muhamed.elrefaie@gmail.com` |
+| Sending account | `you@example.com` |
 
 ## Architecture
 
@@ -167,7 +167,7 @@ the design is locked in.
 3. **The sender address is discovered, not hardcoded.** The stage sweep decides "already contacted?" by
    matching the sender on sent mail, so a wrong constant would silently make every sent application look
    unsent. At connect time the server reads `users/me/profile` and stores `emailAddress` with the token;
-   `muhamed.elrefaie@gmail.com` becomes the *expected* value it warns against, not a literal in the code.
+   `you@example.com` becomes the *expected* value it warns against, not a literal in the code.
 4. **`emails` comes from a regex, never from the model.**
 5. **The dedupe key is stable across runs** — Arabic age folding (`٣ من الساعات` → `3h`) and header-marker
    stripping are ported verbatim from `jobfinder.js`; `npm test` keeps its existing assertions.
@@ -180,7 +180,7 @@ the design is locked in.
 > rather than typed as a path, and the country list is the full ISO 3166 table. The section below
 > records what was true at M1-M5 and is left intact.
 
-**Everything below is editable in the UI's Settings view and ships pre-filled with Mohamed Maher's values as
+**Everything below is editable in the UI's Settings view and ships pre-filled with <the owner>'s values as
 defaults.** Nothing here is hardcoded in the source: `config.json` is the single place these live, the
 Settings page is a form over it, and both the scoring prompt and the drafter's system prompt are built from it
 at run time. Changing your phone number or dropping a search term is a UI edit, not a code change.
@@ -192,13 +192,13 @@ one-time data entry rather than a permanent editing chore.
 ```jsonc
 {
   "profile": {                                  // → scoring prompt + drafter system prompt + email signature
-    "name": "Mohamed Maher",
+    "name": "<your name>",
     "title": "Senior Frontend Engineer",
     "location": "Damietta, Egypt",
-    "email": "muhamed.elrefaie@gmail.com",
-    "phone": "+20 101 702 6444",
-    "linkedin": "https://www.linkedin.com/in/mohamed-maher-b620ba139/",
-    "github": "https://github.com/melrefaie",
+    "email": "you@example.com",
+    "phone": "<your phone>",
+    "linkedin": "<your linkedin url>",
+    "github": "<your github url>",
     "languages": "Arabic native, English professional",
     "yearsExperience": "10+"
   },
@@ -210,7 +210,7 @@ one-time data entry rather than a permanent editing chore.
     "workingHours": "09:00-21:00 Africa/Cairo",
     "stackWeighting": "vue-primary"             // vue-primary | equal | react-primary
   },
-  "cv": "/Volumes/Data/projects/CV/app/mohamed-maher-cv/Mohamed-Maher-CV.pdf",
+  "cv": "data/cv/<your-cv>.pdf",
   "terms":  [ /* 9, below */ ],
   "titles": [ /* 30, below */ ],
   "max": 40,
@@ -250,14 +250,14 @@ a trait that is now an *advantage*. Immediate availability instead becomes a lin
 
 ## Drafter profile — `.claude/skills/job-application-drafter/SKILL.md`
 
-Rewritten from `/Volumes/Data/projects/CV/app/mohamed-maher-cv/app/data/resume.ts` (the single source of
-truth; `Mohamed-Maher-CV.pdf` is generated from it by `scripts/generate-pdf.mjs`).
+Rewritten from `<the CV source project>/app/data/resume.ts` (the single source of
+truth; `<your-cv>.pdf` is generated from it by `scripts/generate-pdf.mjs`).
 
 **Identity and constraints are NOT written into this file** — the server injects them from `config.json`'s
 `profile` and `constraints` blocks when it builds the system prompt, so editing them in Settings changes the
 drafts immediately. `SKILL.md` holds only the prose that needs judgement: evidence, gaps, screening rules,
-tone. For reference, the injected identity is Mohamed Maher · Damietta, Egypt · +20 101 702 6444 ·
-muhamed.elrefaie@gmail.com · linkedin.com/in/mohamed-maher-b620ba139 · github.com/melrefaie · Arabic native,
+tone. The injected identity — name, location, phone, email, LinkedIn and GitHub — comes from the
+settings row at run time and appears nowhere in this repository.
 English professional. B.Sc. Computer Science, Damietta University (2016) stays in the file — it is a fact
 about the past, not a setting.
 
@@ -307,7 +307,7 @@ must keep `profile/` (a live LinkedIn session), `.env`, `google-oauth.json`, `gm
 
 **M2 — Run + Settings + job lanes.** `server/utils/jobs.ts` (two lanes, queue, SIGTERM stop), log streaming,
 KPI strip, yield-by-term table, and the **full Settings view** — Profile, Constraints, Search and Gmail cards
-over the widened `config.json`, seeded with the Mohamed Maher defaults above and validated server-side on save.
+over the widened `config.json`, seeded with the new owner's defaults above and validated server-side on save.
 
 **M3 — Drafter.** Rewrite `SKILL.md` off `resume.ts`. `server/utils/drafter.ts` spawns `claude -p` with zero
 tools and validates the JSON. **Verify the skill loads with `--strict-mcp-config` and no tools before going

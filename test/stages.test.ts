@@ -16,7 +16,7 @@ const base = { selfEmail: ME, recruiterEmail: REC, dbStage: null, hasPendingDraf
 // ---------------- classification ----------------
 
 test('a message from the connected account is outgoing', () => {
-  assert.equal(classifyMessage(msg({ from: `Mohamed <${ME}>` }), ME, REC), 'outgoing')
+  assert.equal(classifyMessage(msg({ from: `Test Person <${ME}>` }), ME, REC), 'outgoing')
 })
 
 test('a bounce is not a reply', () => {
@@ -160,8 +160,8 @@ test('buildMime works with no attachment (the follow-up carries none by itself)'
 
 test('renderHtml turns bare URLs into real anchors', () => {
   // Gmail rewrites bare URLs in a plain body into google.com/url?q= redirects; two applications went out that way
-  const html = renderHtml('See my work', 'Mohamed\nhttps://github.com/melrefaie')
-  assert.match(html, /<a href="https:\/\/github\.com\/melrefaie">github\.com\/melrefaie<\/a>/)
+  const html = renderHtml('See my work', 'Test Person\nhttps://github.com/testperson')
+  assert.match(html, /<a href="https:\/\/github\.com\/testperson">github\.com\/testperson<\/a>/)
 })
 
 test('renderHtml escapes HTML rather than emitting it', () => {

@@ -4,8 +4,9 @@ import Database from 'better-sqlite3'
 import { isPdf, safeCvName } from '../server/utils/cv.ts'
 import { COUNTRIES, normalizeCountries, resolveCountry, tldsFor, withAliases } from '../shared/countries.ts'
 import {
-  emptySettings, importLegacy, mergeEmpty, missingFields, parseSettings,
-  readSettingsFrom, readSettingsRawFrom, writeSettingsTo, type StoredSettings
+  EMPTY_SETTINGS, emptySettings, importLegacy, mergeEmpty, missingFields, missingForDrafting,
+  parseSettings, readSettingsFrom, readSettingsRawFrom, seedDefaults, settingsSchema,
+  settingsWarnings, upgradeSettings, writeSettingsTo, type StoredSettings
 } from '../shared/settings.ts'
 
 /**
@@ -34,7 +35,7 @@ const complete = (): StoredSettings => ({
   },
   constraints: {
     remoteAnywhere: true, onsiteCountries: ['Egypt'], willRelocate: [],
-    canStartImmediately: true, workingHours: '09:00-21:00 Africa/Cairo', stackWeighting: 'vue-primary'
+    canStartImmediately: true, workingHours: '09:00-21:00 Africa/Cairo'
   },
   cv: 'data/cv/test.pdf',
   terms: ['vue nuxt developer'],
@@ -204,8 +205,16 @@ test('a stored country that is not in the table survives a round-trip', () => {
   assert.deepEqual(saved.constraints.onsiteCountries, ['Egypt', 'Atlantis'])
 })
 
-test('parseSettings rejects a stackWeighting outside the enum', () => {
-  assert.throws(() => parseSettings({ ...complete(), constraints: { ...complete().constraints, stackWeighting: 'svelte-primary' } }))
+test('parseSettings strips a key the schema no longer has, and the upgrade does too', () => {
+  // This is how `constraints.stackWeighting` left. Zod drops unknown keys on parse, so the first Save
+  // after a field is removed erases it from the stored row — which means anything that had to survive
+  // it (here, the primary/secondary skills it became) must be carried across BEFORE that save, never
+  // by a migration written afterwards.
+  const withDeadKey = { ...complete(), constraints: { ...complete().constraints, stackWeighting: 'vue-primary' } }
+  const parsed = parseSettings(withDeadKey)
+  assert.ok(!('stackWeighting' in parsed.constraints))
+  assert.equal(parsed.constraints.workingHours, complete().constraints.workingHours)
+  assert.ok(!('stackWeighting' in (upgradeSettings(withDeadKey) as StoredSettings).constraints))
 })
 
 // ---------------- CV upload safety ----------------
@@ -224,7 +233,7 @@ test('safeCvName never lets a filename escape the CV directory', () => {
 })
 
 test('safeCvName forces a .pdf extension and survives a hostile name', () => {
-  assert.equal(safeCvName('Mohamed Maher CV.pdf'), 'Mohamed-Maher-CV.pdf')
+  assert.equal(safeCvName('Test Person CV.pdf'), 'Test-Person-CV.pdf')
   assert.equal(safeCvName('resume.docx'), 'resume.pdf')
   assert.equal(safeCvName(''), 'cv.pdf')
   assert.equal(safeCvName('...'), 'cv.pdf')
@@ -236,4 +245,141 @@ test('isPdf checks the bytes, not the client content-type', () => {
   assert.equal(isPdf(Buffer.from('<html>not a pdf</html>')), false)
   assert.equal(isPdf(Buffer.from('PK a zip pretending')), false)
   assert.equal(isPdf(Buffer.from('')), false)
+})
+
+// ---------------- shape, and the upgrade that keeps old rows readable ----------------
+
+/** A row as it was stored before scope/background existed. Literal on purpose: a fixture built from
+ *  emptySettings() would silently acquire every new field and prove nothing. */
+const oldShapeRow = () => ({
+  profile: {
+    name: 'Test Person', title: 'Senior Frontend Engineer', location: 'Cairo, Egypt',
+    email: 'test@example.com', phone: '+20 100 000 0000',
+    linkedin: 'https://www.linkedin.com/in/test', github: '',
+    languages: 'Arabic native, English professional', yearsExperience: '10+'
+  },
+  constraints: {
+    remoteAnywhere: true, onsiteCountries: ['Egypt'], willRelocate: [],
+    canStartImmediately: true, workingHours: '09:00-21:00 Africa/Cairo'
+  },
+  cv: 'data/cv/test.pdf',
+  terms: ['vue nuxt developer', 'feed'],
+  titles: ['Senior Frontend Engineer'],
+  max: 40,
+  since: 'past-24h'
+})
+
+test('the schema shape order matches EMPTY_SETTINGS key order, at every level', () => {
+  // Zod emits keys in SCHEMA order and strips unknown ones, while the Settings page's dirty check is
+  // a JSON.stringify comparison. So if these two ever disagree the page reads as permanently dirty,
+  // and nothing else in the suite would say why.
+  const walk = (shape: Record<string, unknown>, obj: Record<string, unknown>, at: string) => {
+    assert.deepEqual(Object.keys(shape), Object.keys(obj), `key order differs at ${at}`)
+    for (const [k, v] of Object.entries(shape)) {
+      const inner = (v as { shape?: Record<string, unknown> })?.shape
+      if (inner) walk(inner, obj[k] as Record<string, unknown>, `${at}.${k}`)
+    }
+  }
+  walk(settingsSchema.shape as unknown as Record<string, unknown>, EMPTY_SETTINGS as unknown as Record<string, unknown>, 'root')
+  assert.equal(JSON.stringify(parseSettings(emptySettings())), JSON.stringify(EMPTY_SETTINGS))
+})
+
+test('upgradeSettings passes undefined through, so importLegacy can still tell an empty database', () => {
+  // importLegacy's "a row already exists" guard IS this value. Returning EMPTY_SETTINGS here would
+  // make the one-time legacy import impossible to ever fire again.
+  assert.equal(upgradeSettings(undefined), undefined)
+  const db = fresh()
+  assert.equal(readSettingsRawFrom(db), undefined)
+  assert.equal(importLegacy(db, oldShapeRow()), true)
+  assert.equal(importLegacy(db, oldShapeRow()), false)
+})
+
+test('upgradeSettings fills a row written before scope and background existed, and is idempotent', () => {
+  const up = upgradeSettings(oldShapeRow()) as StoredSettings
+  assert.deepEqual(Object.keys(up), Object.keys(EMPTY_SETTINGS))
+  assert.deepEqual(up.scope, EMPTY_SETTINGS.scope)
+  assert.deepEqual(up.background, EMPTY_SETTINGS.background)
+  // every stored value survives — this is the failure that would look like "my settings vanished"
+  assert.deepEqual(up.terms, ['vue nuxt developer', 'feed'])
+  assert.deepEqual(up.titles, ['Senior Frontend Engineer'])
+  assert.equal(up.cv, 'data/cv/test.pdf')
+  assert.equal(up.constraints.workingHours, '09:00-21:00 Africa/Cairo')
+  assert.deepEqual(upgradeSettings(up), up)
+})
+
+test('upgradeSettings fixes shape but never format: a bad stored value is still shown to you', () => {
+  const up = upgradeSettings({ ...oldShapeRow(), profile: { ...oldShapeRow().profile, email: 'not-an-email' } }) as StoredSettings
+  assert.equal(up.profile.email, 'not-an-email')
+})
+
+test('both read paths survive a row stored before the new fields existed', () => {
+  const db = fresh()
+  // written raw, bypassing writeSettingsTo, exactly as a pre-upgrade install has it on disk
+  db.prepare('INSERT INTO settings (id, json, updated_at) VALUES (1, ?, unixepoch())')
+    .run(JSON.stringify(oldShapeRow()))
+
+  const typed = readSettingsFrom(db)
+  assert.ok(typed, 'the typed read must not fall back to empty settings on an old row')
+  assert.deepEqual(typed.terms, ['vue nuxt developer', 'feed'])
+  assert.deepEqual(typed.background, EMPTY_SETTINGS.background)
+
+  const raw = readSettingsRawFrom(db) as StoredSettings
+  assert.ok(raw.background, 'the raw read feeds the Settings form, which binds to background.*')
+  assert.deepEqual(raw.scope, EMPTY_SETTINGS.scope)
+})
+
+// ---------------- the two completeness tiers ----------------
+
+test('missingForDrafting names evidence, and never repeats a base field', () => {
+  assert.deepEqual(missingFields(complete()), [])
+  assert.equal(missingForDrafting(complete()).length, 1)
+  assert.match(missingForDrafting(complete())[0]!, /background\.evidence/)
+  const withEvidence = { ...complete(), background: { ...complete().background, evidence: 'Ten years of X.' } }
+  assert.deepEqual(missingForDrafting(withEvidence), [])
+})
+
+test('settingsWarnings flags an empty gaps list without ever blocking a run', () => {
+  const w = settingsWarnings(complete())
+  assert.ok(w.some(x => x.includes('background.gaps')))
+  assert.ok(w.some(x => x.includes('scope.roleFamily')))
+  const filled = {
+    ...complete(),
+    scope: { ...complete().scope, roleFamily: 'nursing', primarySkills: ['paediatrics'] },
+    background: { ...complete().background, gaps: ['No ICU experience.'] }
+  }
+  assert.deepEqual(settingsWarnings(filled), [])
+})
+
+// ---------------- merge and seed ----------------
+
+test('mergeEmpty fills scope and background only while they are empty, and never a number', () => {
+  const base = complete()
+  const filled = mergeEmpty(base, {
+    scope: { roleFamily: 'structural engineering', primarySkills: ['ETABS', 'SAP2000'], seniorityFloor: 9 },
+    background: { evidence: 'Nine years designing bridges.', gaps: ['No seismic retrofit work.'] }
+  })
+  assert.equal(filled.scope.roleFamily, 'structural engineering')
+  assert.deepEqual(filled.scope.primarySkills, ['ETABS', 'SAP2000'])
+  assert.equal(filled.background.evidence, 'Nine years designing bridges.')
+  // a model may not set a threshold that silently hides postings
+  assert.equal(filled.scope.seniorityFloor, 0)
+
+  const again = mergeEmpty(filled, { scope: { roleFamily: 'something else' }, background: { evidence: 'rewritten' } })
+  assert.equal(again.scope.roleFamily, 'structural engineering', 'a value already there is never replaced')
+  assert.equal(again.background.evidence, 'Nine years designing bridges.')
+})
+
+test('seedDefaults fills untouched leaves, skips edited ones, and is a no-op on a second run', () => {
+  const current = { ...complete(), scope: { ...complete().scope, roleFamily: 'already chosen' } }
+  const seed = {
+    scope: { roleFamily: 'ignored', primarySkills: ['Vue', 'Nuxt'], seniorityFloor: 5 },
+    background: { evidence: 'The curated evidence.', gaps: ['No cloud or DevOps.'] }
+  }
+  const once = seedDefaults(current, seed)
+  assert.equal(once.scope.roleFamily, 'already chosen', 'an edited leaf is never overwritten')
+  assert.deepEqual(once.scope.primarySkills, ['Vue', 'Nuxt'])
+  // unlike mergeEmpty, a seed is a file you wrote, so it MAY set the threshold
+  assert.equal(once.scope.seniorityFloor, 5)
+  assert.equal(once.background.evidence, 'The curated evidence.')
+  assert.deepEqual(seedDefaults(once, seed), once)
 })

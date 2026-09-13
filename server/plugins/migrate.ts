@@ -3,10 +3,11 @@
 // else in the app assumes these tables exist.
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { importLegacy } from '../../shared/settings.ts'
+import { importLegacy, readSettingsFrom, seedDefaults, writeSettingsTo } from '../../shared/settings.ts'
 import { migrateDb, sqlite } from '../utils/db'
 
 const LEGACY_PATH = resolve(process.cwd(), 'config.json')
+const SEED_PATH = resolve(process.cwd(), 'data/seed-background.json')
 
 /**
  * Settings used to live in a git-tracked config.json, which meant a real phone number and email
@@ -30,6 +31,30 @@ function importLegacyConfig() {
   }
 }
 
+/**
+ * The curated evidence, gaps and scope that used to be hand-written into the drafter's skill file,
+ * carried into the settings row once. Same reasoning as importLegacyConfig above, and the same shape:
+ * read at runtime from a gitignored file so that none of it lands in the source.
+ *
+ * A CLONE HAS NO SUCH FILE and returns on the first line for ever, which is the point — a fresh
+ * install onboards through upload-CV, Prefill and Generate, and ends up with its own evidence rather
+ * than somebody else's. seedDefaults fills only leaves still holding their defaults, so this cannot
+ * overwrite anything edited in Settings and re-running it is a no-op.
+ */
+function importSeedBackground() {
+  if (!existsSync(SEED_PATH)) return
+  try {
+    const current = readSettingsFrom(sqlite)
+    if (!current) return // no row yet: this lands on the boot after the first Save
+    const next = seedDefaults(current, JSON.parse(readFileSync(SEED_PATH, 'utf8')))
+    if (JSON.stringify(next) === JSON.stringify(current)) return // already seeded, or all edited since
+    writeSettingsTo(sqlite, next)
+    console.log('[settings] seeded scope and background from data/seed-background.json')
+  } catch (e) {
+    console.warn(`[settings] could not read the seed file: ${(e as Error).message}`)
+  }
+}
+
 export default defineNitroPlugin(() => {
   try {
     const r = migrateDb()
@@ -39,5 +64,6 @@ export default defineNitroPlugin(() => {
     console.error(`[db] migration failed: ${(e as Error).message}`)
     throw e
   }
-  importLegacyConfig()
+  importLegacyConfig() // may create the row
+  importSeedBackground() // then fills what the skill file used to hold
 })

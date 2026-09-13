@@ -7,7 +7,7 @@
 // Single-post draft requests waiting in the queue are batched into one claude session, because every
 // session pays 3-5 minutes of setup regardless of how many posts it handles.
 import { spawn, type ChildProcess } from 'node:child_process'
-import { readConfig } from './config'
+import { readConfig, readConfigForDraft } from './config'
 import { runDrafter, type DraftPost, type DraftRequest } from './drafter'
 import { isClosed, persist, signature, writeDraftFile } from './drafts'
 import { createDraft, gmailStatus, renderHtml } from './gmail'
@@ -235,7 +235,7 @@ async function runDraftJob(
   push: (line: string) => void,
   signal: AbortSignal
 ): Promise<number> {
-  const config = readConfig()
+  const config = readConfigForDraft()
   const { db, close } = openWritableDb()
   try {
     const rows = args.keys?.length

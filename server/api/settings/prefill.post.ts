@@ -18,7 +18,7 @@ const MODEL = process.env.JOBFINDER_MODEL || 'gpt-5-nano'
 const PREFILL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['profile', 'titles', 'terms'],
+  required: ['profile', 'scope', 'titles', 'terms'],
   properties: {
     profile: {
       type: 'object',
@@ -34,6 +34,16 @@ const PREFILL_SCHEMA = {
         github: { type: 'string' },
         languages: { type: 'string' },
         yearsExperience: { type: 'string' }
+      }
+    },
+    scope: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['roleFamily', 'primarySkills', 'secondarySkills'],
+      properties: {
+        roleFamily: { type: 'string' },
+        primarySkills: { type: 'array', items: { type: 'string' } },
+        secondarySkills: { type: 'array', items: { type: 'string' } }
       }
     },
     titles: { type: 'array', items: { type: 'string' } },
@@ -54,7 +64,18 @@ yearsExperience: a short string such as "10+" or "6", derived from the employmen
 titles: 15-30 job titles this person should be searched against, based on the seniority, stack and
 domain the CV demonstrates. Real job titles as they appear on postings.
 terms: 6-10 LinkedIn search phrases that would surface posts hiring for those titles. Lower case,
-2-4 words each, e.g. "senior frontend engineer", "hiring vue developer".`
+2-4 words each, two examples of the shape wanted: "senior frontend engineer", "hiring vue developer".
+
+scope.roleFamily: the person's field, in two or three words, as someone in it would name it. This may
+be any profession — "frontend engineering", "structural engineering", "paediatric nursing",
+"employment law". Not a job title, and not a seniority.
+scope.primarySkills: 3-8 things this person mostly works with and would be hired for. Whatever the
+field uses — tools, systems, methods, standards, specialisms, languages, procedures.
+scope.secondarySkills: 0-6 things they also work with, but less, or less recently. Empty array if the
+CV shows no such second tier.
+
+Nothing else about scope is yours to fill: which roles are out of scope and what seniority to hold out
+for are decisions this person makes, not facts the document states.`
 
 /**
  * Reads the stored CV and proposes values for the fields that are still blank.
@@ -74,7 +95,12 @@ export default defineEventHandler(async (event) => {
   }
 
   const path = cvPath(config)
-  let proposal: { profile?: Record<string, string>, titles?: string[], terms?: string[] }
+  let proposal: {
+    profile?: Record<string, string>
+    scope?: Record<string, unknown>
+    titles?: string[]
+    terms?: string[]
+  }
   try {
     const r = await new OpenAI().responses.create({
       model: MODEL,
@@ -107,6 +133,9 @@ export default defineEventHandler(async (event) => {
   )
   if (merged.titles.length !== base.titles.length) filled.push('titles')
   if (merged.terms.length !== base.terms.length) filled.push('terms')
+  for (const k of ['roleFamily', 'primarySkills', 'secondarySkills'] as const) {
+    if (JSON.stringify(merged.scope[k]) !== JSON.stringify(base.scope[k])) filled.push(`scope.${k}`)
+  }
 
   console.log(`[settings] prefill filled ${filled.length ? filled.join(', ') : 'nothing — every field was already set'}`)
   return { config: merged, filled }
