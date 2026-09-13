@@ -5,8 +5,12 @@ import { db } from '../utils/db'
 
 const query = z.object({
   q: z.string().trim().max(200).optional(),
-  /** clean = no pre-screen flags; flagged = at least one */
-  flags: z.enum(['all', 'clean', 'flagged']).default('all'),
+  /**
+   * clean = no pre-screen flags; flagged = at least one; excluded = caught by the owner's own
+   * exclude list. `excluded` is the audit view for a blunt tool — it answers "what did my rule
+   * actually catch", which is the only way to notice a needle that is too broad.
+   */
+  flags: z.enum(['all', 'clean', 'flagged', 'excluded']).default('all'),
   /** hiring = real vacancies (NULL counts, it predates the column); other = job seekers and non-jobs */
   type: z.enum(['hiring', 'all', 'other']).default('hiring'),
   scope: z.enum(['all', 'in-scope', 'remote']).default('all'),
@@ -29,6 +33,7 @@ export default defineEventHandler(async (event) => {
     p.type === 'hiring' ? sql`coalesce(${posts.postType}, 'hiring') = 'hiring'` : undefined,
     p.type === 'other' ? sql`${posts.postType} in ('seeking', 'other')` : undefined,
     p.flags === 'flagged' ? sql`json_array_length(${posts.flags}) > 0` : undefined,
+    p.flags === 'excluded' ? sql`EXISTS (SELECT 1 FROM json_each(${posts.flags}) WHERE value = 'excluded')` : undefined,
     p.scope === 'in-scope' ? eq(posts.inScope, true) : undefined,
     p.scope === 'remote' ? eq(posts.remote, true) : undefined,
     p.status === 'unprocessed' ? isNull(applications.key) : undefined,
