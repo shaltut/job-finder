@@ -151,6 +151,16 @@ const yieldColumns: TableColumn<YieldRow>[] = [
               @click="post('/api/run/reflag')"
             />
             <UButton
+              label="Re-extract contacts"
+              icon="i-lucide-link"
+              color="neutral"
+              variant="outline"
+              size="sm"
+              title="Re-read links, numbers and reference ids from stored posts. No API calls."
+              :disabled="!!job.lanes.scrape.current"
+              @click="post('/api/run/reextract')"
+            />
+            <UButton
               label="Rescore all"
               icon="i-lucide-refresh-cw"
               color="neutral"

@@ -51,6 +51,11 @@ export const settingsSchema = z.object({
   titles: z.array(z.string().trim().min(1)),
   max: z.number().int().min(1).max(200),
   since: z.enum(['past-24h', 'past-week', 'past-month']),
+  // Which contact routes admit a post to the database. Email is the only one a draft can reach, so it
+  // is the default and the other two are opt-in — a post kept for its link or its number is one the
+  // owner has to apply to by hand. Not `.min(1)` here on purpose: this schema checks shape only and a
+  // half-filled form must still save (see the note at the top). missingFields() is the run gate.
+  contactChannels: z.array(z.enum(['email', 'link', 'phone'])),
   // What an application email may say. Replaces the hand-written Evidence and Gaps sections that
   // used to live in the drafter skill file, so retargeting this tool stays data entry.
   //
@@ -102,6 +107,7 @@ export const EMPTY_SETTINGS: StoredSettings = {
   titles: [],
   max: 40,
   since: 'past-24h',
+  contactChannels: ['email'],
   background: { strengths: [], evidence: '', gaps: [], neverClaim: [] }
 }
 
@@ -122,6 +128,8 @@ export function missingFields(cfg: StoredSettings): string[] {
   if (!cfg.cv) missing.push('cv')
   if (!cfg.terms.length) missing.push('terms: at least one search term')
   if (!cfg.titles.length) missing.push('titles: at least one target title')
+  // every channel switched off admits nothing, which is a scrape that silently stores no rows
+  if (!cfg.contactChannels.length) missing.push('contactChannels: at least one contact type')
   return missing
 }
 

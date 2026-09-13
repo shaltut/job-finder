@@ -15,7 +15,7 @@ import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 import { sweep } from './sync'
 
 export type Lane = 'scrape' | 'draft'
-export type Kind = 'scrape' | 'rescore' | 'reflag' | 'draft' | 'sync'
+export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync'
 
 export interface JobArgs {
   terms?: string
@@ -62,7 +62,7 @@ const state: RunnerState = g.__jobfinderRunner ??= {
 }
 const { lanes, queue } = state
 
-const laneOf = (kind: Kind): Lane => (kind === 'scrape' || kind === 'rescore' || kind === 'reflag' ? 'scrape' : 'draft')
+const laneOf = (kind: Kind): Lane => (kind === 'scrape' || kind === 'rescore' || kind === 'reflag' || kind === 'reextract' ? 'scrape' : 'draft')
 export const busy = () => !!(lanes.scrape.current || lanes.draft.current)
 
 export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
@@ -98,6 +98,7 @@ function scrapeArgs({ kind, args }: { kind: Kind, args: JobArgs }): [string, str
   const a = ['--env-file-if-exists=.env', 'scraper/run.ts']
   if (kind === 'rescore') a.push('--rescore')
   else if (kind === 'reflag') a.push('--reflag')
+  else if (kind === 'reextract') a.push('--reextract')
   else {
     if (args.terms) a.push('--terms', args.terms)
     if (args.max) a.push('--max', String(args.max))

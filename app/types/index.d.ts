@@ -39,7 +39,7 @@ export interface Stats {
 }
 
 export type Lane = 'scrape' | 'draft'
-export type JobKind = 'scrape' | 'rescore' | 'reflag' | 'draft' | 'sync'
+export type JobKind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync'
 
 export interface JobView {
   id: number

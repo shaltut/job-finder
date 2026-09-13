@@ -15,7 +15,7 @@ import Database from 'better-sqlite3'
 import OpenAI from 'openai'
 import { chromium } from 'playwright-core'
 import {
-  ageOf, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, gateOnPostType, normalize,
+  admits, ageOf, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, gateOnPostType, normalize,
   postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
@@ -29,6 +29,7 @@ const { values: opts } = parseArgs({
     'cv': { type: 'string' },
     'rescore': { type: 'boolean' },
     'reflag': { type: 'boolean' },
+    'reextract': { type: 'boolean' },
     'dry-run': { type: 'boolean' },
     'login': { type: 'boolean' },
     'jitter': { type: 'boolean' }
@@ -281,17 +282,19 @@ async function run({ dry }: { dry: boolean }) {
         const emails = extractEmails(text, c.mailtos)
         const links = extractLinks(text, c.hrefs)
         const phones = extractPhones(text, c.hrefs)
+        const refIds = extractRefIds(text)
+        // Extraction is unconditional and only admission is configured, so a post kept for its email
+        // still records the link and the number it carried. This set is what the row stores.
+        const channels = channelsOf({ emails, links, phones }, text)
         const key = dedupeKey(c.authorUrl, text)
         if (dry) {
           // The dry run is how the admission rules were set, so it reports what the gate would decide
           // and the raw material behind it — deliberately ignoring contactChannels, because a
           // measurement gated by the current settings cannot tell you what to set them to.
-          const would = channelsOf({ emails, links, phones }, text)
-          const refs = extractRefIds(text)
-          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${would.join('+') || 'NO CHANNEL'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refs.join(' ') || '-'} | ${c.postUrl || 'NO URL'} | ${text.replace(/\s+/g, ' ').slice(0, 60)}`)
+          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${channels.join('+') || 'NO CHANNEL'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refIds.join(' ') || '-'} | ${c.postUrl || 'NO URL'} | ${text.replace(/\s+/g, ' ').slice(0, 60)}`)
           continue
         }
-        if (!emails.length) continue
+        if (!admits(channels, CONFIG.contactChannels)) continue
         if (seen.has(key)) {
           // Already stored, so it is deliberately not scored again — but a row from before permalinks
           // existed, or from the feed, may still have no URL. This is the only moment the URL is in hand.
@@ -324,6 +327,10 @@ async function run({ dry }: { dry: boolean }) {
           remote: s.is_remote,
           inScope: s.is_in_scope,
           emails,
+          links,
+          phones,
+          refIds,
+          channels,
           score: s.score,
           reason: s.reason,
           text,
@@ -357,6 +364,32 @@ function reflag() {
   log(`reflagged ${rows.length} posts, ${flagged} carry at least one flag`)
 }
 
+/**
+ * Fill the contact columns on rows stored before they existed. No API calls, no browser.
+ *
+ * This is the only backfill path: a re-scrape skips a post it already knows before it would extract
+ * anything, and the insert's ON CONFLICT DO NOTHING means the row would not be rewritten even if it
+ * did. Mailtos are gone by now — they lived in the DOM, not the row — so emails are re-read from the
+ * text alone and used only to compute the channel set, never to rewrite the stored addresses.
+ */
+function reextract() {
+  const db = new Database(DB_PATH, { readonly: true, fileMustExist: true })
+  const rows = db.prepare('SELECT key, text, emails FROM posts').all() as
+    { key: string, text: string, emails: string }[]
+  db.close()
+  let withLink = 0
+  for (const r of rows) {
+    const links = extractLinks(r.text)
+    const phones = extractPhones(r.text)
+    const emails = JSON.parse(r.emails || '[]') as string[]
+    const channels = channelsOf({ emails, links, phones }, r.text)
+    if (channels.includes('link')) withLink++
+    emit({ op: 'reextract', key: r.key, links, phones, refIds: extractRefIds(r.text), channels })
+  }
+  emit({ op: 'done', added: 0 })
+  log(`re-extracted ${rows.length} posts, ${withLink} offer a link worth applying through`)
+}
+
 /** Rescore every stored post against the current CV and prompt. */
 async function rescore() {
   if (!CV_PATH) throw new Error('no CV configured — upload one in Settings')
@@ -388,6 +421,7 @@ try {
   if (opts.login) await login()
   else if (opts.rescore) await rescore()
   else if (opts.reflag) reflag()
+  else if (opts.reextract) reextract()
   else await run({ dry: !!opts['dry-run'] })
 } catch (e) {
   const err = e as Error & { code?: number }

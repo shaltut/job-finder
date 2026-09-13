@@ -383,3 +383,39 @@ test('seedDefaults fills untouched leaves, skips edited ones, and is a no-op on 
   assert.equal(once.background.evidence, 'The curated evidence.')
   assert.deepEqual(seedDefaults(once, seed), once)
 })
+
+// ---------------- contact channels ----------------
+
+test('a settings row written before contactChannels existed reads as email-only', () => {
+  // the live install's row is exactly this shape, and the default has to be the behaviour it already
+  // had: widening what a scrape stores is a choice somebody makes, never one a migration makes for them
+  const legacy = emptySettings() as Record<string, unknown>
+  delete legacy.contactChannels
+
+  const upgraded = upgradeSettings(legacy) as StoredSettings
+  assert.deepEqual(upgraded.contactChannels, ['email'])
+})
+
+test('the upgrade puts contactChannels in the key order the Settings form expects', () => {
+  // the page's dirty check is a JSON.stringify comparison, so a key arriving in a different position
+  // than EMPTY_SETTINGS defines would leave the form permanently dirty
+  const legacy = emptySettings() as Record<string, unknown>
+  delete legacy.contactChannels
+
+  assert.deepEqual(
+    Object.keys(upgradeSettings(legacy) as object),
+    Object.keys(EMPTY_SETTINGS)
+  )
+})
+
+test('an empty contact-channel set saves but refuses to run', () => {
+  // the two-schema split: shape-only validation lets a half-filled form save, missingFields() is the gate
+  const cfg = { ...emptySettings(), contactChannels: [] }
+  assert.doesNotThrow(() => settingsSchema.parse(cfg))
+  assert.ok(missingFields(cfg as StoredSettings).some(m => m.startsWith('contactChannels')))
+})
+
+test('a contact channel that is not one of the three is rejected outright', () => {
+  const cfg = { ...emptySettings(), contactChannels: ['email', 'carrier-pigeon'] }
+  assert.equal(settingsSchema.safeParse(cfg).success, false)
+})
