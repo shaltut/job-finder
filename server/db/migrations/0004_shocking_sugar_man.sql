@@ -1,0 +1,1 @@
+ALTER TABLE `posts` ADD `dismissed_at` integer;

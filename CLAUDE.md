@@ -69,7 +69,7 @@ npm run dev ──► http://127.0.0.1:3939
 
 ```bash
 npm run dev                                  # http://127.0.0.1:3939 (port pinned, see gotchas)
-npm test                                     # helpers, settings, ingest, drafter, background, stages, MIME, invariants, identity
+npm test                                     # helpers, settings, ingest, dismiss, drafter, background, stages, MIME, invariants, identity
 npm run lint / npm run typecheck
 npm run login                                # one-time LinkedIn login into ./profile (redo when runs exit 2)
 npm run dry -- --terms "vue nuxt developer" --max 10   # prints cards, stores nothing, no OpenAI call
@@ -121,6 +121,17 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   must fire on exactly the three seeker rows of **`backups/pre-wipe-2026-09-13.db`** and nothing else — the
   live database was wiped and re-scraped, so it no longer contains that corpus (measured: 3 hits in the
   backup, 0 live).
+- **`posts.dismissed_at`** — the owner's own triage from the Posts view, written by
+  `POST /api/posts/dismiss` (the one endpoint that writes a post row) through `setDismissed()` in
+  `server/utils/ingest.ts`. NULL means live. It is **orthogonal to `applications`**, not a third verdict:
+  a drafted post can be dismissed too, and un-dismissing is the same call with `dismissed: false`.
+  Three queries carry `dismissed_at IS NULL` and an invariant test says they must — the drafter queue and
+  its single-key sibling in `server/utils/jobs.ts`, and the follow-up sweep in `server/utils/sync.ts`,
+  which finds unmentioned roles by the *absence* of a `named in ...` row and would otherwise treat every
+  dismissed post as fair game. `usable` and `unprocessed` exclude them; `total` and `last24h` do not,
+  because those measure the scrape rather than the triage. A dismissal survives a re-scrape only because
+  the insert is `ON CONFLICT (key) DO NOTHING` and the `--rescore` / `--reflag` updates name their columns
+  explicitly — `test/dismiss.test.ts` pins all three.
 - **`applications`** — one row per post touched. `verdict` drafted|skipped. Reasons for drafted posts **must**
   start with `named in application` / `named in follow-up`; the follow-up query relies on that prefix.
 - **`settings`** — exactly one row (`id = 1`), holding the whole config as JSON. One column rather than
@@ -351,7 +362,8 @@ back on a different host, port and path — which Google accepts.
 - **The Google round trip is authorised but has not yet created a real draft.** Consent and token exchange
   have run against Google; refresh, real draft creation with the CV attached, and a real sweep are written
   and unit tested but still unexercised end to end. The first drafted post is the test.
-- The **Usable** KPI counts `score >= 6 AND post_type is hiring AND no flags AND (in_scope OR remote)`, so a
+- The **Usable** KPI counts `score >= 6 AND post_type is hiring AND no flags AND not dismissed AND
+  (in_scope OR remote)`, so a
   strong role whose post never states a location is missing from the headline number. It still appears in the
   Posts list, and the **drafter queue deliberately omits the `(in_scope OR remote)` half** — the scorer leaves
   `location` unknown often enough that adding it would have excluded the one post that was legitimately

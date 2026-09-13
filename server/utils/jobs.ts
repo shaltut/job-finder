@@ -239,8 +239,11 @@ async function runDraftJob(
   const { db, close } = openWritableDb()
   try {
     const rows = args.keys?.length
+      // dismissed_at here too, not just in the batch query below: the Posts view hides the Draft button on
+      // a dismissed row, but a tab left open before the dismissal must not be able to email about it.
       ? db.prepare(
-          `SELECT p.* FROM posts p WHERE p.key IN (${args.keys.map(() => '?').join(',')})`
+          `SELECT p.* FROM posts p
+           WHERE p.key IN (${args.keys.map(() => '?').join(',')}) AND p.dismissed_at IS NULL`
         ).all(...args.keys)
       // Flags and score exclude here rather than merely sorting last: this query decides who receives an
       // email from a real person's account. It is the 'usable' KPI minus its `(in_scope OR remote)` half —
@@ -254,6 +257,7 @@ async function runDraftJob(
             AND coalesce(p.post_type, 'hiring') = 'hiring'
             AND json_array_length(p.flags) = 0
             AND p.score >= 6
+            AND p.dismissed_at IS NULL
           ORDER BY p.score DESC, p.posted_at DESC
           LIMIT ?
         `).all(args.n ?? 10)

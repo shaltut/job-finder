@@ -45,7 +45,15 @@ export const posts = sqliteTable('posts', {
   reason: text('reason'),
   text: text('text').notNull(),
   /** Regex pre-screen hints mirroring the drafter's hard skips. */
-  flags: text('flags', { mode: 'json' }).$type<string[]>().notNull().default(sql`('[]')`)
+  flags: text('flags', { mode: 'json' }).$type<string[]>().notNull().default(sql`('[]')`),
+  /**
+   * When the owner dismissed this post from the Posts view; NULL means it is still live. Triage, not a
+   * verdict: it is orthogonal to `applications`, so a post that already has a draft can be dismissed too.
+   * Every query that decides who receives an email carries `dismissed_at IS NULL` — the drafter queue and
+   * the follow-up sweep — and the insert's `ON CONFLICT DO NOTHING` is what makes a dismissal survive a
+   * re-scrape.
+   */
+  dismissedAt: integer('dismissed_at', { mode: 'timestamp' })
 }, t => [
   index('posts_score_idx').on(t.score),
   index('posts_posted_at_idx').on(t.postedAt),

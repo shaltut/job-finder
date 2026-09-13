@@ -7,9 +7,11 @@ useHead({ title: 'Posts' })
 
 const UBadge = resolveComponent('UBadge')
 const UButton = resolveComponent('UButton')
+const UCheckbox = resolveComponent('UCheckbox')
 
 const toast = useToast()
 const queued = ref<Set<string>>(new Set())
+const busy = ref(false)
 
 async function draft(key: string) {
   queued.value = new Set([...queued.value, key])
@@ -30,7 +32,7 @@ const q = ref('')
 const flags = ref<'all' | 'clean' | 'flagged'>('clean')
 const type = ref<'hiring' | 'all' | 'other'>('hiring')
 const scope = ref<'all' | 'in-scope' | 'remote'>('all')
-const status = ref<'all' | 'unprocessed' | 'drafted' | 'skipped'>('unprocessed')
+const status = ref<'all' | 'unprocessed' | 'drafted' | 'skipped' | 'dismissed'>('unprocessed')
 const minScore = ref(0)
 
 // Seekers carry the `seeking-work` flag, so asking for non-hiring posts under the default 'Unflagged'
@@ -40,6 +42,7 @@ watch(type, (t) => {
 })
 
 const expanded = ref<Record<string, boolean>>({})
+const rowSelection = ref<Record<string, boolean>>({})
 
 const { data, status: reqStatus, refresh } = await useFetch<{ rows: PostRow[], total: number }>('/api/posts', {
   query: { q, flags, scope, status, minScore, type },
@@ -47,7 +50,64 @@ const { data, status: reqStatus, refresh } = await useFetch<{ rows: PostRow[], t
   default: () => ({ rows: [], total: 0 })
 })
 
+// Pressing Draft disables the button so a double click cannot open two sessions; fresh rows are the
+// signal it can be re-enabled. Safe either way — enqueue() treats a second request for a key that is
+// already queued or running as a no-op, so this never needs "hardening" into something stickier.
+watch(data, () => {
+  queued.value = new Set()
+})
+
+// Selection is TanStack state keyed by post key (see :get-row-id), and it keeps the keys of rows that
+// have since dropped out of `data` — a filter change would otherwise leave a bulk Dismiss pointed at
+// posts nobody can see. Intersecting with the rows on screen is what makes "N selected" honest; the
+// watch below is the second line of defence.
+const selectedKeys = computed(() => data.value.rows.filter(r => rowSelection.value[r.key]).map(r => r.key))
+
+watch([q, flags, type, scope, status, minScore], () => {
+  rowSelection.value = {}
+})
+
+/** Dismiss posts, or restore them — the same endpoint both ways, which is what makes Undo free. */
+async function setDismissed(keys: string[], dismissed: boolean, undoable = true) {
+  if (!keys.length || busy.value) return
+  busy.value = true
+  try {
+    await $fetch('/api/posts/dismiss', { method: 'POST', body: { keys, dismissed } })
+    rowSelection.value = {}
+    await Promise.all([refresh(), refreshNuxtData('stats')])
+    toast.add({
+      title: `${dismissed ? 'Dismissed' : 'Restored'} ${keys.length} post${keys.length > 1 ? 's' : ''}`,
+      icon: dismissed ? 'i-lucide-eye-off' : 'i-lucide-undo-2',
+      actions: undoable
+        ? [{
+            label: 'Undo',
+            color: 'neutral' as const,
+            variant: 'outline' as const,
+            onClick: () => setDismissed(keys, !dismissed, false)
+          }]
+        : undefined
+    })
+  } catch (e) {
+    toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
+  } finally {
+    busy.value = false
+  }
+}
+
 const columns: TableColumn<PostRow>[] = [
+  {
+    id: 'select',
+    header: ({ table }) => h(UCheckbox, {
+      'modelValue': table.getIsSomePageRowsSelected() ? 'indeterminate' : table.getIsAllPageRowsSelected(),
+      'onUpdate:modelValue': (v: boolean | 'indeterminate') => table.toggleAllPageRowsSelected(!!v),
+      'aria-label': 'Select all'
+    }),
+    cell: ({ row }) => h(UCheckbox, {
+      'modelValue': row.getIsSelected(),
+      'onUpdate:modelValue': (v: boolean | 'indeterminate') => row.toggleSelected(!!v),
+      'aria-label': 'Select row'
+    })
+  },
   {
     accessorKey: 'score',
     header: 'Score',
@@ -106,36 +166,65 @@ const columns: TableColumn<PostRow>[] = [
   {
     accessorKey: 'verdict',
     header: 'Status',
-    cell: ({ row }) => row.original.verdict
-      ? h(UBadge, {
-          variant: 'subtle',
-          color: row.original.verdict === 'drafted' ? 'primary' : 'neutral'
-        }, () => row.original.verdict)
-      : h('span', { class: 'text-xs text-muted' }, 'unprocessed')
+    // the owner's own triage outranks the drafter's verdict: a drafted post can be dismissed too
+    cell: ({ row }) => row.original.dismissedAt
+      ? h(UBadge, { variant: 'subtle', color: 'neutral' }, () => 'dismissed')
+      : row.original.verdict
+        ? h(UBadge, {
+            variant: 'subtle',
+            color: row.original.verdict === 'drafted' ? 'primary' : 'neutral'
+          }, () => row.original.verdict)
+        : h('span', { class: 'text-xs text-muted' }, 'unprocessed')
   },
   {
     id: 'actions',
-    cell: ({ row }) => h('div', { class: 'flex items-center justify-end gap-1' }, [
-      // no second email to a recruiter already handled, and nothing to draft without an address
-      row.original.verdict || !row.original.emails.length
-        ? null
-        : h(UButton, {
-            label: 'Draft',
-            icon: 'i-lucide-pen-line',
-            size: 'xs',
-            color: 'neutral',
-            variant: 'outline',
-            disabled: queued.value.has(row.original.key),
-            onClick: () => draft(row.original.key)
-          }),
-      h(UButton, {
-        icon: row.getIsExpanded() ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down',
-        color: 'neutral',
-        variant: 'ghost',
-        size: 'sm',
-        onClick: () => row.toggleExpanded()
-      })
-    ].filter(Boolean))
+    cell: ({ row }) => {
+      const r = row.original
+      return h('div', { class: 'flex items-center justify-end gap-1' }, [
+        r.dismissedAt
+          ? h(UButton, {
+              label: 'Restore',
+              icon: 'i-lucide-undo-2',
+              size: 'xs',
+              color: 'neutral',
+              variant: 'outline',
+              disabled: busy.value,
+              onClick: () => setDismissed([r.key], false)
+            })
+          : null,
+        // no second email to a recruiter already handled, and nothing to draft without an address
+        r.dismissedAt || r.verdict || !r.emails.length
+          ? null
+          : h(UButton, {
+              label: 'Draft',
+              icon: 'i-lucide-pen-line',
+              size: 'xs',
+              color: 'neutral',
+              variant: 'outline',
+              disabled: queued.value.has(r.key),
+              onClick: () => draft(r.key)
+            }),
+        r.dismissedAt
+          ? null
+          : h(UButton, {
+              'icon': 'i-lucide-eye-off',
+              'color': 'neutral',
+              'variant': 'ghost',
+              'size': 'sm',
+              'title': 'Dismiss',
+              'aria-label': 'Dismiss',
+              'disabled': busy.value,
+              'onClick': () => setDismissed([r.key], true)
+            }),
+        h(UButton, {
+          icon: row.getIsExpanded() ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down',
+          color: 'neutral',
+          variant: 'ghost',
+          size: 'sm',
+          onClick: () => row.toggleExpanded()
+        })
+      ].filter(Boolean))
+    }
   }
 ]
 </script>
@@ -173,9 +262,10 @@ const columns: TableColumn<PostRow>[] = [
           v-model="status"
           :items="[
             { label: 'Unprocessed', value: 'unprocessed' },
-            { label: 'All', value: 'all' },
+            { label: 'All active', value: 'all' },
             { label: 'Drafted', value: 'drafted' },
-            { label: 'Skipped', value: 'skipped' }
+            { label: 'Skipped', value: 'skipped' },
+            { label: 'Dismissed', value: 'dismissed' }
           ]"
           class="min-w-36"
         />
@@ -215,13 +305,40 @@ const columns: TableColumn<PostRow>[] = [
           ]"
           class="min-w-32"
         />
-        <span class="ml-auto text-sm text-muted">{{ data.total }} posts</span>
+        <div class="ml-auto flex items-center gap-1.5">
+          <template v-if="selectedKeys.length">
+            <span class="text-sm text-muted">{{ selectedKeys.length }} selected</span>
+            <UButton
+              v-if="status === 'dismissed'"
+              label="Restore"
+              icon="i-lucide-undo-2"
+              size="xs"
+              color="neutral"
+              variant="outline"
+              :loading="busy"
+              @click="setDismissed(selectedKeys, false)"
+            />
+            <UButton
+              v-else
+              label="Dismiss"
+              icon="i-lucide-eye-off"
+              size="xs"
+              color="neutral"
+              variant="outline"
+              :loading="busy"
+              @click="setDismissed(selectedKeys, true)"
+            />
+          </template>
+          <span class="text-sm text-muted">{{ data.total }} posts</span>
+        </div>
       </div>
 
       <UTable
         v-model:expanded="expanded"
+        v-model:row-selection="rowSelection"
         :data="data.rows"
         :columns="columns"
+        :get-row-id="(row: PostRow) => row.key"
         :loading="reqStatus === 'pending'"
         class="shrink-0"
         :ui="{

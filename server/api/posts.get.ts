@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, like, or, sql } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, like, or, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { applications, posts } from '../db/schema'
 import { db } from '../utils/db'
@@ -10,7 +10,8 @@ const query = z.object({
   /** hiring = real vacancies (NULL counts, it predates the column); other = job seekers and non-jobs */
   type: z.enum(['hiring', 'all', 'other']).default('hiring'),
   scope: z.enum(['all', 'in-scope', 'remote']).default('all'),
-  status: z.enum(['all', 'unprocessed', 'drafted', 'skipped']).default('all'),
+  /** 'dismissed' is the only value that shows dismissed posts; every other one hides them. */
+  status: z.enum(['all', 'unprocessed', 'drafted', 'skipped', 'dismissed']).default('all'),
   minScore: z.coerce.number().int().min(0).max(10).default(0),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0)
@@ -30,6 +31,8 @@ export default defineEventHandler(async (event) => {
     p.status === 'unprocessed' ? isNull(applications.key) : undefined,
     p.status === 'drafted' ? eq(applications.verdict, 'drafted') : undefined,
     p.status === 'skipped' ? eq(applications.verdict, 'skipped') : undefined,
+    // Dismissed posts are out of every other view, 'all' included — 'all' means every live post.
+    p.status === 'dismissed' ? isNotNull(posts.dismissedAt) : isNull(posts.dismissedAt),
     p.q
       ? or(
           like(posts.title, `%${p.q}%`),
@@ -61,6 +64,7 @@ export default defineEventHandler(async (event) => {
       reason: posts.reason,
       text: posts.text,
       flags: posts.flags,
+      dismissedAt: posts.dismissedAt,
       verdict: applications.verdict,
       verdictReason: applications.reason
     })

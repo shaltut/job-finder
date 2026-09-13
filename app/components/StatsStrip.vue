@@ -2,7 +2,9 @@
 import type { Stats } from '~/types'
 
 const empty: Stats = { total: 0, usable: 0, unprocessed: 0, last24h: 0, drafted: 0, lastScrapeAt: null }
-const { data } = await useFetch<Stats>('/api/stats', { lazy: true, default: () => empty })
+// Named, so a page that changes the numbers — dismissing a post from the Posts view — can refresh them
+// with refreshNuxtData('stats') without this component having to expose anything.
+const { data } = await useFetch<Stats>('/api/stats', { key: 'stats', lazy: true, default: () => empty })
 
 const lastScrape = computed(() => {
   const at = data.value.lastScrapeAt

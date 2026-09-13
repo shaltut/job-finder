@@ -23,6 +23,8 @@ export interface PostRow {
   reason: string | null
   text: string
   flags: string[]
+  /** ISO timestamp when the owner dismissed this post; null means it is still live. */
+  dismissedAt: string | null
   verdict: Verdict | null
   verdictReason: string | null
 }

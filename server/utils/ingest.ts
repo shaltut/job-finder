@@ -119,3 +119,19 @@ export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' |
 
   return null // 'done' carries a count for the caller to report, not a row
 }
+
+/**
+ * Dismisses (or restores) posts from the Posts view — the owner's triage, not the drafter's verdict.
+ * Takes a handle rather than reaching for the singleton, the way applyRecord does: server/utils/db.ts
+ * opens the real database at module import, so a test that went through the endpoint would edit live
+ * data. It lives here because the ingest paths above are exactly what it has to survive — the insert's
+ * ON CONFLICT DO NOTHING and the narrow UPDATE column lists are why a re-scrape or a --rescore leaves
+ * dismissed_at alone. Returns the number of rows changed.
+ */
+export function setDismissed(db: Database.Database, keys: string[], dismissed: boolean): number {
+  if (!keys.length) return 0
+  const at = dismissed ? Math.floor(Date.now() / 1000) : null // seconds, the unit secs() writes
+  return db.prepare(
+    `UPDATE posts SET dismissed_at = ? WHERE key IN (${keys.map(() => '?').join(',')})`
+  ).run(at, ...keys).changes
+}

@@ -82,6 +82,23 @@ test('a skip can never downgrade a post an email already names', () => {
   )
 })
 
+test('a dismissed post is out of every query that decides who receives an email', () => {
+  // Dismissal is the owner saying "not this one". Both selection sites must carry the clause: the
+  // drafter queue, and the follow-up sweep, which finds unmentioned roles by the absence of a
+  // `named in ...` row and would therefore treat every dismissed post as fair game.
+  for (const file of ['server/utils/jobs.ts', 'server/utils/sync.ts']) {
+    assert.match(
+      readFileSync(file, 'utf8'),
+      /dismissed_at IS NULL/,
+      `${file} must exclude dismissed posts from the queries that email people`
+    )
+  }
+  // ...including the single-post path, which a stale browser tab can still reach after a dismissal
+  const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
+  const byKey = jobs.slice(jobs.indexOf('WHERE p.key IN'))
+  assert.match(byKey.slice(0, 200), /dismissed_at IS NULL/, 'the single-key draft path must check it too')
+})
+
 test('the OAuth callback checks the state nonce BEFORE exchanging the code', () => {
   // Google's redirect into the callback is a cross-site GET that no Origin/Sec-Fetch guard can cover.
   // Without this, any page open in the browser could hand us its own code. Ported from upstream e8be7b6.

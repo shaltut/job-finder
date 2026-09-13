@@ -117,7 +117,8 @@ export async function sweep(
 
 /**
  * The follow-up names every post from this address that no sent email has mentioned yet — that is what the
- * `named in ...` prefix on `applications.reason` is for.
+ * `named in ...` prefix on `applications.reason` is for. A dismissed post has no such row, so without the
+ * `dismissed_at IS NULL` clause the sweep would offer up exactly the roles the owner threw away.
  */
 async function draftFollowUp(db: Database.Database, config: AppConfig, email: string, onLog: (s: string) => void) {
   const rows = db.prepare(`
@@ -125,6 +126,7 @@ async function draftFollowUp(db: Database.Database, config: AppConfig, email: st
     WHERE EXISTS (SELECT 1 FROM json_each(p.emails) WHERE value = ?)
       AND coalesce(p.post_type, 'hiring') = 'hiring'
       AND (a.key IS NULL OR a.reason NOT LIKE 'named in %')
+      AND p.dismissed_at IS NULL
   `).all(email) as Record<string, unknown>[]
 
   const posts: DraftPost[] = rows.map(r => ({

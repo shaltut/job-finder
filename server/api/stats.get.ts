@@ -12,15 +12,19 @@ export default defineEventHandler(async () => {
     scrapedAt: number | null
   }>(sql`
     SELECT
+      -- total and last24h count what the scraper brought in, dismissals included: they measure the
+      -- scrape, not the triage. Only the two actionable numbers below drop a dismissed post.
       (SELECT count(*) FROM posts) AS total,
       -- 'usable' is the funnel that matters: someone is actually hiring, it scores well, no pre-screen
-      -- flag, and somewhere he can work. coalesce: NULL post_type predates the column, so it counts.
+      -- flag, and somewhere the owner can work. coalesce: NULL post_type predates the column, so it
+      -- counts. dismissed_at: a headline number that disagrees with the list underneath it is noise.
       (SELECT count(*) FROM posts
         WHERE score >= 6 AND coalesce(post_type, 'hiring') = 'hiring'
-          AND json_array_length(flags) = 0 AND (in_scope = 1 OR remote = 1)) AS usable,
+          AND json_array_length(flags) = 0 AND (in_scope = 1 OR remote = 1)
+          AND dismissed_at IS NULL) AS usable,
       (SELECT count(*) FROM posts p LEFT JOIN applications a ON a.key = p.key
         WHERE a.key IS NULL AND coalesce(p.post_type, 'hiring') = 'hiring'
-          AND json_array_length(p.flags) = 0) AS unprocessed,
+          AND json_array_length(p.flags) = 0 AND p.dismissed_at IS NULL) AS unprocessed,
       (SELECT count(*) FROM posts WHERE scraped_at >= unixepoch() - 86400) AS last24h,
       (SELECT count(*) FROM applications WHERE verdict = 'drafted') AS drafted,
       (SELECT max(scraped_at) FROM posts) AS scrapedAt
