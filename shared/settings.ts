@@ -57,6 +57,13 @@ export const settingsSchema = z.object({
   cv: z.string().trim(),
   terms: z.array(z.string().trim().min(1)),
   titles: z.array(z.string().trim().min(1)),
+  // Words, names or domains that disqualify a post outright, matched against the whole post text.
+  // Deterministic, unlike scope.excludedRoles, which is prose the scoring model is merely asked to
+  // honour. Each entry becomes one alternative of the `excluded` flag rule in scraper/lib.ts.
+  //
+  // min(2) is a guard, not a style rule: a one-character entry like "." matches every post ever
+  // scraped, and a flag removes a post from the drafter queue outright.
+  excludes: z.array(z.string().trim().min(2).max(80)).max(100),
   max: z.number().int().min(1).max(200),
   since: z.enum(['past-24h', 'past-week', 'past-month']),
   // Which contact routes admit a post to the database. Email is the only one a draft can reach, so it
@@ -113,6 +120,7 @@ export const EMPTY_SETTINGS: StoredSettings = {
   cv: '',
   terms: [],
   titles: [],
+  excludes: [],
   max: 40,
   since: 'past-24h',
   contactChannels: ['email'],
@@ -247,7 +255,19 @@ export function parseSettings(input: unknown): StoredSettings {
   parsed.constraints.onsiteCountries = normalizeCountries(parsed.constraints.onsiteCountries)
   parsed.constraints.willRelocate = normalizeCountries(parsed.constraints.willRelocate)
   parsed.contactChannels = CONTACT_CHANNELS.filter(c => parsed.contactChannels.includes(c))
+  parsed.excludes = dedupeFold(parsed.excludes)
   return parsed
+}
+
+/**
+ * Case-insensitive dedupe keeping the first spelling and the entry order. The match itself is
+ * case-insensitive, so `micro1.ai` and `Micro1.AI` are one rule; storing both would show the owner a
+ * list longer than the number of things it excludes. Order is preserved rather than sorted so the
+ * Settings list stays where the owner put it — the dirty check compares stringified arrays.
+ */
+const dedupeFold = (list: string[]): string[] => {
+  const seen = new Set<string>()
+  return list.filter(v => !seen.has(v.toLowerCase()) && seen.add(v.toLowerCase()))
 }
 
 // ---------------- storage ----------------

@@ -307,6 +307,26 @@ test('upgradeSettings fills a row written before scope and background existed, a
   assert.deepEqual(upgradeSettings(up), up)
 })
 
+test('a row stored before excludes existed gets the key, empty', () => {
+  // The exclude list is a flag rule: an install that upgraded into a NON-empty default would start
+  // hiding posts nobody asked it to hide. Empty is the only safe fill.
+  const up = upgradeSettings(oldShapeRow()) as StoredSettings
+  assert.deepEqual(up.excludes, [])
+  assert.equal(Object.keys(up).indexOf('excludes'), Object.keys(EMPTY_SETTINGS).indexOf('excludes'))
+})
+
+test('excludes are deduped case-insensitively, keeping the first spelling and the order', () => {
+  // The match itself folds case, so storing both spellings would show a list longer than the number
+  // of things it actually excludes.
+  const cfg = parseSettings({ ...complete(), excludes: ['micro1.ai', 'Acme', 'MICRO1.AI', 'acme'] })
+  assert.deepEqual(cfg.excludes, ['micro1.ai', 'Acme'])
+})
+
+test('a one-character exclude is refused: it would match every post ever scraped', () => {
+  assert.throws(() => parseSettings({ ...complete(), excludes: ['.'] }))
+  assert.doesNotThrow(() => parseSettings({ ...complete(), excludes: ['ai'] }))
+})
+
 test('upgradeSettings fixes shape but never format: a bad stored value is still shown to you', () => {
   const up = upgradeSettings({ ...oldShapeRow(), profile: { ...oldShapeRow().profile, email: 'not-an-email' } }) as StoredSettings
   assert.equal(up.profile.email, 'not-an-email')
