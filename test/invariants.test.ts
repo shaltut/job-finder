@@ -82,21 +82,65 @@ test('a skip can never downgrade a post an email already names', () => {
   )
 })
 
-test('a dismissed post is out of every query that decides who receives an email', () => {
-  // Dismissal is the owner saying "not this one". Both selection sites must carry the clause: the
-  // drafter queue, and the follow-up sweep, which finds unmentioned roles by the absence of a
-  // `named in ...` row and would therefore treat every dismissed post as fair game.
-  for (const file of ['server/utils/jobs.ts', 'server/utils/sync.ts']) {
-    assert.match(
-      readFileSync(file, 'utf8'),
-      /dismissed_at IS NULL/,
-      `${file} must exclude dismissed posts from the queries that email people`
-    )
-  }
-  // ...including the single-post path, which a stale browser tab can still reach after a dismissal
+/**
+ * The three queries that decide who receives an email, each sliced out on its own.
+ *
+ * Scoped rather than matched over whole files, because a file-wide regex is satisfied by ANY one of
+ * them keeping the clause: dropping it from the batch queue alone used to leave this suite green.
+ */
+function emailingQueries(): Record<string, string> {
   const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
-  const byKey = jobs.slice(jobs.indexOf('WHERE p.key IN'))
-  assert.match(byKey.slice(0, 200), /dismissed_at IS NULL/, 'the single-key draft path must check it too')
+  const sync = readFileSync('server/utils/sync.ts', 'utf8')
+  return {
+    'the batch drafter queue': jobs.slice(jobs.indexOf('LEFT JOIN applications a ON a.key = p.key'), jobs.indexOf('ORDER BY p.score DESC')),
+    'the single-key draft path': jobs.slice(jobs.indexOf('WHERE p.key IN'), jobs.indexOf('.all(...args.keys)')),
+    'the follow-up sweep': sync.slice(sync.indexOf('SELECT p.* FROM posts p'), sync.indexOf('`).all(email)'))
+  }
+}
+
+test('a dismissed post is out of every query that decides who receives an email', () => {
+  // Dismissal is the owner saying "not this one". Every selection site must carry the clause — the
+  // follow-up sweep included, since it finds unmentioned roles by the absence of a `named in ...` row
+  // and would otherwise treat every dismissed post as fair game.
+  for (const [what, sql] of Object.entries(emailingQueries())) {
+    assert.match(sql, /dismissed_at IS NULL/, `${what} must exclude dismissed posts`)
+  }
+})
+
+test('a post the owner applied to by hand is out of those same queries', () => {
+  // The mirror of the dismissal rule, and it fails louder: the owner has already written to this
+  // company through the post's own link, so a draft here is a second approach about one role.
+  for (const [what, sql] of Object.entries(emailingQueries())) {
+    assert.match(sql, /applied_at IS NULL/, `${what} must exclude posts the owner already applied to`)
+  }
+})
+
+test('the drafter queue still requires an email address', () => {
+  // This guard used to be free: the scraper stored a post only if its text carried an address, so
+  // every row satisfied it. Now that a post can be admitted on its link or its phone number alone, it
+  // is the only thing standing between a link-only post and the contacts upsert, whose `email` column
+  // is NOT NULL with a lower-case CHECK. Losing it is an exception thrown mid-draft, or worse a row
+  // keyed on an empty string.
+  const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
+  const queue = jobs.slice(jobs.indexOf('LEFT JOIN applications a ON a.key = p.key'))
+  assert.match(
+    queue.slice(0, 900),
+    /json_array_length\(p\.emails\) > 0/,
+    'the drafter queue must keep its emails guard'
+  )
+})
+
+test('the manual-apply column is a post column, not an applications verdict', () => {
+  // A third verdict would be read by the follow-up sweep, which finds unmentioned roles by the ABSENCE
+  // of a `named in ...` reason — so a manual row would look like a role still owed an email. The
+  // Verdict union is the cheapest place to catch someone reaching for that shape again.
+  const types = readFileSync('app/types/index.d.ts', 'utf8')
+  const verdict = /export type Verdict = ([^\n]+)/.exec(types)?.[1] ?? ''
+  assert.ok(verdict.includes("'drafted'") && verdict.includes("'skipped'"), 'the two real verdicts stay')
+  assert.ok(
+    !/manual|applied/i.test(verdict),
+    'a manual application is posts.applied_at, never an applications verdict'
+  )
 })
 
 test('the OAuth callback checks the state nonce BEFORE exchanging the code', () => {

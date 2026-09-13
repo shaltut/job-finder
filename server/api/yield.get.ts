@@ -10,8 +10,10 @@ export default defineEventHandler(async () => {
     SELECT
       coalesce(p.search_term, 'unknown') AS term,
       count(*)                            AS posts,
-      -- same 'usable' predicate as the KPI strip, dismissals included: a term whose posts keep getting
-      -- thrown away is exactly the term this table exists to catch.
+      -- The KPI strip's 'usable' predicate, minus its applied_at clause, and the difference is the point:
+      -- this column rates the TERM, not the inbox. A dismissal is the owner saying a post was not worth
+      -- having, so it counts against the term that found it; an application is the owner saying it was,
+      -- so dropping those here would make the best term in the table look like the worst.
       count(*) FILTER (WHERE p.score >= 6
         AND coalesce(p.post_type, 'hiring') = 'hiring'
         AND json_array_length(p.flags) = 0

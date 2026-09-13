@@ -118,7 +118,9 @@ export async function sweep(
 /**
  * The follow-up names every post from this address that no sent email has mentioned yet — that is what the
  * `named in ...` prefix on `applications.reason` is for. A dismissed post has no such row, so without the
- * `dismissed_at IS NULL` clause the sweep would offer up exactly the roles the owner threw away.
+ * `dismissed_at IS NULL` clause the sweep would offer up exactly the roles the owner threw away — and
+ * `applied_at IS NULL` for the mirror case: a role the owner already applied to through its own link has
+ * no `named in ...` row either, and pitching it again would contradict an application already sent.
  */
 async function draftFollowUp(db: Database.Database, config: AppConfig, email: string, onLog: (s: string) => void) {
   const rows = db.prepare(`
@@ -127,6 +129,7 @@ async function draftFollowUp(db: Database.Database, config: AppConfig, email: st
       AND coalesce(p.post_type, 'hiring') = 'hiring'
       AND (a.key IS NULL OR a.reason NOT LIKE 'named in %')
       AND p.dismissed_at IS NULL
+      AND p.applied_at IS NULL
   `).all(email) as Record<string, unknown>[]
 
   const posts: DraftPost[] = rows.map(r => ({

@@ -240,11 +240,12 @@ async function runDraftJob(
   const { db, close } = openWritableDb()
   try {
     const rows = args.keys?.length
-      // dismissed_at here too, not just in the batch query below: the Posts view hides the Draft button on
-      // a dismissed row, but a tab left open before the dismissal must not be able to email about it.
+      // dismissed_at and applied_at here too, not just in the batch query below: the Posts view hides the
+      // Draft button on both, but a tab left open beforehand must not be able to email about them.
       ? db.prepare(
           `SELECT p.* FROM posts p
-           WHERE p.key IN (${args.keys.map(() => '?').join(',')}) AND p.dismissed_at IS NULL`
+           WHERE p.key IN (${args.keys.map(() => '?').join(',')})
+             AND p.dismissed_at IS NULL AND p.applied_at IS NULL`
         ).all(...args.keys)
       // Flags and score exclude here rather than merely sorting last: this query decides who receives an
       // email from a real person's account. It is the 'usable' KPI minus its `(in_scope OR remote)` half —
@@ -254,11 +255,15 @@ async function runDraftJob(
       : db.prepare(`
           SELECT p.* FROM posts p LEFT JOIN applications a ON a.key = p.key
           WHERE a.key IS NULL
+            -- Was defensive while the scraper admitted a post only if it carried an address. Now that a
+            -- post can be kept for its link or its number, this is the only thing between a link-only
+            -- post and the contacts upsert, whose email column is NOT NULL and lower-case checked.
             AND json_array_length(p.emails) > 0
             AND coalesce(p.post_type, 'hiring') = 'hiring'
             AND json_array_length(p.flags) = 0
             AND p.score >= 6
             AND p.dismissed_at IS NULL
+            AND p.applied_at IS NULL
           ORDER BY p.score DESC, p.posted_at DESC
           LIMIT ?
         `).all(args.n ?? 10)
