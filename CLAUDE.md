@@ -17,8 +17,9 @@ written for a different person. The design record, including what changed during
 known gaps, is `docs/superpowers/specs/2026-09-10-nuxt-rewrite-design.md`; the two `2026-09-06-*` specs
 beside it describe the pre-rewrite system.
 
-**The rewrite is complete (M1-M5).** Gmail works but needs `google-oauth.json` — see Gmail below. Until it
-is connected, drafts fall back to `data/drafts/*.json` and everything else works unchanged.
+**The rewrite is complete (M1-M5), and Gmail is connected** — `google-oauth.json` and `gmail-token.json`
+both exist and `/api/gmail/status` reports the account authorised. On a machine without them, drafts fall
+back to `data/drafts/*.json` and everything else works unchanged.
 
 The pre-rewrite implementation (`jobfinder.js`, `ui.js`, `ui.html`, `scrape.js`, `schema.sql`,
 `com.jobfinder.plist`) is **deleted here but preserved in git** — read one with `git show main:ui.js`. Source
@@ -331,8 +332,9 @@ back on a different host, port and path — which Google accepts.
 
 ## Known gaps
 
-- The **Google round trip has never run** — token exchange, refresh, real draft creation, a real sweep are
-  written and unit tested but untested against Google, because `google-oauth.json` does not exist yet.
+- **The Google round trip is authorised but has not yet created a real draft.** Consent and token exchange
+  have run against Google; refresh, real draft creation with the CV attached, and a real sweep are written
+  and unit tested but still unexercised end to end. The first drafted post is the test.
 - The **Usable** KPI counts `score >= 6 AND post_type is hiring AND no flags AND (in_scope OR remote)`, so a
   strong role whose post never states a location is missing from the headline number. It still appears in the
   Posts list, and the **drafter queue deliberately omits the `(in_scope OR remote)` half** — the scorer leaves
