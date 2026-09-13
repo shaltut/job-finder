@@ -233,11 +233,20 @@ export function seedDefaults(current: StoredSettings, seed: unknown): StoredSett
   return next as unknown as StoredSettings
 }
 
-/** Parse, normalising country names to their display form so aliases collapse on the way in. */
+/**
+ * Parse, normalising country names to their display form so aliases collapse on the way in, and the
+ * contact channels into CONTACT_CHANNELS order.
+ *
+ * The channel ordering is here rather than only in the Settings form because the form's dirty check is
+ * a JSON.stringify comparison: a row written in any other order — by hand, by an older build, by a
+ * future caller — would make the page read as permanently edited. Normalising on the way in makes the
+ * order a property of what is stored rather than a habit of one client. Deduped for the same reason.
+ */
 export function parseSettings(input: unknown): StoredSettings {
   const parsed = settingsSchema.parse(input)
   parsed.constraints.onsiteCountries = normalizeCountries(parsed.constraints.onsiteCountries)
   parsed.constraints.willRelocate = normalizeCountries(parsed.constraints.willRelocate)
+  parsed.contactChannels = CONTACT_CHANNELS.filter(c => parsed.contactChannels.includes(c))
   return parsed
 }
 

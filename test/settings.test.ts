@@ -419,3 +419,15 @@ test('a contact channel that is not one of the three is rejected outright', () =
   const cfg = { ...emptySettings(), contactChannels: ['email', 'carrier-pigeon'] }
   assert.equal(settingsSchema.safeParse(cfg).success, false)
 })
+
+test('contact channels are stored in one order, whoever wrote them', () => {
+  // the Settings form's dirty check is a JSON.stringify comparison, so the order has to be a property
+  // of what is stored rather than a habit of the one client that happens to write it today
+  const parsed = parseSettings({ ...emptySettings(), contactChannels: ['phone', 'link', 'email'] })
+  assert.deepEqual(parsed.contactChannels, ['email', 'link', 'phone'])
+})
+
+test('a channel listed twice is stored once', () => {
+  const parsed = parseSettings({ ...emptySettings(), contactChannels: ['link', 'email', 'link'] })
+  assert.deepEqual(parsed.contactChannels, ['email', 'link'])
+})

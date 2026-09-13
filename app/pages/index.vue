@@ -168,20 +168,23 @@ const columns: TableColumn<PostRow>[] = [
     cell: ({ row }) => {
       const r = row.original
       const has = (c: 'email' | 'link' | 'phone') => r.channels.includes(c)
-      if (has('email')) return h('span', { class: 'text-xs font-mono' }, r.emails[0])
+      // Capped and truncated: a long address used to push the row actions off a laptop screen, and the
+      // full value is one row-expand away. The title attribute keeps it readable without that.
+      const cls = 'text-xs font-mono block max-w-48 truncate'
+      if (has('email')) return h('span', { class: cls, title: r.emails[0] }, r.emails[0])
       if (has('link')) {
         return h('a', {
           'href': r.links[0],
           'target': '_blank',
           'rel': 'noopener noreferrer',
-          'class': 'text-xs text-primary hover:underline inline-flex items-center gap-1',
+          'class': 'text-xs text-primary hover:underline inline-flex items-center gap-1 max-w-48',
           'title': r.links[0],
           'aria-label': 'Open the application link',
           'onClick': (e: Event) => e.stopPropagation()
         }, [h(UIcon, { name: 'i-lucide-external-link', class: 'size-3 shrink-0' }), 'apply link'])
       }
       if (has('phone')) {
-        return h('span', { class: 'text-xs font-mono inline-flex items-center gap-1' }, [
+        return h('span', { class: 'text-xs font-mono inline-flex items-center gap-1 max-w-48', title: r.phones[0] }, [
           h(UIcon, { name: 'i-lucide-phone', class: 'size-3 shrink-0 text-muted' }),
           r.phones[0]
         ])
@@ -237,6 +240,12 @@ const columns: TableColumn<PostRow>[] = [
   },
   {
     id: 'actions',
+    // Pinned to the right edge. The table scrolls horizontally below about 1500px and these buttons were
+    // the first thing to go off-screen — Dismiss on a laptop was unreachable without scrolling sideways
+    // through a table whose scrollbar is at the bottom of a long page.
+    // bg-elevated on the header rather than bg-default: the header row is tinted and semi-transparent,
+    // so an opaque white cell reads as a hole punched in it.
+    meta: { class: { th: 'sticky right-0 bg-elevated', td: 'sticky right-0 bg-default' } },
     cell: ({ row }) => {
       const r = row.original
       return h('div', { class: 'flex items-center justify-end gap-1' }, [
