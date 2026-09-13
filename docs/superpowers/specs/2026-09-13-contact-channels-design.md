@@ -170,9 +170,26 @@ invariants were matching over whole files, so dropping `dismissed_at IS NULL` fr
 alone left the suite green — they are now sliced per query, and each of the four mutations was checked to
 fail the right test.
 
-## Still unexercised
+## Measured live, 2026-09-14
 
-`link` and `phone` have never run against live LinkedIn. Both ship off. The stored corpus is email-bearing
-by construction and cannot say how common a link-only or phone-only post is, nor how the extractors behave
-on cards the email gate has always discarded — `npm run dry` prints the channels and the admission verdict
-per card, and is the instrument for that.
+120 cards over three job searches, plus 40 from the home feed:
+
+| | link | email | email+phone | no channel |
+|---|---|---|---|---|
+| 3 job searches (120 cards) | **29** | 28 | 2 | 61 |
+| home feed (40 cards) | 2 | 2 | 0 | 36 |
+
+The `link` channel roughly **doubles** what a job search keeps, and the cue that fired was an "Apply now" /
+"Apply here" / "Application link" every time — the gate is doing what it was designed to do on real cards,
+where against the stored corpus it had only ever proved it could say no.
+
+Two things the stored corpus could not have told us. **No post carried a phone alone**: the two phones
+found sat beside an address, so `phone` adds enrichment rather than reach. **No requisition id appeared at
+all** across 160 cards, so `ref_ids` is unearned weight for now — harmless, but not load-bearing.
+
+The open question is recall. 59 of the 120 cards carried a link and 29 passed; of the 28 rejected, 7 —
+four companies, evidently one template — do say "WE ARE HIRING". Those may be genuine misses (a cue outside
+the 300-character window, or wording `APPLY_CUE` does not know) or the link may be a company page rather
+than an application route. The dry snippet was 60 characters when this was measured, too short to tell, and
+is 200 now. Re-run and read those rows before widening the cue list: loosening it is exactly how the vendor
+CTAs get back in.

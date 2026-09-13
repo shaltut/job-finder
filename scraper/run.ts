@@ -15,7 +15,7 @@ import Database from 'better-sqlite3'
 import OpenAI from 'openai'
 import { chromium } from 'playwright-core'
 import {
-  admits, ageOf, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, gateOnPostType, normalize,
+  admits, ageOf, applyCueFor, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, gateOnPostType, normalize,
   postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
@@ -294,7 +294,7 @@ async function run({ dry }: { dry: boolean }) {
           // and the raw material behind it — deliberately ignoring contactChannels, because a
           // measurement gated by the current settings cannot tell you what to set them to.
           const cue = links.map(l => applyCueFor(text, l)).find(Boolean)
-          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${channels.join('+') || 'NO CHANNEL'} | cue:${cue ? `"${cue}"` : '-'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refIds.join(' ') || '-'} | ${text.replace(/\s+/g, ' ').slice(0, 60)}`)
+          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${channels.join('+') || 'NO CHANNEL'} | cue:${cue ? `"${cue}"` : '-'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refIds.join(' ') || '-'} | ${text.replace(/\s+/g, ' ').slice(0, 200)}`)
           continue
         }
         if (!admits(channels, CONFIG.contactChannels)) continue

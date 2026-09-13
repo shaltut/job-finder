@@ -396,12 +396,19 @@ back on a different host, port and path — which Google accepts.
 
 ## Known gaps
 
-- **The `link` and `phone` channels have never run against live LinkedIn.** Both are switched off by
-  default, unit tested, and measured against the 48 stored posts — but that corpus is email-bearing *by
-  construction*, so it cannot say how common a phone-only or link-only post is, nor how the extractors
-  behave on cards the email gate has always discarded. `npm run dry` now prints the channels and the
-  admission verdict per card: **run it on a couple of terms before switching either channel on**, and tune
-  `APPLY_CUE` from what real posts say rather than from the seven vendor CTAs in the current database.
+- **Measured live, 2026-09-14**, over 120 cards from three job searches (`frontend developer remote apply`,
+  `we are hiring frontend developer`, `frontend developer send cv`): **29 link, 28 email, 2 email+phone,
+  61 no channel.** So the `link` channel roughly **doubles** what a scrape keeps, and every cue that fired
+  was an "Apply now/here" or "Application link". No post carried a phone alone — the two phones sat beside
+  an address — and no requisition id appeared at all, so `phone` and `ref_ids` are so far unearned weight.
+  Both channels still ship **off**; the numbers say turn `link` on.
+- **The link gate's recall is the open question.** 59 of those 120 cards carried a link and 29 passed; of
+  the 28 rejected, 7 (four companies, evidently one template) do say "WE ARE HIRING". They may be genuine
+  misses — a cue outside the 300-character window, or wording `APPLY_CUE` does not know — or the link may
+  be a company page rather than an application route. The dry snippet was 60 characters when this was
+  measured, too short to tell; it is 200 now, so **re-run `npm run dry` and read those rows before widening
+  `APPLY_CUE`**. Widening it is cheap to get wrong in the other direction: a looser cue readmits the vendor
+  CTAs the gate exists to reject.
 - **Widening admission widens the OpenAI bill.** Admission runs before `scorePost`, so every newly admitted
   post is a scoring call and `max` now caps a broader population.
 - **The Google round trip is authorised but has not yet created a real draft.** Consent and token exchange
