@@ -8,6 +8,7 @@ useDashboard()
 useHead({ title: 'Settings' })
 
 const toast = useToast()
+const { reflagAndWait } = useReflag()
 
 const { data } = await useFetch<AppConfig>('/api/config')
 // edit a copy: a failed save must leave the form as the user left it, not snap back
@@ -51,15 +52,20 @@ function adopt(saved: AppConfig) {
 
 async function save() {
   saving.value = true
+  // compared before adopt(), which overwrites the baseline this reads
+  let rulesChanged = false
   try {
     // UInputTags does not trim, so whitespace would otherwise reach the schema
     form.value.terms = form.value.terms.map(s => s.trim()).filter(Boolean)
     form.value.titles = form.value.titles.map(s => s.trim()).filter(Boolean)
+    form.value.excludes = form.value.excludes.map(s => s.trim()).filter(Boolean)
+    rulesChanged = JSON.stringify(form.value.excludes) !== JSON.stringify(data.value?.excludes ?? [])
     const saved = await $fetch<AppConfig>('/api/config', { method: 'PUT', body: form.value })
     adopt(saved)
     await refreshStatus()
     toast.add({ title: 'Settings saved', color: 'success', icon: 'i-lucide-check' })
   } catch (e) {
+    rulesChanged = false
     toast.add({
       title: 'Not saved',
       description: (e as { data?: { message?: string } })?.data?.message ?? String(e),
@@ -68,6 +74,37 @@ async function save() {
     })
   } finally {
     saving.value = false
+  }
+
+  // Outside the save entirely, and deliberately so — on both counts.
+  //
+  // Its own try/catch: the settings ARE saved by now, and a re-check that fails (a dev-server reload
+  // mid-poll is routine) must not toast "Not saved" over a save that succeeded.
+  //
+  // After `saving` is cleared: reflag shares the scrape lane, so on a busy lane this waits minutes.
+  // Holding the Save button disabled that whole time would show "saving" while nothing is being saved.
+  if (!rulesChanged) return
+  try {
+    const { excluded, posts } = await reflagAndWait({
+      onQueued: () => toast.add({
+        title: 'Re-check queued',
+        description: 'A scrape is running — stored posts will be re-checked when it finishes.',
+        icon: 'i-lucide-clock'
+      })
+    })
+    toast.add({
+      title: `Re-flagged ${posts} posts`,
+      description: `${excluded} now excluded.`,
+      color: 'success',
+      icon: 'i-lucide-filter'
+    })
+  } catch {
+    toast.add({
+      title: 'Saved, but the re-check did not run',
+      description: 'Your rules apply to the next scrape. Press Reflag in the Run view to apply them to stored posts.',
+      color: 'warning',
+      duration: 8000
+    })
   }
 }
 
@@ -703,6 +740,17 @@ async function disconnectGmail() {
             <UInputTags
               v-model="form.titles"
               placeholder="e.g. Senior &lt;Your Title&gt;"
+              class="w-full"
+            />
+          </UFormField>
+
+          <UFormField
+            label="Never show posts mentioning"
+            :help="`${form.excludes.length} rule${form.excludes.length === 1 ? '' : 's'} — matched against the whole post, so a domain, a company or a person's name all work. Whole words only: &quot;ai&quot; will not match &quot;email&quot;.`"
+          >
+            <UInputTags
+              v-model="form.excludes"
+              placeholder="e.g. example.com"
               class="w-full"
             />
           </UFormField>

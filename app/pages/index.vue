@@ -5,9 +5,12 @@ import type { PostRow } from '~/types'
 useDashboard()
 useHead({ title: 'Posts' })
 
+const { reflagAndWait } = useReflag()
+
 const UBadge = resolveComponent('UBadge')
 const UButton = resolveComponent('UButton')
 const UCheckbox = resolveComponent('UCheckbox')
+const UDropdownMenu = resolveComponent('UDropdownMenu')
 const UIcon = resolveComponent('UIcon')
 
 const toast = useToast()
@@ -121,6 +124,78 @@ async function setDismissed(keys: string[], dismissed: boolean, undoable = true)
     })
   } catch (e) {
     toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
+  } finally {
+    busy.value = false
+  }
+}
+
+// ---------------- exclude ----------------
+
+const excludeOpen = ref(false)
+const excludeNeedle = ref('')
+const excludeRow = ref<PostRow | null>(null)
+
+/**
+ * What the owner might plausibly mean by "never again", read off the row itself.
+ *
+ * Domains come from the post text rather than `links`, because LinkedIn rewrites almost every outbound
+ * link to an opaque lnkd.in hash — the readable name only ever survives in the prose. That is exactly
+ * how `jobs.micro1.ai` is visible at all.
+ */
+const excludeSuggestions = computed(() => {
+  const r = excludeRow.value
+  if (!r) return []
+  const domains = [...(r.text ?? '').matchAll(/\b((?:[a-z0-9][a-z0-9-]*\.)+(?:ai|com|io|co|net|org|dev))\b/gi)]
+    .map(m => m[1]!.toLowerCase())
+    .filter(d => !d.includes('linkedin.') && !d.includes('lnkd.'))
+  const out = [r.author, r.company && r.company !== 'unknown' ? r.company : '', ...domains]
+  return [...new Set(out.map(v => (v ?? '').trim()).filter(v => v.length >= 2))].slice(0, 6)
+})
+
+function openExclude(r: PostRow) {
+  excludeRow.value = r
+  excludeNeedle.value = r.author ?? ''
+  excludeOpen.value = true
+}
+
+/** Save one rule, then wait for the re-flag before refreshing — see useReflag for why. */
+async function addExclude() {
+  const needle = excludeNeedle.value.trim()
+  if (needle.length < 2 || busy.value) return
+  busy.value = true
+  excludeOpen.value = false
+  try {
+    await $fetch('/api/settings/excludes', { method: 'POST', body: { needle } })
+  } catch (e) {
+    busy.value = false
+    toast.add({ title: 'Not excluded', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
+    return
+  }
+
+  // The rule is stored from here on, so a failure below is about the re-check, never about the rule.
+  try {
+    const { excluded } = await reflagAndWait({
+      onQueued: () => toast.add({
+        title: 'Re-check queued',
+        description: 'A scrape is running — this will apply when it finishes.',
+        icon: 'i-lucide-clock'
+      })
+    })
+    rowSelection.value = {}
+    await Promise.all([refresh(), refreshNuxtData('stats')])
+    toast.add({
+      title: `Excluding "${needle}"`,
+      description: `${excluded} post${excluded === 1 ? '' : 's'} now excluded. Edit the list in Settings.`,
+      icon: 'i-lucide-filter',
+      color: 'success'
+    })
+  } catch {
+    toast.add({
+      title: `Excluding "${needle}"`,
+      description: 'Saved, but stored posts were not re-checked. Press Reflag in the Run view.',
+      color: 'warning',
+      duration: 8000
+    })
   } finally {
     busy.value = false
   }
@@ -273,32 +348,36 @@ const columns: TableColumn<PostRow>[] = [
               disabled: queued.value.has(r.key),
               onClick: () => draft(r.key)
             }),
-        // The way a link-only or phone-only post leaves the queue: nothing here can draft it, so the
-        // owner applies through the post itself and records that they did.
-        r.dismissedAt
-          ? null
-          : h(UButton, {
-              'icon': r.appliedAt ? 'i-lucide-undo-2' : 'i-lucide-check',
-              'color': r.appliedAt ? 'neutral' : 'success',
-              'variant': 'ghost',
-              'size': 'sm',
-              'title': r.appliedAt ? 'Applied — click to un-mark' : 'Mark applied',
-              'aria-label': r.appliedAt ? 'Un-mark applied' : 'Mark applied',
-              'disabled': busy.value,
-              'onClick': () => setApplied([r.key], !r.appliedAt)
-            }),
-        r.dismissedAt
-          ? null
-          : h(UButton, {
-              'icon': 'i-lucide-x',
-              'color': 'neutral',
-              'variant': 'ghost',
-              'size': 'sm',
-              'title': 'Dismiss',
-              'aria-label': 'Dismiss',
-              'disabled': busy.value,
-              'onClick': () => setDismissed([r.key], true)
-            }),
+        // Everything that is not the primary action lives behind one trigger. These used to be
+        // separate buttons; adding a sixth squeezed the Status column until 'unprocessed' truncated,
+        // and this column is already the first thing to go off-screen on a laptop.
+        h(UDropdownMenu, {
+          items: [
+            r.dismissedAt
+              ? null
+              // The way a link-only or phone-only post leaves the queue: nothing here can draft it,
+              // so the owner applies through the post itself and records that they did.
+              : {
+                  label: r.appliedAt ? 'Un-mark applied' : 'Mark applied',
+                  icon: r.appliedAt ? 'i-lucide-undo-2' : 'i-lucide-check',
+                  disabled: busy.value,
+                  onSelect: () => setApplied([r.key], !r.appliedAt)
+                },
+            {
+              label: 'Exclude…',
+              icon: 'i-lucide-ban',
+              disabled: busy.value,
+              onSelect: () => openExclude(r)
+            }
+          ].filter(Boolean)
+        }, () => h(UButton, {
+          'icon': 'i-lucide-ellipsis',
+          'color': 'neutral',
+          'variant': 'ghost',
+          'size': 'sm',
+          'title': 'More actions',
+          'aria-label': 'More actions'
+        })),
         h(UButton, {
           icon: row.getIsExpanded() ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down',
           color: 'neutral',
@@ -367,7 +446,8 @@ const columns: TableColumn<PostRow>[] = [
           :items="[
             { label: 'Unflagged', value: 'clean' },
             { label: 'Any flags', value: 'all' },
-            { label: 'Flagged only', value: 'flagged' }
+            { label: 'Flagged only', value: 'flagged' },
+            { label: 'Excluded', value: 'excluded' }
           ]"
           class="min-w-36"
         />
@@ -538,6 +618,56 @@ const columns: TableColumn<PostRow>[] = [
           If the database is empty, run a scrape from the <ULink to="/run">Run</ULink> view.
         </p>
       </div>
+      <UModal
+        v-model:open="excludeOpen"
+        title="Never show posts mentioning"
+        description="Matched against the whole post — a domain, a company, or a person's name. Whole words only, so &quot;ai&quot; will not match &quot;email&quot;."
+      >
+        <template #body>
+          <UInput
+            v-model="excludeNeedle"
+            placeholder="e.g. example.com"
+            autofocus
+            class="w-full"
+            @keyup.enter="addExclude"
+          />
+          <div
+            v-if="excludeSuggestions.length"
+            class="mt-3 flex flex-wrap gap-1.5"
+          >
+            <UButton
+              v-for="sug in excludeSuggestions"
+              :key="sug"
+              :label="sug"
+              color="neutral"
+              variant="soft"
+              size="xs"
+              @click="excludeNeedle = sug"
+            />
+          </div>
+          <p class="mt-3 text-xs text-muted">
+            Excluded posts stay in the database and are hidden, not deleted. Remove the rule in Settings to
+            bring them back.
+          </p>
+        </template>
+        <template #footer>
+          <div class="flex justify-end gap-2 w-full">
+            <UButton
+              label="Cancel"
+              color="neutral"
+              variant="ghost"
+              @click="excludeOpen = false"
+            />
+            <UButton
+              label="Exclude"
+              color="primary"
+              icon="i-lucide-ban"
+              :disabled="excludeNeedle.trim().length < 2 || busy"
+              @click="addExclude"
+            />
+          </div>
+        </template>
+      </UModal>
     </template>
   </UDashboardPanel>
 </template>
