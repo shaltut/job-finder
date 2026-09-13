@@ -77,7 +77,7 @@ async function setDismissed(keys: string[], dismissed: boolean, undoable = true)
     await Promise.all([refresh(), refreshNuxtData('stats')])
     toast.add({
       title: `${dismissed ? 'Dismissed' : 'Restored'} ${keys.length} post${keys.length > 1 ? 's' : ''}`,
-      icon: dismissed ? 'i-lucide-eye-off' : 'i-lucide-undo-2',
+      icon: dismissed ? 'i-lucide-x' : 'i-lucide-undo-2',
       actions: undoable
         ? [{
             label: 'Undo',
@@ -207,7 +207,7 @@ const columns: TableColumn<PostRow>[] = [
         r.dismissedAt
           ? null
           : h(UButton, {
-              'icon': 'i-lucide-eye-off',
+              'icon': 'i-lucide-x',
               'color': 'neutral',
               'variant': 'ghost',
               'size': 'sm',
@@ -321,7 +321,7 @@ const columns: TableColumn<PostRow>[] = [
             <UButton
               v-else
               label="Dismiss"
-              icon="i-lucide-eye-off"
+              icon="i-lucide-x"
               size="xs"
               color="neutral"
               variant="outline"
