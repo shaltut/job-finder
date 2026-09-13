@@ -8,6 +8,7 @@ export type ScraperRecord
   = | ({ op: 'post' } & PostRecord)
     | { op: 'update', key: string, postType: PostType | null, title: string, company: string, location: string, remote: boolean, inScope: boolean, score: number, reason: string }
     | { op: 'reflag', key: string, flags: string[], postedAt: string | null }
+    | { op: 'reextract', key: string, links: string[], phones: string[], refIds: string[], channels: string[] }
     | { op: 'posturl', key: string, postUrl: string }
     | { op: 'done', added: number }
 
@@ -29,6 +30,10 @@ export interface PostRecord {
   remote: boolean
   inScope: boolean
   emails: string[]
+  links: string[]
+  phones: string[]
+  refIds: string[]
+  channels: string[]
   score: number
   reason: string
   text: string
@@ -56,9 +61,11 @@ export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' |
   if (rec.op === 'post') {
     const r = db.prepare(`
       INSERT INTO posts (key, search_term, author, author_url, post_url, posted_age, posted_at, post_type,
-                         title, company, location, remote, in_scope, emails, score, reason, text, flags)
+                         title, company, location, remote, in_scope, emails, links, phones, ref_ids,
+                         channels, score, reason, text, flags)
       VALUES (@key, @searchTerm, @author, @authorUrl, @postUrl, @postedAge, @postedAt, @postType,
-              @title, @company, @location, @remote, @inScope, @emails, @score, @reason, @text, @flags)
+              @title, @company, @location, @remote, @inScope, @emails, @links, @phones, @refIds,
+              @channels, @score, @reason, @text, @flags)
       ON CONFLICT (key) DO NOTHING
     `).run({
       key: rec.key,
@@ -75,6 +82,10 @@ export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' |
       remote: rec.remote ? 1 : 0,
       inScope: rec.inScope ? 1 : 0,
       emails: JSON.stringify(rec.emails),
+      links: JSON.stringify(rec.links),
+      phones: JSON.stringify(rec.phones),
+      refIds: JSON.stringify(rec.refIds),
+      channels: JSON.stringify(rec.channels),
       score: rec.score,
       reason: rec.reason,
       text: rec.text,
@@ -111,6 +122,22 @@ export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' |
     return r.changes ? 'update' : null
   }
 
+  if (rec.op === 'reextract') { // --reextract: fills the contact columns on rows stored before they existed
+    // Names its columns, like reflag and update above, so the owner's own triage — dismissed_at and
+    // applied_at — survives a backfill. test/dismiss.test.ts pins that for all of them.
+    const r = db.prepare(`
+      UPDATE posts SET links = @links, phones = @phones, ref_ids = @refIds, channels = @channels
+      WHERE key = @key
+    `).run({
+      key: rec.key,
+      links: JSON.stringify(rec.links),
+      phones: JSON.stringify(rec.phones),
+      refIds: JSON.stringify(rec.refIds),
+      channels: JSON.stringify(rec.channels)
+    })
+    return r.changes ? 'update' : null
+  }
+
   if (rec.op === 'posturl') { // a known post seen again, whose row predates permalinks or came from the feed
     const r = db.prepare(`UPDATE posts SET post_url = @postUrl WHERE key = @key AND post_url IS NULL`)
       .run({ key: rec.key, postUrl: rec.postUrl })
@@ -133,5 +160,21 @@ export function setDismissed(db: Database.Database, keys: string[], dismissed: b
   const at = dismissed ? Math.floor(Date.now() / 1000) : null // seconds, the unit secs() writes
   return db.prepare(
     `UPDATE posts SET dismissed_at = ? WHERE key IN (${keys.map(() => '?').join(',')})`
+  ).run(at, ...keys).changes
+}
+
+/**
+ * Marks posts applied (or un-applies them) — the owner's record of an application they sent by hand,
+ * through a link or a phone number, because no draft can reach a post with no email address.
+ *
+ * Deliberately the same shape as setDismissed rather than a third `applications` verdict. A verdict
+ * would be read by the follow-up sweep, which finds unmentioned roles by the absence of a
+ * `named in ...` reason, as a role still owed an email. Returns the number of rows changed.
+ */
+export function setApplied(db: Database.Database, keys: string[], applied: boolean): number {
+  if (!keys.length) return 0
+  const at = applied ? Math.floor(Date.now() / 1000) : null // seconds, the unit secs() writes
+  return db.prepare(
+    `UPDATE posts SET applied_at = ? WHERE key IN (${keys.map(() => '?').join(',')})`
   ).run(at, ...keys).changes
 }

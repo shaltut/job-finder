@@ -36,6 +36,13 @@
       "when": 1789313432634,
       "tag": "0004_shocking_sugar_man",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1789333152674,
+      "tag": "0005_powerful_mimic",
+      "breakpoints": true
     }
   ]
 }

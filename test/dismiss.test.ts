@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
-import { applyRecord, setDismissed, type ScraperRecord } from '../server/utils/ingest.ts'
+import { applyRecord, setApplied, setDismissed, type ScraperRecord } from '../server/utils/ingest.ts'
 
 let dir: string
 let dbPath: string
@@ -32,6 +32,10 @@ const post = (over: Partial<Record<string, unknown>> = {}): ScraperRecord => ({
   remote: true,
   inScope: true,
   emails: ['hr@acme.sa'],
+  links: [],
+  phones: [],
+  refIds: [],
+  channels: ['email'],
   score: 8,
   reason: 'Match: Vue, Nuxt; Gaps: none',
   text: 'We are hiring a Vue lead. Send CV to hr@acme.sa',
@@ -170,4 +174,109 @@ test('a drafted post can still be dismissed, and its application row is untouche
   assert.equal(app.verdict, 'drafted')
   assert.match(app.reason, /^named in application/, 'dismiss is triage, not a verdict: the sweep still needs this prefix')
   assert.ok(dismissedAt(key))
+})
+
+// ---------------- applied by hand ----------------
+// A post reachable only by link or phone can never become a draft, so the owner applies themselves and
+// says so here. Same shape as a dismissal and, for the queries that decide who receives an email, the
+// same consequence: the post is done with, whichever route it went out by.
+
+const appliedAt = (key: string) =>
+  (db.prepare('SELECT applied_at FROM posts WHERE key = ?').get(key) as { applied_at: number | null }).applied_at
+
+test('marking applied stamps a timestamp and un-applying clears it', () => {
+  const key = '7'.repeat(40)
+  applyRecord(db, post({ key }))
+  assert.equal(appliedAt(key), null)
+
+  assert.equal(setApplied(db, [key], true), 1)
+  assert.ok(appliedAt(key)! > 0)
+
+  assert.equal(setApplied(db, [key], false), 1)
+  assert.equal(appliedAt(key), null)
+})
+
+test('a manual application survives a re-scrape and every maintenance pass', () => {
+  const key = '8'.repeat(40)
+  applyRecord(db, post({ key }))
+  setApplied(db, [key], true)
+  setDismissed(db, [key], true) // the two are independent: a post can be both
+  const applied = appliedAt(key)
+
+  applyRecord(db, post({ key, title: 'Rescraped' })) // ON CONFLICT DO NOTHING
+  applyRecord(db, {
+    op: 'update', key, postType: 'hiring', title: 'Lead Frontend Engineer', company: 'Acme',
+    location: 'Riyadh', remote: true, inScope: true, score: 9, reason: 'Match: Vue, Nuxt'
+  })
+  applyRecord(db, { op: 'reflag', key, flags: ['junior'], postedAt: null })
+  applyRecord(db, {
+    op: 'reextract', key, links: ['https://acme.example/jobs'], phones: [], refIds: [], channels: ['email']
+  })
+
+  assert.equal(appliedAt(key), applied, 'a backfill rewrites what was extracted, never the owner triage')
+  assert.ok(dismissedAt(key)! > 0, 'and it leaves the dismissal alone too')
+})
+
+test('a reextract record fills the contact columns without touching anything else', () => {
+  const key = '9'.repeat(40)
+  applyRecord(db, post({ key, score: 8, title: 'Senior Frontend Engineer' }))
+
+  applyRecord(db, {
+    op: 'reextract',
+    key,
+    links: ['https://acme.example/apply'],
+    phones: ['+201000000000'],
+    refIds: ['REQ-4821'],
+    channels: ['email', 'link']
+  })
+
+  const row = db.prepare('SELECT links, phones, ref_ids, channels, score, title FROM posts WHERE key = ?')
+    .get(key) as Record<string, string | number>
+  assert.deepEqual(JSON.parse(row.links as string), ['https://acme.example/apply'])
+  assert.deepEqual(JSON.parse(row.phones as string), ['+201000000000'])
+  assert.deepEqual(JSON.parse(row.ref_ids as string), ['REQ-4821'])
+  assert.deepEqual(JSON.parse(row.channels as string), ['email', 'link'])
+  assert.equal(row.score, 8, 'the scoring columns are not in the backfill')
+  assert.equal(row.title, 'Senior Frontend Engineer')
+})
+
+test('the drafter queue skips a post the owner already applied to', () => {
+  const key = 'b'.repeat(40)
+  applyRecord(db, post({ key, emails: ['hr@applied.sa'], score: 9, flags: [] }))
+
+  // the exact predicate from server/utils/jobs.ts, including the guard this feature makes load-bearing
+  const queued = () => (db.prepare(`
+    SELECT count(*) n FROM posts p LEFT JOIN applications a ON a.key = p.key
+    WHERE p.key = ? AND a.key IS NULL
+      AND json_array_length(p.emails) > 0
+      AND coalesce(p.post_type, 'hiring') = 'hiring'
+      AND json_array_length(p.flags) = 0
+      AND p.score >= 6
+      AND p.dismissed_at IS NULL
+      AND p.applied_at IS NULL
+  `).get(key) as { n: number }).n
+
+  assert.equal(queued(), 1, 'it qualifies before the owner applies')
+  setApplied(db, [key], true)
+  assert.equal(queued(), 0, 'and never receives a second approach afterwards')
+})
+
+test('a link-only post can never reach the drafter, whatever else is true of it', () => {
+  // the emails guard was defensive while every stored row had an address by construction; it is the
+  // only thing standing between a link-only post and the contacts upsert, whose email column is NOT NULL
+  const key = 'c'.repeat(40)
+  applyRecord(db, post({ key, emails: [], links: ['https://acme.example/apply'], channels: ['link'], score: 10, flags: [] }))
+
+  const queued = (db.prepare(`
+    SELECT count(*) n FROM posts p LEFT JOIN applications a ON a.key = p.key
+    WHERE p.key = ? AND a.key IS NULL
+      AND json_array_length(p.emails) > 0
+      AND coalesce(p.post_type, 'hiring') = 'hiring'
+      AND json_array_length(p.flags) = 0
+      AND p.score >= 6
+      AND p.dismissed_at IS NULL
+      AND p.applied_at IS NULL
+  `).get(key) as { n: number }).n
+
+  assert.equal(queued, 0)
 })

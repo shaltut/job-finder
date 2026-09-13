@@ -39,6 +39,27 @@ export const posts = sqliteTable('posts', {
   inScope: integer('in_scope', { mode: 'boolean' }),
   /** Deterministic regex output, never the model's. */
   emails: text('emails', { mode: 'json' }).$type<string[]>().notNull().default(sql`('[]')`),
+  /**
+   * External links on the card. Regex + DOM anchors, never the model's. NOT `post_url`: that is this
+   * post's own LinkedIn permalink, while these point away from LinkedIn. The destination is unknowable
+   * — LinkedIn rewrites every outbound URL to an opaque `lnkd.in` hash — which is why `channels` below
+   * decides whether one of these is an application route, and this column stays a plain record of what
+   * the card carried.
+   */
+  links: text('links', { mode: 'json' }).$type<string[]>().notNull().default(sql`('[]')`),
+  /** Contact numbers, normalised to digits with a leading '+' where the post gave one. Regex, never the model's. */
+  phones: text('phones', { mode: 'json' }).$type<string[]>().notNull().default(sql`('[]')`),
+  /** Requisition identifiers. Shown to the reader; never a contact channel and never an admission reason. */
+  refIds: text('ref_ids', { mode: 'json' }).$type<string[]>().notNull().default(sql`('[]')`),
+  /**
+   * The contact routes this post actually offers, from `channelsOf()` in scraper/lib.ts — the subset of
+   * the three columns above that a person could really apply through. Stored rather than derived at
+   * query time because extraction is unconditional while admission is not: a post kept for its email
+   * still records the marketing link it happened to carry, so `json_array_length(links) > 0` would be a
+   * lie in the UI. Writing the computed set once keeps the scraper gate, the Posts badge and the
+   * channel filter from drifting apart.
+   */
+  channels: text('channels', { mode: 'json' }).$type<string[]>().notNull().default(sql`('[]')`),
   /** 0-10 from the scoring model. An ordering hint, never a verdict. */
   score: integer('score'),
   /** "Match: ...; Gaps: ...". Model-generated and prone to overclaiming; never copy into an email. */
@@ -53,7 +74,15 @@ export const posts = sqliteTable('posts', {
    * the follow-up sweep — and the insert's `ON CONFLICT DO NOTHING` is what makes a dismissal survive a
    * re-scrape.
    */
-  dismissedAt: integer('dismissed_at', { mode: 'timestamp' })
+  dismissedAt: integer('dismissed_at', { mode: 'timestamp' }),
+  /**
+   * When the owner applied to this post by hand, through its link or number; NULL means they have not.
+   * The same shape as `dismissed_at` and for the same reason: it is the owner's own triage, not a third
+   * `applications` verdict. A verdict would break the follow-up sweep, which finds unmentioned roles by
+   * the ABSENCE of a `named in ...` reason and would read a manual row as a role still to be pitched.
+   * Every query that decides who receives an email carries `applied_at IS NULL` beside `dismissed_at`.
+   */
+  appliedAt: integer('applied_at', { mode: 'timestamp' })
 }, t => [
   index('posts_score_idx').on(t.score),
   index('posts_posted_at_idx').on(t.postedAt),
