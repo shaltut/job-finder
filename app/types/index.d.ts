@@ -59,6 +59,8 @@ export interface JobView {
   exit: number | null
   running: boolean
   added: number
+  /** --reflag only: how many stored posts the exclude list now catches. */
+  excluded: number | null
   log: string[]
 }
 

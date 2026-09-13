@@ -39,6 +39,8 @@ interface Job {
   exit: number | null
   log: string[]
   added: number
+  /** --reflag only: how many stored posts the owner's exclude list now catches. */
+  excluded: number | null
   child: ChildProcess | null
 }
 
@@ -112,7 +114,7 @@ function runJob(lane: Lane, item: QueueItem) {
   const job: Job = {
     id: item.id, lane, kind, args,
     startedAt: new Date().toISOString(), endedAt: null, exit: null,
-    log: [], added: 0, child: null
+    log: [], added: 0, excluded: null, child: null
   }
   lanes[lane].current = job
 
@@ -165,6 +167,9 @@ function runJob(lane: Lane, item: QueueItem) {
       if (!line.trim()) continue
       try {
         const rec = JSON.parse(line) as ScraperRecord
+        // the one number the scraper knows and the database cannot be asked for afterwards: a
+        // `flags=excluded` count would hide rows the owner had already dismissed by hand.
+        if (rec.op === 'done' && typeof rec.excluded === 'number') job.excluded = rec.excluded
         if (applyRecord(db, rec)) job.added++
       } catch {
         push(`ignored unparseable output: ${line.slice(0, 120)}`)
@@ -207,7 +212,7 @@ export function cancelQueued(id: number): boolean {
 const jobView = (j: Job | null) => j && {
   id: j.id, lane: j.lane, kind: j.kind, args: j.args,
   startedAt: j.startedAt, endedAt: j.endedAt, exit: j.exit,
-  running: !!j.child, added: j.added, log: j.log
+  running: !!j.child, added: j.added, excluded: j.excluded, log: j.log
 }
 
 export const stateView = () => ({

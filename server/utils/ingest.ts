@@ -10,7 +10,9 @@ export type ScraperRecord
     | { op: 'reflag', key: string, flags: string[], postedAt: string | null }
     | { op: 'reextract', key: string, links: string[], phones: string[], refIds: string[], channels: string[] }
     | { op: 'posturl', key: string, postUrl: string }
-    | { op: 'done', added: number }
+    // `excluded` is only set by --reflag, which is the one mode that can count how many stored posts
+    // the owner's exclude list now catches. The UI reports that number back after a settings save.
+    | { op: 'done', added: number, excluded?: number }
 
 /** Who is posting. Only 'hiring' is a job; null means a row scored before the column existed. */
 export type PostType = 'hiring' | 'seeking' | 'other'

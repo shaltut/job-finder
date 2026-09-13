@@ -15,7 +15,7 @@ import Database from 'better-sqlite3'
 import OpenAI from 'openai'
 import { chromium } from 'playwright-core'
 import {
-  admits, ageOf, applyCueFor, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, gateOnPostType, normalize,
+  admits, ageOf, applyCueFor, channelsOf, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, gateOnPostType, normalize,
   postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
@@ -66,6 +66,9 @@ const SEARCH_TERMS = opts.terms ? opts.terms.split(',').map(t => t.trim()).filte
 const MAX_CARDS = Number(opts.max) || CONFIG.max || 40
 const SINCE = opts.since || CONFIG.since || 'past-24h'
 const CV_PATH = opts.cv || CONFIG.cv
+// Compiled once, for the dry run's report only. The scrape itself reaches the same rule through
+// prescreen(), so there is exactly one definition of what "excluded" means.
+const EXCLUDE_RE = excludeRule(CONFIG.excludes)
 
 // ---------------- output ----------------
 /** One NDJSON record on stdout. The only channel through which data leaves this process. */
@@ -294,7 +297,10 @@ async function run({ dry }: { dry: boolean }) {
           // and the raw material behind it — deliberately ignoring contactChannels, because a
           // measurement gated by the current settings cannot tell you what to set them to.
           const cue = links.map(l => applyCueFor(text, l)).find(Boolean)
-          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${channels.join('+') || 'NO CHANNEL'} | cue:${cue ? `"${cue}"` : '-'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refIds.join(' ') || '-'} | ${text.replace(/\s+/g, ' ').slice(0, 200)}`)
+          // The exclude list is the one setting a dry run SHOULD report against: unlike the channel
+          // gate, it is a rule the owner is writing right now and wants to see land before saving it.
+          const excl = EXCLUDE_RE?.test(text) ? ' | EXCLUDED' : ''
+          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${channels.join('+') || 'NO CHANNEL'}${excl} | cue:${cue ? `"${cue}"` : '-'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refIds.join(' ') || '-'} | ${text.replace(/\s+/g, ' ').slice(0, 200)}`)
           continue
         }
         if (!admits(channels, CONFIG.contactChannels)) continue
@@ -358,13 +364,17 @@ function reflag() {
     { key: string, text: string, emails: string, posted_age: string | null, scraped_at: number }[]
   db.close()
   let flagged = 0
+  let excluded = 0
   for (const r of rows) {
     const flags = prescreen(r.text, CONFIG)
     if (flags.length) flagged++
+    // counted separately from `flagged`: this is the number the Settings page reports back after a
+    // save, and the owner is asking "did my rule catch anything", not "how many posts are flagged".
+    if (flags.includes('excluded')) excluded++
     emit({ op: 'reflag', key: r.key, flags, postedAt: postedAt(r.posted_age, new Date(r.scraped_at * 1000))?.toISOString() ?? null })
   }
-  emit({ op: 'done', added: 0 })
-  log(`reflagged ${rows.length} posts, ${flagged} carry at least one flag`)
+  emit({ op: 'done', added: 0, excluded })
+  log(`reflagged ${rows.length} posts, ${flagged} carry at least one flag, ${excluded} excluded`)
 }
 
 /**
