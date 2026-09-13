@@ -136,7 +136,7 @@ test('the manual-apply column is a post column, not an applications verdict', ()
   // Verdict union is the cheapest place to catch someone reaching for that shape again.
   const types = readFileSync('app/types/index.d.ts', 'utf8')
   const verdict = /export type Verdict = ([^\n]+)/.exec(types)?.[1] ?? ''
-  assert.ok(verdict.includes("'drafted'") && verdict.includes("'skipped'"), 'the two real verdicts stay')
+  assert.ok(verdict.includes('\'drafted\'') && verdict.includes('\'skipped\''), 'the two real verdicts stay')
   assert.ok(
     !/manual|applied/i.test(verdict),
     'a manual application is posts.applied_at, never an applications verdict'

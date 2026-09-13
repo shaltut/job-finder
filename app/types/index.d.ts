@@ -19,12 +19,20 @@ export interface PostRow {
   remote: boolean | null
   inScope: boolean | null
   emails: string[]
+  /** External links on the card. An opaque `lnkd.in` hash, usually — see `channels` for what is usable. */
+  links: string[]
+  phones: string[]
+  refIds: string[]
+  /** The contact routes this post really offers: the subset of the three above worth acting on. */
+  channels: ('email' | 'link' | 'phone')[]
   score: number | null
   reason: string | null
   text: string
   flags: string[]
   /** ISO timestamp when the owner dismissed this post; null means it is still live. */
   dismissedAt: string | null
+  /** ISO timestamp when the owner applied by hand, through the post's link or number; null if not. */
+  appliedAt: string | null
   verdict: Verdict | null
   verdictReason: string | null
 }

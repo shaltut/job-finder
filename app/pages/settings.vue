@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { COUNTRIES } from '#shared/countries'
+import { CONTACT_CHANNELS, type ContactChannel } from '#shared/settings'
 import type { EditorToolbarItem } from '@nuxt/ui'
 import type { AppConfig, GmailStatus, SettingsStatus } from '~/types'
 
@@ -13,6 +14,26 @@ const { data } = await useFetch<AppConfig>('/api/config')
 const form = ref<AppConfig>(structuredClone(toRaw(data.value!)))
 const saving = ref(false)
 const dirty = computed(() => JSON.stringify(form.value) !== JSON.stringify(data.value))
+
+/**
+ * Three switches over one array, rebuilt in CONTACT_CHANNELS order every time.
+ *
+ * The order is the whole point: `dirty` above is a JSON.stringify comparison, so an array rebuilt in
+ * the order the switches happened to be clicked would leave the page looking edited after a round trip
+ * that changed nothing — the same trap EMPTY_SETTINGS' key order exists to avoid.
+ */
+const channelOn = (c: ContactChannel) => computed({
+  get: () => form.value.contactChannels.includes(c),
+  set: (on: boolean) => {
+    const next = new Set(form.value.contactChannels)
+    if (on) next.add(c)
+    else next.delete(c)
+    form.value.contactChannels = CONTACT_CHANNELS.filter(x => next.has(x))
+  }
+})
+const emailOn = channelOn('email')
+const linkOn = channelOn('link')
+const phoneOn = channelOn('phone')
 
 // the full ISO list. Names are the stored value, so this binds straight to the string arrays.
 const COUNTRY_NAMES = COUNTRIES.map(c => c.name)
@@ -612,6 +633,42 @@ async function disconnectGmail() {
             class="text-xs text-muted"
           >
             {{ discardedCount }} proposed gap(s) discarded: {{ discarded.join('; ') }}
+          </p>
+        </div>
+      </UCard>
+
+      <UCard class="shrink-0">
+        <template #header>
+          <h2 class="font-semibold text-highlighted">
+            Contact types
+          </h2>
+          <p class="text-sm text-muted">
+            Which posts are worth storing. A post is kept when it offers at least one of these, and every
+            switch you turn on widens what a scrape brings back — and what it costs to score.
+          </p>
+        </template>
+
+        <div class="space-y-3">
+          <USwitch
+            v-model="emailOn"
+            label="An email address"
+            description="The only route this tool can draft for. Leave it on unless you never want a draft."
+          />
+          <USwitch
+            v-model="linkOn"
+            label="An application link"
+            description="Kept only when the post invites an application through it — LinkedIn hides where a link goes, so the surrounding words are the only evidence. You apply to these yourself."
+          />
+          <USwitch
+            v-model="phoneOn"
+            label="A phone or WhatsApp number"
+            description="Common in some markets and invisible to the email filter. You apply to these yourself."
+          />
+          <p
+            v-if="!form.contactChannels.length"
+            class="text-sm text-error"
+          >
+            With all three off a scrape stores nothing, so it will refuse to start.
           </p>
         </div>
       </UCard>

@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto'
 import { homeCountryOf, nameFormsFor, resolveCountry, tldsFor, withAliases } from '../shared/countries.ts'
 import { emptySettings } from '../shared/settings.ts'
-import type { Profile, Scope, StoredSettings } from '../shared/settings.ts'
+import type { ContactChannel, Profile, Scope, StoredSettings } from '../shared/settings.ts'
 
 // These used to be declared here as a third copy of the same shape, kept in sync by hand with the
 // server's Zod schema and the browser's types. One definition now, in shared/settings.ts.
@@ -25,8 +25,9 @@ export const extractEmails = (text: string, mailtos: string[] = []): string[] =>
 // reader hands over — for the same reason `emails` is: a contact detail invented by a model is a
 // message sent to a stranger. The model never sees any of this.
 
-export const CHANNELS = ['email', 'link', 'phone'] as const
-export type Channel = (typeof CHANNELS)[number]
+// one definition, in the module the browser can import too
+export { CONTACT_CHANNELS as CHANNELS } from '../shared/settings.ts'
+export type Channel = ContactChannel
 
 // LinkedIn's own hosts: every card links its author, the company, and each hashtag. `lnkd.in` is
 // deliberately NOT here — that shortener is what an external link looks like once LinkedIn has

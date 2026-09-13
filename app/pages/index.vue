@@ -8,6 +8,7 @@ useHead({ title: 'Posts' })
 const UBadge = resolveComponent('UBadge')
 const UButton = resolveComponent('UButton')
 const UCheckbox = resolveComponent('UCheckbox')
+const UIcon = resolveComponent('UIcon')
 
 const toast = useToast()
 const queued = ref<Set<string>>(new Set())
@@ -32,7 +33,8 @@ const q = ref('')
 const flags = ref<'all' | 'clean' | 'flagged'>('clean')
 const type = ref<'hiring' | 'all' | 'other'>('hiring')
 const scope = ref<'all' | 'in-scope' | 'remote'>('all')
-const status = ref<'all' | 'unprocessed' | 'drafted' | 'skipped' | 'dismissed'>('unprocessed')
+const status = ref<'all' | 'unprocessed' | 'drafted' | 'skipped' | 'dismissed' | 'applied'>('unprocessed')
+const channel = ref<'all' | 'email' | 'link' | 'phone'>('all')
 const minScore = ref(0)
 
 // Seekers carry the `seeking-work` flag, so asking for non-hiring posts under the default 'Unflagged'
@@ -45,7 +47,7 @@ const expanded = ref<Record<string, boolean>>({})
 const rowSelection = ref<Record<string, boolean>>({})
 
 const { data, status: reqStatus, refresh } = await useFetch<{ rows: PostRow[], total: number }>('/api/posts', {
-  query: { q, flags, scope, status, minScore, type },
+  query: { q, flags, scope, status, channel, minScore, type },
   lazy: true,
   default: () => ({ rows: [], total: 0 })
 })
@@ -63,9 +65,39 @@ watch(data, () => {
 // watch below is the second line of defence.
 const selectedKeys = computed(() => data.value.rows.filter(r => rowSelection.value[r.key]).map(r => r.key))
 
-watch([q, flags, type, scope, status, minScore], () => {
+watch([q, flags, type, scope, status, channel, minScore], () => {
   rowSelection.value = {}
 })
+
+/**
+ * Mark posts applied, or un-mark them. A post reachable only by link or number can never become a
+ * draft, so this is how it leaves the queue — and it leaves it the same way a dismissal does.
+ */
+async function setApplied(keys: string[], applied: boolean, undoable = true) {
+  if (!keys.length || busy.value) return
+  busy.value = true
+  try {
+    await $fetch('/api/posts/applied', { method: 'POST', body: { keys, applied } })
+    rowSelection.value = {}
+    await Promise.all([refresh(), refreshNuxtData('stats')])
+    toast.add({
+      title: `${applied ? 'Marked applied' : 'Un-marked'} ${keys.length} post${keys.length > 1 ? 's' : ''}`,
+      icon: applied ? 'i-lucide-check' : 'i-lucide-undo-2',
+      actions: undoable
+        ? [{
+            label: 'Undo',
+            color: 'neutral' as const,
+            variant: 'outline' as const,
+            onClick: () => setApplied(keys, !applied, false)
+          }]
+        : undefined
+    })
+  } catch (e) {
+    toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
+  } finally {
+    busy.value = false
+  }
+}
 
 /** Dismiss posts, or restore them — the same endpoint both ways, which is what makes Undo free. */
 async function setDismissed(keys: string[], dismissed: boolean, undoable = true) {
@@ -130,7 +162,32 @@ const columns: TableColumn<PostRow>[] = [
   {
     accessorKey: 'emails',
     header: 'Contact',
-    cell: ({ row }) => h('span', { class: 'text-xs font-mono' }, row.original.emails[0] || '—')
+    // The route the owner would actually use, best first. A post can carry all three, and `channels` is
+    // the scraper's judgement of which are usable — so the marketing link stored beside an address never
+    // shows up here, and a link that is shown is one the post invited an application through.
+    cell: ({ row }) => {
+      const r = row.original
+      const has = (c: 'email' | 'link' | 'phone') => r.channels.includes(c)
+      if (has('email')) return h('span', { class: 'text-xs font-mono' }, r.emails[0])
+      if (has('link')) {
+        return h('a', {
+          'href': r.links[0],
+          'target': '_blank',
+          'rel': 'noopener noreferrer',
+          'class': 'text-xs text-primary hover:underline inline-flex items-center gap-1',
+          'title': r.links[0],
+          'aria-label': 'Open the application link',
+          'onClick': (e: Event) => e.stopPropagation()
+        }, [h(UIcon, { name: 'i-lucide-external-link', class: 'size-3 shrink-0' }), 'apply link'])
+      }
+      if (has('phone')) {
+        return h('span', { class: 'text-xs font-mono inline-flex items-center gap-1' }, [
+          h(UIcon, { name: 'i-lucide-phone', class: 'size-3 shrink-0 text-muted' }),
+          r.phones[0]
+        ])
+      }
+      return h('span', { class: 'text-muted' }, '—')
+    }
   },
   {
     id: 'where',
@@ -169,12 +226,14 @@ const columns: TableColumn<PostRow>[] = [
     // the owner's own triage outranks the drafter's verdict: a drafted post can be dismissed too
     cell: ({ row }) => row.original.dismissedAt
       ? h(UBadge, { variant: 'subtle', color: 'neutral' }, () => 'dismissed')
-      : row.original.verdict
-        ? h(UBadge, {
-            variant: 'subtle',
-            color: row.original.verdict === 'drafted' ? 'primary' : 'neutral'
-          }, () => row.original.verdict)
-        : h('span', { class: 'text-xs text-muted' }, 'unprocessed')
+      : row.original.appliedAt
+        ? h(UBadge, { variant: 'subtle', color: 'success' }, () => 'applied')
+        : row.original.verdict
+          ? h(UBadge, {
+              variant: 'subtle',
+              color: row.original.verdict === 'drafted' ? 'primary' : 'neutral'
+            }, () => row.original.verdict)
+          : h('span', { class: 'text-xs text-muted' }, 'unprocessed')
   },
   {
     id: 'actions',
@@ -192,8 +251,9 @@ const columns: TableColumn<PostRow>[] = [
               onClick: () => setDismissed([r.key], false)
             })
           : null,
-        // no second email to a recruiter already handled, and nothing to draft without an address
-        r.dismissedAt || r.verdict || !r.emails.length
+        // no second email to a recruiter already handled, nothing to draft without an address, and
+        // nothing to draft for a role the owner has already applied to themselves
+        r.dismissedAt || r.appliedAt || r.verdict || !r.emails.length
           ? null
           : h(UButton, {
               label: 'Draft',
@@ -203,6 +263,20 @@ const columns: TableColumn<PostRow>[] = [
               variant: 'outline',
               disabled: queued.value.has(r.key),
               onClick: () => draft(r.key)
+            }),
+        // The way a link-only or phone-only post leaves the queue: nothing here can draft it, so the
+        // owner applies through the post itself and records that they did.
+        r.dismissedAt
+          ? null
+          : h(UButton, {
+              'icon': r.appliedAt ? 'i-lucide-undo-2' : 'i-lucide-check',
+              'color': r.appliedAt ? 'neutral' : 'success',
+              'variant': 'ghost',
+              'size': 'sm',
+              'title': r.appliedAt ? 'Applied — click to un-mark' : 'Mark applied',
+              'aria-label': r.appliedAt ? 'Un-mark applied' : 'Mark applied',
+              'disabled': busy.value,
+              'onClick': () => setApplied([r.key], !r.appliedAt)
             }),
         r.dismissedAt
           ? null
@@ -265,6 +339,7 @@ const columns: TableColumn<PostRow>[] = [
             { label: 'All active', value: 'all' },
             { label: 'Drafted', value: 'drafted' },
             { label: 'Skipped', value: 'skipped' },
+            { label: 'Applied by hand', value: 'applied' },
             { label: 'Dismissed', value: 'dismissed' }
           ]"
           class="min-w-36"
@@ -297,6 +372,16 @@ const columns: TableColumn<PostRow>[] = [
           class="min-w-32"
         />
         <USelect
+          v-model="channel"
+          :items="[
+            { label: 'Any contact', value: 'all' },
+            { label: 'By email', value: 'email' },
+            { label: 'By link', value: 'link' },
+            { label: 'By phone', value: 'phone' }
+          ]"
+          class="min-w-32"
+        />
+        <USelect
           v-model="minScore"
           :items="[
             { label: 'Any score', value: 0 },
@@ -319,7 +404,27 @@ const columns: TableColumn<PostRow>[] = [
               @click="setDismissed(selectedKeys, false)"
             />
             <UButton
+              v-else-if="status === 'applied'"
+              label="Un-mark"
+              icon="i-lucide-undo-2"
+              size="xs"
+              color="neutral"
+              variant="outline"
+              :loading="busy"
+              @click="setApplied(selectedKeys, false)"
+            />
+            <UButton
               v-else
+              label="Applied"
+              icon="i-lucide-check"
+              size="xs"
+              color="neutral"
+              variant="outline"
+              :loading="busy"
+              @click="setApplied(selectedKeys, true)"
+            />
+            <UButton
+              v-if="status !== 'dismissed' && status !== 'applied'"
               label="Dismiss"
               icon="i-lucide-x"
               size="xs"
@@ -364,6 +469,39 @@ const columns: TableColumn<PostRow>[] = [
                   class="size-3 shrink-0"
                 />
               </ULink>
+            </p>
+            <p
+              v-if="row.original.refIds.length"
+              class="text-muted"
+            >
+              <span class="font-medium text-highlighted">Reference:</span>
+              <span class="font-mono text-xs">{{ row.original.refIds.join(', ') }}</span>
+            </p>
+            <!-- Every link the card carried, not only the one the Contact column judged usable: when a
+                 post looks like it should have been reachable and was not, this is where you look. -->
+            <p
+              v-if="row.original.links.length || row.original.phones.length"
+              class="text-muted flex flex-wrap items-center gap-x-3 gap-y-1"
+            >
+              <span class="font-medium text-highlighted">Contacts:</span>
+              <ULink
+                v-for="l in row.original.links"
+                :key="l"
+                :to="l"
+                target="_blank"
+                class="inline-flex items-center gap-1 text-xs font-mono"
+              >
+                {{ l }}
+                <UIcon
+                  name="i-lucide-external-link"
+                  class="size-3 shrink-0"
+                />
+              </ULink>
+              <span
+                v-for="ph in row.original.phones"
+                :key="ph"
+                class="text-xs font-mono"
+              >{{ ph }}</span>
             </p>
             <p
               v-if="row.original.reason"

@@ -13,6 +13,14 @@ import { normalizeCountries } from './countries.ts'
 const blankOr = (inner: z.ZodType, message: string) =>
   z.string().trim().refine(v => v === '' || inner.safeParse(v).success, { message })
 
+/**
+ * The contact routes a post can offer, in the order they are stored and shown. Here rather than in
+ * scraper/lib.ts because the Settings form binds to it and this module is the one both can import:
+ * lib.ts reaches for node:crypto, which has no business in a browser bundle.
+ */
+export const CONTACT_CHANNELS = ['email', 'link', 'phone'] as const
+export type ContactChannel = (typeof CONTACT_CHANNELS)[number]
+
 export const settingsSchema = z.object({
   profile: z.object({
     name: z.string().trim(),
@@ -55,7 +63,7 @@ export const settingsSchema = z.object({
   // is the default and the other two are opt-in — a post kept for its link or its number is one the
   // owner has to apply to by hand. Not `.min(1)` here on purpose: this schema checks shape only and a
   // half-filled form must still save (see the note at the top). missingFields() is the run gate.
-  contactChannels: z.array(z.enum(['email', 'link', 'phone'])),
+  contactChannels: z.array(z.enum(CONTACT_CHANNELS)),
   // What an application email may say. Replaces the hand-written Evidence and Gaps sections that
   // used to live in the drafter skill file, so retargeting this tool stays data entry.
   //
