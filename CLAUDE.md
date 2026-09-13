@@ -222,8 +222,10 @@ drafts keep arguing from a stale CV.
 
 ### LinkedIn and the scraper
 
-- **Every outbound link LinkedIn renders is an opaque `lnkd.in` hash**, in the anchor `href` as well as the
-  text — 11 of 11 across both stored corpora. So you cannot tell a careers page from a blog post, and
+- **Outbound links are opaque.** LinkedIn rewrites most to an `lnkd.in` hash — 11 of 11 in the stored
+  corpora, and 11 of 12 in a live feed sample — and the exception was `okt.to`, somebody else's shortener,
+  so it is no better. The hash is in the anchor `href` as well as the text. You cannot tell a careers page
+  from a blog post, and
   domain filtering (`lever.co`, `/careers`) is impossible without following the redirect. Link admission
   is therefore gated on the **prose**, and on proximity, not on the URL: `applyCueNear()` in
   `scraper/lib.ts` wants an apply cue within **300 characters before** the link. Whole-text matching was

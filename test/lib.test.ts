@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  admits, ageOf, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds,
+  admits, ageOf, applyCueFor, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds,
   fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, normalize, postedAt, postUrlFrom, prescreen,
   resolveUrls, SCORE_SCHEMA, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
@@ -442,4 +442,10 @@ test('channelsOf: an apply cue a sentence before the link does point at it', () 
   const link = 'https://lnkd.in/gKFzEnpK'
   const text = `How to Apply: if you are interested, drop your CV to hr@acme.example with the subject Name - Job Position, or ${link}`
   assert.deepEqual(channelsOf({ emails: [], links: [link], phones: [] }, text), ['link'])
+})
+
+test('applyCueFor names the cue that admitted a link, for tuning against real cards', () => {
+  const link = 'https://acme.example/x'
+  assert.equal(applyCueFor(`How to Apply: details here. ${link}`, link), 'to Apply')
+  assert.equal(applyCueFor(`Read our blog post. ${link}`, link), null)
 })

@@ -263,7 +263,9 @@ async function run({ dry }: { dry: boolean }) {
   const page = ctx.pages()[0] || await ctx.newPage()
   let added = 0
   try {
-    for (const term of dry ? SEARCH_TERMS.slice(0, 1) : SEARCH_TERMS) {
+    // A dry run over the whole configured list is nine searches nobody asked for, so it stops at the
+    // first term — unless --terms named them, in which case running exactly those is the entire point.
+    for (const term of dry && !opts.terms ? SEARCH_TERMS.slice(0, 1) : SEARCH_TERMS) {
       checkStop()
       let cards: Card[]
       try {
@@ -291,7 +293,8 @@ async function run({ dry }: { dry: boolean }) {
           // The dry run is how the admission rules were set, so it reports what the gate would decide
           // and the raw material behind it — deliberately ignoring contactChannels, because a
           // measurement gated by the current settings cannot tell you what to set them to.
-          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${channels.join('+') || 'NO CHANNEL'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refIds.join(' ') || '-'} | ${c.postUrl || 'NO URL'} | ${text.replace(/\s+/g, ' ').slice(0, 60)}`)
+          const cue = links.map(l => applyCueFor(text, l)).find(Boolean)
+          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${channels.join('+') || 'NO CHANNEL'} | cue:${cue ? `"${cue}"` : '-'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refIds.join(' ') || '-'} | ${text.replace(/\s+/g, ' ').slice(0, 60)}`)
           continue
         }
         if (!admits(channels, CONFIG.contactChannels)) continue

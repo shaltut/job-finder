@@ -125,9 +125,15 @@ const CUE_WINDOW = 300
  * to the whole-post test rather than being silently dropped.
  */
 export function applyCueNear(text: string, link: string): boolean {
+  return applyCueFor(text, link) !== null
+}
+
+/** The cue that admitted this link, or null. Same rule as applyCueNear — the dry run reports it, which
+ *  is how you tune APPLY_CUE against real cards instead of against the ones already in the database. */
+export function applyCueFor(text: string, link: string): string | null {
   const at = text.indexOf(link)
-  if (at < 0) return hasApplyCue(text)
-  return hasApplyCue(text.slice(Math.max(0, at - CUE_WINDOW), at))
+  const window = at < 0 ? text : text.slice(Math.max(0, at - CUE_WINDOW), at)
+  return APPLY_CUE.exec(window)?.[0] ?? null
 }
 
 /**
