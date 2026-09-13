@@ -22,6 +22,13 @@
       "when": 1789073128758,
       "tag": "0002_lying_warpath",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789300802668,
+      "tag": "0003_swift_santa_claus",
+      "breakpoints": true
     }
   ]
 }

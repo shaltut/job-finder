@@ -42,6 +42,8 @@ export interface DraftPost {
   company: string | null
   location: string | null
   score: number | null
+  /** The scorer's "who is posting" call. Null on rows scored before the column existed. */
+  postType: 'hiring' | 'seeking' | 'other' | null
   flags: string[]
   text: string
 }
@@ -170,7 +172,7 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
     recruiter_email: req.recruiterEmail,
     posts: req.posts.map(p => ({
       key: p.key, title: p.title, company: p.company, location: p.location,
-      score: p.score, flags: p.flags, text: p.text
+      score: p.score, post_type: p.postType, flags: p.flags, text: p.text
     }))
   })
 

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  ageOf, dedupeKey, extractEmails, FLAG_RULES, normalize, postedAt, postUrlFrom, prescreen, resolveUrls,
-  searchUrl, systemPrompt, tokenFromId, urnMap
+  ageOf, dedupeKey, extractEmails, FLAG_RULES, gateOnPostType, normalize, postedAt, postUrlFrom, prescreen,
+  resolveUrls, SCORE_SCHEMA, searchUrl, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
 import { emptySettings } from '../shared/settings.ts'
@@ -97,6 +97,63 @@ test('prescreen: WordPress-only piecework is flagged, headless WordPress is not'
 test('immediate-start is NOT a flag: Mohamed can start immediately', () => {
   assert.ok(!('immediate-start' in FLAG_RULES))
   assert.deepEqual(prescreen('Immediate joiners only. Send CV to hr@acme.sa'), [])
+})
+
+// The three below are the real stored text of the posts that scored 7/10 and sat at the top of the drafter
+// queue: other frontend engineers advertising themselves. A peer's self-description is the best possible
+// match for this CV, which is exactly why scoring alone could never catch them.
+test('prescreen: a developer advertising themselves is flagged as seeking-work', () => {
+  // typographic apostrophe, and the hashtag form with no separators
+  assert.ok(prescreen('\u{1F680} I’m #OpenToWork and looking for my next opportunity as a Senior Front-End Developer. hello@example.dev').includes('seeking-work'))
+  // ASCII apostrophe
+  assert.ok(prescreen('Hi connections! I\'m actively seeking my next role as a Senior Software Engineer. me@example.com').includes('seeking-work'))
+  // the freelancer pitch, which carries no "open to work" wording at all
+  assert.ok(prescreen('I\'m Usman, a Senior Frontend Engineer. Services I offer:\n→ Frontend development. me@example.com').includes('seeking-work'))
+})
+
+// The load-bearing case: this is a genuine DecipherZone vacancy posted by someone whose own LinkedIn
+// headline ends "| Open to Work". The scored text includes the card header, so a bare /open to work/ rule
+// would bury a real job. Requiring the first person is what separates the two.
+test('prescreen: seeking-work is first person, so a real req from an "Open to Work" author survives', () => {
+  const realReq = 'Rajesh Vankam\n\nJava Backend Developer | Spring Boot • REST APIs | Open to Work\n\n16h\n\nFollow\n\n#Hiring \u{1F680} We’re Hiring | Frontend Developer\n\nDecipherZone Technologies is looking for talented Frontend Developers. careers@decipherzone.com'
+  assert.ok(!prescreen(realReq).includes('seeking-work'))
+  // and a recruiter offering their own time is not seeking work either
+  assert.ok(!prescreen('We are hiring a Senior Vue Developer. I am available for any questions. hr@acme.sa').includes('seeking-work'))
+})
+
+// Measured, not assumed: across five rescores of the same 21 stored posts the classification never moved,
+// while the score the prompt tells the model to pin at 0 did. Hence the arithmetic lives in code.
+test('gateOnPostType: a non-hiring post cannot keep a score or a location verdict', () => {
+  const seeker = { post_type: 'seeking', score: 8, is_remote: true, is_in_scope: true, title: 'Senior Frontend Engineer' }
+  assert.deepEqual(gateOnPostType(seeker), { post_type: 'seeking', score: 0, is_remote: false, is_in_scope: false, title: 'Senior Frontend Engineer' })
+  // 'other' is gated the same way — a security advisory is not a job either
+  assert.equal(gateOnPostType({ post_type: 'other', score: 6, is_remote: true, is_in_scope: true }).score, 0)
+  // a hiring post passes through untouched, object identity included
+  const job = { post_type: 'hiring', score: 9, is_remote: true, is_in_scope: true }
+  assert.equal(gateOnPostType(job), job)
+})
+
+test('SCORE_SCHEMA: post_type is required, because strict mode gives the model no other way to say it', () => {
+  assert.ok(SCORE_SCHEMA.required.includes('post_type'))
+  assert.deepEqual(SCORE_SCHEMA.properties.post_type.enum, ['hiring', 'seeking', 'other'])
+  // every property must be listed in `required` or the Responses API rejects a strict schema
+  assert.deepEqual([...SCORE_SCHEMA.required].sort(), Object.keys(SCORE_SCHEMA.properties).sort())
+})
+
+test('systemPrompt: post_type is defined AFTER the scoring rules, and that order is load-bearing', () => {
+  const p = systemPrompt('CV-MARKER-TEXT', config)
+  assert.match(p, /post_type — who is posting/)
+  assert.match(p, /"seeking": the author is advertising themselves/)
+  // An author whose headline says "Open to Work" can still be posting a real vacancy; the prompt has to
+  // say so, or a genuine req is classified by its poster's job hunt.
+  assert.match(p, /may still be posting a real vacancy/)
+  // The order is the finding, not a preference: with post_type stated first, out-of-scope on-site roles
+  // went from 0-2 to 7 across two rescores of the stored posts — the location rule lost its position at
+  // the top of the prompt. post_type is appended so every rule that was tuned above it keeps its place.
+  assert.ok(
+    p.indexOf('not named above are out of scope') < p.indexOf('post_type — who is posting'),
+    'the location scope rule must precede the post_type block'
+  )
 })
 
 test('systemPrompt: embeds the CV and the configured titles and locations', () => {

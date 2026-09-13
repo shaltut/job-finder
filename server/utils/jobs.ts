@@ -242,10 +242,19 @@ async function runDraftJob(
       ? db.prepare(
           `SELECT p.* FROM posts p WHERE p.key IN (${args.keys.map(() => '?').join(',')})`
         ).all(...args.keys)
+      // Flags and score exclude here rather than merely sorting last: this query decides who receives an
+      // email from a real person's account. It is the 'usable' KPI minus its `(in_scope OR remote)` half —
+      // deliberately, because the scorer leaves `location` unknown often enough that including it would
+      // have dropped the one post that was legitimately drafted. So Usable can read 0 while this is not
+      // empty; the drafter's own location hard skip is the gate for where a role actually is.
       : db.prepare(`
           SELECT p.* FROM posts p LEFT JOIN applications a ON a.key = p.key
-          WHERE a.key IS NULL AND json_array_length(p.emails) > 0
-          ORDER BY json_array_length(p.flags) > 0, p.score DESC, p.posted_at DESC
+          WHERE a.key IS NULL
+            AND json_array_length(p.emails) > 0
+            AND coalesce(p.post_type, 'hiring') = 'hiring'
+            AND json_array_length(p.flags) = 0
+            AND p.score >= 6
+          ORDER BY p.score DESC, p.posted_at DESC
           LIMIT ?
         `).all(args.n ?? 10)
 
@@ -266,6 +275,7 @@ async function runDraftJob(
         company: r.company as string | null,
         location: r.location as string | null,
         score: r.score as number | null,
+        postType: (r.post_type as DraftPost['postType']) ?? null,
         flags: JSON.parse((r.flags as string) || '[]'),
         text: r.text as string
       }

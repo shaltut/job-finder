@@ -32,7 +32,7 @@ A JSON object on stdin:
   "recruiter_email": "hr@acme.sa",
   "posts": [                     // every unprocessed post from THIS recruiter
     { "key": "<sha1>", "title": "…", "company": "…", "location": "…",
-      "score": 8, "flags": ["night-shift"], "text": "<full post text>" }
+      "score": 8, "post_type": "hiring", "flags": ["night-shift"], "text": "<full post text>" }
   ]
 }
 ```
@@ -41,9 +41,10 @@ A JSON object on stdin:
 naming each role that passes screening. Near-identical text from different authors is the same role reposted:
 treat it as one.
 
-`score` and `flags` are hints from the scraper. `score` is an ordering hint from a small model and it
-overclaims — never repeat its wording. `flags` are regex guesses; confirm each one in the post text before you
-act on it.
+`score`, `post_type` and `flags` are hints from the scraper. `score` is an ordering hint from a small model
+and it overclaims — never repeat its wording. `post_type` is that model's answer to "who is posting"; it is
+`"hiring"` for everything the server queues, and `null` on rows scored before the field existed. `flags` are
+regex guesses; confirm each one, and `post_type`, in the post text before you act on it.
 
 ## Output
 
@@ -77,6 +78,14 @@ Rules for the fields:
 
 ### Hard skips — do not draft; return `skipped` with the reason
 
+- **The author is not hiring — check this one first.** The post advertises the *author* rather than a
+  vacancy: "I'm #OpenToWork", "open to opportunities", "actively seeking my next role", "Services I
+  offer", a freelance pitch, a CV in the post. Or it is not a job post at all — news, a course ad, a
+  security advisory. The contact address is then the author's own. Judge the body, not the profile
+  headline: someone whose headline ends "| Open to Work" can still be posting a real vacancy for their
+  employer, and that post is a normal draft. A wrong skip here loses one lead; a wrong draft emails a
+  fellow job seeker to ask them for a job. `post_type` in the payload carries the scorer's call and
+  `seeking-work` in `flags` the regex's — confirm either in the post text before acting on it.
 - **Location outside the injected scope.** In: genuinely location-free remote, and on-site or hybrid in the
   injected on-site countries. Out: on-site or hybrid anywhere else — Europe, UK, US, India, elsewhere in MENA.
   A role that is remote *but* requires office days somewhere out of scope is out.
@@ -186,7 +195,8 @@ explicitly flags as unverified. They are not evidence. Use the hard numbers inst
 7. Availability, when the posting raises timing — he can start immediately.
 8. End with "CV attached." Write no signature; the server appends it.
 
-**Tone.** Direct and specific. Numbers over adjectives, no superlatives about himself. Recruiter posts and
+**Tone.** Direct and specific. Numbers over adjectives, no superlatives about himself. Every post that
+reaches this section is one where somebody is hiring — anything else was skipped above. Recruiter posts and
 unnamed-client staffing reqs get a short version plus a question about the client, location, rate and time
 zone. Named companies with real job specs get the full treatment. Six to fourteen sentences.
 

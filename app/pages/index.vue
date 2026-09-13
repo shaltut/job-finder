@@ -28,14 +28,21 @@ async function draft(key: string) {
 
 const q = ref('')
 const flags = ref<'all' | 'clean' | 'flagged'>('clean')
+const type = ref<'hiring' | 'all' | 'other'>('hiring')
 const scope = ref<'all' | 'in-scope' | 'remote'>('all')
 const status = ref<'all' | 'unprocessed' | 'drafted' | 'skipped'>('unprocessed')
 const minScore = ref(0)
 
+// Seekers carry the `seeking-work` flag, so asking for non-hiring posts under the default 'Unflagged'
+// would return only the unflagged non-jobs and hide the very rows this filter exists to show.
+watch(type, (t) => {
+  if (t === 'other') flags.value = 'all'
+})
+
 const expanded = ref<Record<string, boolean>>({})
 
 const { data, status: reqStatus, refresh } = await useFetch<{ rows: PostRow[], total: number }>('/api/posts', {
-  query: { q, flags, scope, status, minScore },
+  query: { q, flags, scope, status, minScore, type },
   lazy: true,
   default: () => ({ rows: [], total: 0 })
 })
@@ -76,10 +83,20 @@ const columns: TableColumn<PostRow>[] = [
   {
     accessorKey: 'flags',
     header: 'Flags',
-    cell: ({ row }) => row.original.flags.length
-      ? h('div', { class: 'flex flex-wrap gap-1' }, row.original.flags.map(f =>
-          h(UBadge, { variant: 'soft', color: 'warning', size: 'sm' }, () => f)))
-      : h('span', { class: 'text-muted' }, '—')
+    cell: ({ row }) => {
+      const badges = [
+        // why a row is excluded: the model's call first, then the regex pre-screen's
+        row.original.postType && row.original.postType !== 'hiring'
+          ? h(UBadge, { variant: 'subtle', color: 'error', size: 'sm' }, () =>
+              row.original.postType === 'seeking' ? 'job seeker' : 'not a job')
+          : null,
+        ...row.original.flags.map(f =>
+          h(UBadge, { variant: 'soft', color: 'warning', size: 'sm' }, () => f))
+      ].filter(Boolean)
+      return badges.length
+        ? h('div', { class: 'flex flex-wrap gap-1' }, badges)
+        : h('span', { class: 'text-muted' }, '—')
+    }
   },
   {
     id: 'age',
@@ -159,6 +176,15 @@ const columns: TableColumn<PostRow>[] = [
             { label: 'All', value: 'all' },
             { label: 'Drafted', value: 'drafted' },
             { label: 'Skipped', value: 'skipped' }
+          ]"
+          class="min-w-36"
+        />
+        <USelect
+          v-model="type"
+          :items="[
+            { label: 'Hiring only', value: 'hiring' },
+            { label: 'Any post type', value: 'all' },
+            { label: 'Not hiring', value: 'other' }
           ]"
           class="min-w-36"
         />

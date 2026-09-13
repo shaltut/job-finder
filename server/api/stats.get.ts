@@ -13,11 +13,14 @@ export default defineEventHandler(async () => {
   }>(sql`
     SELECT
       (SELECT count(*) FROM posts) AS total,
-      -- 'usable' is the funnel that matters: scores well, no pre-screen flag, and somewhere he can work
+      -- 'usable' is the funnel that matters: someone is actually hiring, it scores well, no pre-screen
+      -- flag, and somewhere he can work. coalesce: NULL post_type predates the column, so it counts.
       (SELECT count(*) FROM posts
-        WHERE score >= 6 AND json_array_length(flags) = 0 AND (in_scope = 1 OR remote = 1)) AS usable,
+        WHERE score >= 6 AND coalesce(post_type, 'hiring') = 'hiring'
+          AND json_array_length(flags) = 0 AND (in_scope = 1 OR remote = 1)) AS usable,
       (SELECT count(*) FROM posts p LEFT JOIN applications a ON a.key = p.key
-        WHERE a.key IS NULL AND json_array_length(p.flags) = 0) AS unprocessed,
+        WHERE a.key IS NULL AND coalesce(p.post_type, 'hiring') = 'hiring'
+          AND json_array_length(p.flags) = 0) AS unprocessed,
       (SELECT count(*) FROM posts WHERE scraped_at >= unixepoch() - 86400) AS last24h,
       (SELECT count(*) FROM applications WHERE verdict = 'drafted') AS drafted,
       (SELECT max(scraped_at) FROM posts) AS scrapedAt

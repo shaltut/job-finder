@@ -94,12 +94,22 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   URN gotcha below. `score` 0-10 and `reason` are model output against the CV: **ordering hints only,
   and `reason` overclaims** — never copy it into an email. `emails` comes from a deterministic regex, never
   from the model. `in_scope` (was `mena`) means Egypt/Saudi/UAE/Qatar or genuinely location-free remote.
+  `post_type` is `hiring` | `seeking` | `other` — **who is posting**. Only `hiring` is a job; `seeking` is
+  another developer advertising themselves and `other` is not a job post at all. NULL means the row was
+  scored before the column existed, so every consumer reads `coalesce(post_type, 'hiring')` — without that
+  the migration empties the UI until a rescore finishes. `--rescore` is the only path that fills it.
 - **`posts.flags`** — pre-screen hints mirroring the skill's hard skips, produced by `prescreen()` in
-  `scraper/lib.ts`: four regex rules in `FLAG_RULES` (`residency-gate`, `night-shift`, `junior`,
-  `wordpress-only`) plus `junior-years`, which comes from a separate years-of-experience check and is not in
-  that table. Hints only; the drafter confirms them in the text, and the UI and the drafter queue sort flagged
-  posts last. **`immediate-start` was deliberately removed** — Mohamed can start immediately, so flagging it
+  `scraper/lib.ts`: five regex rules in `FLAG_RULES` (`residency-gate`, `night-shift`, `junior`,
+  `wordpress-only`, `seeking-work`) plus `junior-years`, which comes from a separate years-of-experience check
+  and is not in that table. Hints only; the drafter confirms them in the text, and the UI hides flagged posts
+  by default. **The drafter queue now excludes them outright** rather than sorting them last — see below.
+  **`immediate-start` was deliberately removed** — Mohamed can start immediately, so flagging it
   would demote good posts for what is now an advantage.
+  **`seeking-work` must stay first-person** (`I'm #OpenToWork`, `I am actively seeking`, `Services I offer`).
+  The scored text includes the LinkedIn card header, so a bare `/open to work/` also matches the *headline*
+  of a recruiter who happens to be job hunting — one stored row is a genuine DecipherZone req posted by
+  someone whose headline ends `| Open to Work`. Run the rule over the stored posts before changing it: it
+  must fire on exactly the three seeker rows and nothing else.
 - **`applications`** — one row per post touched. `verdict` drafted|skipped. Reasons for drafted posts **must**
   start with `named in application` / `named in follow-up`; the follow-up query relies on that prefix.
 - **`settings`** — exactly one row (`id = 1`), holding the whole config as JSON. One column rather than
@@ -323,8 +333,15 @@ back on a different host, port and path — which Google accepts.
 
 - The **Google round trip has never run** — token exchange, refresh, real draft creation, a real sweep are
   written and unit tested but untested against Google, because `google-oauth.json` does not exist yet.
-- The **Usable** KPI counts `score >= 6 AND no flags AND (in_scope OR remote)`, so a strong role whose post
-  never states a location is missing from the headline number. It still appears in the Posts list.
+- The **Usable** KPI counts `score >= 6 AND post_type is hiring AND no flags AND (in_scope OR remote)`, so a
+  strong role whose post never states a location is missing from the headline number. It still appears in the
+  Posts list, and the **drafter queue deliberately omits the `(in_scope OR remote)` half** — the scorer leaves
+  `location` unknown often enough that adding it would have excluded the one post that was legitimately
+  drafted. The queue is otherwise the same predicate. So Usable can read 0 while the queue is non-empty.
+- **The scoring model classifies reliably but does not reliably act on its own classification.** Across five
+  rescores of the same 21 posts the `post_type` call never moved; the "then score 0" instruction was obeyed
+  only sometimes. `gateOnPostType()` in `scraper/lib.ts` therefore zeroes `score`/`is_remote`/`is_in_scope`
+  in code, the same way `emails` is regex and never the model's. Do not move that back into the prompt.
 - **`resolveUrls` only dedupes within one search term**, and nothing constrains `post_url` to be unique, so a
   post mispaired under one term and paired correctly under another would keep both rows' URLs. Not observed —
   the search-path rule resolved 26/26 cards uniquely across the runs that established it.

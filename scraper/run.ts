@@ -15,7 +15,7 @@ import Database from 'better-sqlite3'
 import OpenAI from 'openai'
 import { chromium } from 'playwright-core'
 import {
-  ageOf, dedupeKey, extractEmails, normalize, postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl,
+  ageOf, dedupeKey, extractEmails, gateOnPostType, normalize, postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl,
   sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
@@ -223,6 +223,7 @@ async function loadCv(path: string) { // the model reads the PDF itself, one cal
 }
 
 interface Score {
+  post_type: 'hiring' | 'seeking' | 'other'
   title: string
   company: string
   location: string
@@ -240,7 +241,7 @@ async function scorePost(text: string): Promise<Score> {
     input: [{ role: 'system', content: system }, { role: 'user', content: text }],
     text: { format: { type: 'json_schema', name: 'job_post', strict: true, schema: SCORE_SCHEMA } }
   } as never) as { output_text: string }
-  return JSON.parse(r.output_text)
+  return gateOnPostType(JSON.parse(r.output_text) as Score)
 }
 
 // ---------------- main ----------------
@@ -306,6 +307,7 @@ async function run({ dry }: { dry: boolean }) {
           postUrl: c.postUrl,
           postedAge: age || null,
           postedAt: postedAt(age)?.toISOString() ?? null,
+          postType: s.post_type,
           title: s.title,
           company: s.company,
           location: s.location,
@@ -359,7 +361,7 @@ async function rescore() {
     try {
       const s = await scorePost(r.text)
       emit({
-        op: 'update', key: r.key,
+        op: 'update', key: r.key, postType: s.post_type,
         title: s.title, company: s.company, location: s.location,
         remote: s.is_remote, inScope: s.is_in_scope, score: s.score, reason: s.reason
       })

@@ -140,7 +140,13 @@ export const FLAG_RULES: Record<string, RegExp> = {
   'night-shift': /night shifts?|\b(us|uk|est|pst|cst|ist|eastern|pacific) (shift|hours|timings?|time ?zone|working hours)\b|rotational shifts?/i,
   'junior': /\bfresh(ers?|\s+graduates?)\b|\bjuniors?\b|\bintern(ship)?s?\b|\bentry[- ]level\b|\btrainees?\b/i,
   // Frontend searches surface heavy WordPress/Shopify piecework; that experience is 2014-2017 and dated.
-  'wordpress-only': /\b(wordpress|woocommerce|shopify)\b(?![^.]*\b(react|vue|nuxt|next\.?js|headless)\b)/i
+  'wordpress-only': /\b(wordpress|woocommerce|shopify)\b(?![^.]*\b(react|vue|nuxt|next\.?js|headless)\b)/i,
+  // The author advertising themselves rather than a vacancy: a peer's self-description is the best possible
+  // match for this CV, which is exactly why it used to score 7. First person on purpose — the scored text
+  // includes the LinkedIn card header, and a bare /open to work/ buries a genuine req posted by someone
+  // whose own headline ends '| Open to Work'. 'available for' is narrowed for the same reason: a recruiter
+  // writes "I'm available for any questions". Both apostrophes: LinkedIn emits ASCII and typographic.
+  'seeking-work': /\bI(?:'m|’m| am)\s+(?:currently\s+)?(?:#?open[ _]?to[ _]?(?:work|opportunities)|actively (?:seeking|looking)|looking for (?:my next|a new)|available for (?:hire|freelance|work|new opportunities|immediate))|\bservices I offer\b|\b(?:hire|refer) me\b|\bmy (?:cv|resume) is attached\b/i
 }
 
 export function prescreen(text: string, _emails: string[] = []): string[] {
@@ -184,14 +190,33 @@ is_remote: true only if the post says remote or work from home.
 is_in_scope: true if the location, the company, or${tlds.length ? ` the contact email domain (${tlds.join(' ')}) or` : ''} anything else in the post points to one of the countries named above, or the role is genuinely location-free remote.
 score: 9-10 the role fits the CV's seniority, stack and domain and the location fits; 6-8 strong stack match with one gap (seniority a step off, adjacent stack, location unclear); 3-5 related software role with a major gap; 0-2 unrelated or out of location scope.
 Credit a skill, tool, standard or domain only if the CV text explicitly contains it; never infer or assume it. Anything the post asks for that the CV does not mention is a gap.
-Use "unknown" for strings you cannot find. reason: one sentence in the form "Match: <what the CV shows that the post asks for>; Gaps: <what the post asks for that the CV lacks, or none>".`
+Use "unknown" for strings you cannot find. reason, for a hiring post: one sentence in the form "Match: <what the CV shows that the post asks for>; Gaps: <what the post asks for that the CV lacks, or none>".
+Finally, post_type — who is posting. The text you were given starts with the LinkedIn card header (the author's name, their profile headline, the age, "Connect" or "Follow"); judge the body, not the header, and never take the title or company from the header.
+- "hiring": the author is advertising a vacancy, their own company's or a client's. Someone else would apply. An author whose own headline says "Open to Work" may still be posting a real vacancy for their employer — that is still "hiring".
+- "seeking": the author is advertising themselves — open to work, looking for their next role, available for hire, or offering freelance services. The author would be the applicant and the contact address is their own.
+- "other": neither. News, a course or bootcamp ad, a tool or security advisory, general networking.
+If post_type is not "hiring", that overrides everything above: score 0, is_remote false, is_in_scope false, company and location "unknown", title the role the author is seeking or "unknown", and reason one sentence naming what the post actually is. Do not score stack overlap in that case — a peer's self-description matches this CV almost perfectly, and that is the mistake this field exists to prevent.`
+}
+
+/**
+ * The scoring model's own "if it is not hiring, score 0" instruction is only sometimes obeyed: measured over
+ * five rescores of the same 21 posts, the post_type classification never moved and the score it was told to
+ * pin did. So the arithmetic happens here instead of being asked for — the same discipline as `emails`,
+ * which is regex output and never the model's. A non-hiring post cannot carry a score, a location verdict,
+ * or a place in any ranking.
+ */
+export function gateOnPostType<T extends { post_type: string, score: number, is_remote: boolean, is_in_scope: boolean }>(s: T): T {
+  return s.post_type === 'hiring' ? s : { ...s, score: 0, is_remote: false, is_in_scope: false }
 }
 
 export const SCORE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['title', 'company', 'location', 'is_remote', 'is_in_scope', 'score', 'reason'],
+  // strict mode requires every property to be listed here, so post_type is never optional
+  required: ['post_type', 'title', 'company', 'location', 'is_remote', 'is_in_scope', 'score', 'reason'],
   properties: {
+    /** Who is posting. Only 'hiring' is a job; the rest are filtered out downstream. */
+    post_type: { type: 'string', enum: ['hiring', 'seeking', 'other'] },
     title: { type: 'string' },
     company: { type: 'string' },
     location: { type: 'string' },

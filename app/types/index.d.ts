@@ -10,6 +10,8 @@ export interface PostRow {
   authorUrl: string | null
   postUrl: string | null
   postedAge: string | null
+  /** 'hiring' | 'seeking' | 'other'; null on rows scored before the column existed. */
+  postType: 'hiring' | 'seeking' | 'other' | null
   postedAt: string | null
   title: string | null
   company: string | null

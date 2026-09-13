@@ -24,6 +24,13 @@ export const posts = sqliteTable('posts', {
   /** LinkedIn's relative age as scraped ('5h', '2d'); postedAt pins it to an instant. */
   postedAge: text('posted_age'),
   postedAt: integer('posted_at', { mode: 'timestamp' }),
+  /**
+   * Who is posting, from the scoring model: 'hiring' | 'seeking' | 'other'. Only 'hiring' is a job — a
+   * peer's "I'm #OpenToWork" post is the best possible CV match, which is why it used to score 7 and sit
+   * at the top of the drafter queue. NULL means the row was scored before this column existed, and every
+   * consumer reads it as `coalesce(post_type, 'hiring')` so a migration does not empty the UI.
+   */
+  postType: text('post_type').$type<'hiring' | 'seeking' | 'other'>(),
   title: text('title'),
   company: text('company'),
   location: text('location'),

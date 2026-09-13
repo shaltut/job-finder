@@ -123,6 +123,7 @@ async function draftFollowUp(db: Database.Database, config: AppConfig, email: st
   const rows = db.prepare(`
     SELECT p.* FROM posts p LEFT JOIN applications a ON a.key = p.key
     WHERE EXISTS (SELECT 1 FROM json_each(p.emails) WHERE value = ?)
+      AND coalesce(p.post_type, 'hiring') = 'hiring'
       AND (a.key IS NULL OR a.reason NOT LIKE 'named in %')
   `).all(email) as Record<string, unknown>[]
 
@@ -132,6 +133,7 @@ async function draftFollowUp(db: Database.Database, config: AppConfig, email: st
     company: r.company as string | null,
     location: r.location as string | null,
     score: r.score as number | null,
+    postType: (r.post_type as DraftPost['postType']) ?? null,
     flags: JSON.parse((r.flags as string) || '[]'),
     text: r.text as string
   }))

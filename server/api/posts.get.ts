@@ -7,6 +7,8 @@ const query = z.object({
   q: z.string().trim().max(200).optional(),
   /** clean = no pre-screen flags; flagged = at least one */
   flags: z.enum(['all', 'clean', 'flagged']).default('all'),
+  /** hiring = real vacancies (NULL counts, it predates the column); other = job seekers and non-jobs */
+  type: z.enum(['hiring', 'all', 'other']).default('hiring'),
   scope: z.enum(['all', 'in-scope', 'remote']).default('all'),
   status: z.enum(['all', 'unprocessed', 'drafted', 'skipped']).default('all'),
   minScore: z.coerce.number().int().min(0).max(10).default(0),
@@ -20,6 +22,8 @@ export default defineEventHandler(async (event) => {
   const where = [
     p.minScore > 0 ? sql`${posts.score} >= ${p.minScore}` : undefined,
     p.flags === 'clean' ? sql`json_array_length(${posts.flags}) = 0` : undefined,
+    p.type === 'hiring' ? sql`coalesce(${posts.postType}, 'hiring') = 'hiring'` : undefined,
+    p.type === 'other' ? sql`${posts.postType} in ('seeking', 'other')` : undefined,
     p.flags === 'flagged' ? sql`json_array_length(${posts.flags}) > 0` : undefined,
     p.scope === 'in-scope' ? eq(posts.inScope, true) : undefined,
     p.scope === 'remote' ? eq(posts.remote, true) : undefined,
@@ -46,6 +50,7 @@ export default defineEventHandler(async (event) => {
       postUrl: posts.postUrl,
       postedAge: posts.postedAge,
       postedAt: posts.postedAt,
+      postType: posts.postType,
       title: posts.title,
       company: posts.company,
       location: posts.location,

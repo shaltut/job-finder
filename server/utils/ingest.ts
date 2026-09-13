@@ -6,10 +6,13 @@ import Database from 'better-sqlite3'
 
 export type ScraperRecord
   = | ({ op: 'post' } & PostRecord)
-    | { op: 'update', key: string, title: string, company: string, location: string, remote: boolean, inScope: boolean, score: number, reason: string }
+    | { op: 'update', key: string, postType: PostType | null, title: string, company: string, location: string, remote: boolean, inScope: boolean, score: number, reason: string }
     | { op: 'reflag', key: string, flags: string[], postedAt: string | null }
     | { op: 'posturl', key: string, postUrl: string }
     | { op: 'done', added: number }
+
+/** Who is posting. Only 'hiring' is a job; null means a row scored before the column existed. */
+export type PostType = 'hiring' | 'seeking' | 'other'
 
 export interface PostRecord {
   key: string
@@ -19,6 +22,7 @@ export interface PostRecord {
   postUrl: string | null
   postedAge: string | null
   postedAt: string | null
+  postType: PostType | null
   title: string
   company: string
   location: string
@@ -51,10 +55,10 @@ export function openWritableDb(path = process.env.JOBFINDER_DB || 'data/jobfinde
 export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' | 'update' | null {
   if (rec.op === 'post') {
     const r = db.prepare(`
-      INSERT INTO posts (key, search_term, author, author_url, post_url, posted_age, posted_at, title,
-                         company, location, remote, in_scope, emails, score, reason, text, flags)
-      VALUES (@key, @searchTerm, @author, @authorUrl, @postUrl, @postedAge, @postedAt, @title,
-              @company, @location, @remote, @inScope, @emails, @score, @reason, @text, @flags)
+      INSERT INTO posts (key, search_term, author, author_url, post_url, posted_age, posted_at, post_type,
+                         title, company, location, remote, in_scope, emails, score, reason, text, flags)
+      VALUES (@key, @searchTerm, @author, @authorUrl, @postUrl, @postedAge, @postedAt, @postType,
+              @title, @company, @location, @remote, @inScope, @emails, @score, @reason, @text, @flags)
       ON CONFLICT (key) DO NOTHING
     `).run({
       key: rec.key,
@@ -64,6 +68,7 @@ export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' |
       postUrl: rec.postUrl ?? null, // better-sqlite3 throws on a missing named binding, and older NDJSON has none
       postedAge: rec.postedAge,
       postedAt: secs(rec.postedAt),
+      postType: rec.postType ?? null, // same reason as postUrl: NDJSON written before this field has none
       title: rec.title,
       company: rec.company,
       location: rec.location,
@@ -82,11 +87,12 @@ export function applyRecord(db: Database.Database, rec: ScraperRecord): 'post' |
 
   if (rec.op === 'update') { // --rescore
     const r = db.prepare(`
-      UPDATE posts SET title = @title, company = @company, location = @location,
+      UPDATE posts SET post_type = @postType, title = @title, company = @company, location = @location,
                        remote = @remote, in_scope = @inScope, score = @score, reason = @reason
       WHERE key = @key
     `).run({
       key: rec.key,
+      postType: rec.postType ?? null, // --rescore is the only path that backfills post_type onto old rows
       title: rec.title,
       company: rec.company,
       location: rec.location,

@@ -20,6 +20,7 @@ const post = (over: Partial<Record<string, unknown>> = {}): ScraperRecord => ({
   postUrl: 'https://www.linkedin.com/feed/update/urn:li:activity:7503713927348764672/',
   postedAge: '3h',
   postedAt: '2026-09-10T09:00:00.000Z',
+  postType: 'hiring',
   title: 'Senior Frontend Engineer',
   company: 'Acme',
   location: 'Riyadh',
@@ -76,11 +77,40 @@ test('re-inserting the same key is a no-op, so a re-scrape never duplicates or o
 })
 
 test('an update record rescores in place', () => {
-  assert.equal(applyRecord(db, { op: 'update', key: 'a'.repeat(40), title: 'Frontend Lead', company: 'Acme', location: 'Riyadh', remote: false, inScope: true, score: 9, reason: 'Match: Nuxt; Gaps: none' }), 'update')
+  assert.equal(applyRecord(db, { op: 'update', key: 'a'.repeat(40), postType: 'hiring', title: 'Frontend Lead', company: 'Acme', location: 'Riyadh', remote: false, inScope: true, score: 9, reason: 'Match: Nuxt; Gaps: none' }), 'update')
   const row = db.prepare('SELECT title, score, remote FROM posts WHERE key = ?').get('a'.repeat(40)) as Record<string, unknown>
   assert.equal(row.title, 'Frontend Lead')
   assert.equal(row.score, 9)
   assert.equal(row.remote, 0)
+})
+
+test('post_type round-trips on insert, and --rescore is the path that backfills it', () => {
+  const key = 'e'.repeat(40)
+  applyRecord(db, post({ key, postType: 'seeking', score: 0, text: 'I am open to work. me@example.com' }))
+  assert.equal((db.prepare('SELECT post_type FROM posts WHERE key = ?').get(key) as Record<string, unknown>).post_type, 'seeking')
+
+  // a row written before the column existed carries NULL, and every consumer reads that as 'hiring'
+  db.prepare('UPDATE posts SET post_type = NULL WHERE key = ?').run(key)
+  const unclassified = db.prepare(`SELECT count(*) n FROM posts WHERE key = ? AND coalesce(post_type, 'hiring') = 'hiring'`).get(key) as { n: number }
+  assert.equal(unclassified.n, 1, 'NULL must behave as hiring, or a migration empties the UI')
+
+  // --rescore emits op:'update', which is the only path that can fill it in
+  applyRecord(db, { op: 'update', key, postType: 'seeking', title: 'unknown', company: 'unknown', location: 'unknown', remote: false, inScope: false, score: 0, reason: 'The author is advertising themselves for work.' })
+  const after = db.prepare('SELECT post_type, score FROM posts WHERE key = ?').get(key) as Record<string, unknown>
+  assert.equal(after.post_type, 'seeking')
+  assert.equal(after.score, 0)
+})
+
+test('the drafter queue and the usable KPI both exclude a non-hiring post', () => {
+  const key = 'f'.repeat(40)
+  applyRecord(db, post({ key, postType: 'seeking', score: 7, inScope: true, remote: true, flags: [], emails: ['seeker@example.com'] }))
+  // the exact predicate shared by server/api/stats.get.ts and server/utils/jobs.ts
+  const usable = db.prepare(`
+    SELECT count(*) n FROM posts
+    WHERE key = ? AND score >= 6 AND coalesce(post_type, 'hiring') = 'hiring'
+      AND json_array_length(flags) = 0 AND (in_scope = 1 OR remote = 1)
+  `).get(key) as { n: number }
+  assert.equal(usable.n, 0, 'a job seeker scoring 7 must never reach the queue that emails people')
 })
 
 test('a reflag record replaces flags and backfills posted_at without clobbering it', () => {

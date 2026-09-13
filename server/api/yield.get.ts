@@ -11,6 +11,7 @@ export default defineEventHandler(async () => {
       coalesce(p.search_term, 'unknown') AS term,
       count(*)                            AS posts,
       count(*) FILTER (WHERE p.score >= 6
+        AND coalesce(p.post_type, 'hiring') = 'hiring'
         AND json_array_length(p.flags) = 0
         AND (p.in_scope = 1 OR p.remote = 1)) AS usable,
       count(a.key) FILTER (WHERE a.verdict = 'drafted') AS drafted
