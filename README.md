@@ -1,8 +1,12 @@
 # Job Finder
 
 A personal job-search pipeline that runs entirely on your own machine. It scrapes LinkedIn **posts**
-— content search plus your own home feed — for roles that carry a contact email, scores each one
+— content search plus your own home feed — for roles you can actually reach, scores each one
 against your CV, and drafts a tailored application email for the ones worth answering.
+
+By default that means a post carrying a contact email, since that is the only route a draft can take.
+You can also keep posts that offer an application link or a phone number — Settings › Contact types —
+and apply to those yourself, marking them applied so they leave the queue.
 
 **It never sends anything.** Drafts are created in your Gmail with your CV attached, addressed and
 ready. You read them and press send. That is a property of the code, not a promise: no send call may

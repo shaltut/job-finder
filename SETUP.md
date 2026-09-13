@@ -1,7 +1,7 @@
 # Setting this up for yourself
 
 A personal job-search pipeline. It scrapes LinkedIn **posts** (your home feed plus a list of search terms) for
-roles that carry a contact email, scores each one against your CV, stores them in a local SQLite file, and
+roles that carry a way to reach the poster, scores each one against your CV, stores them in a local SQLite file, and
 writes tailored application emails as Gmail **drafts**. It never sends anything: you read the draft and press
 send yourself.
 
