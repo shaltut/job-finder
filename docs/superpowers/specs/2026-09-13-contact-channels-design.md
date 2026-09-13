@@ -1,6 +1,7 @@
 # Contact channels — saving posts that carry no email
 
-**Status: approved, implementation in progress.** This is the design as agreed before implementation.
+**Status: implemented**, with `link` and `phone` shipped switched off pending a live measurement. The
+design as agreed is kept below; the section at the end records what changed once the code met reality.
 
 ## Context
 
@@ -129,3 +130,49 @@ invisible to every regex here. Pre-existing, unchanged by this work.
 
 Widening admission widens the OpenAI bill: admission runs before `scorePost`, so every newly admitted
 post is a scoring call, and `max` now caps a broader population.
+
+
+---
+
+# What changed during implementation
+
+**The apply cue had to become proximity-aware.** The design said a link counts when "an apply cue appears
+in the text". Running that over the two stored corpora admitted a BBC Writers post whose link is
+introduced as "you can find Jess Loveland's blog post here" — because the prose 779 characters earlier
+says DDN writers "no longer need to apply separately". Measuring the cue-to-link distance for all eleven
+link-bearing posts separated the cases cleanly: the one genuine apply link ("How to Apply … or \<link\>")
+sits 163 characters after its cue, the false positive 779, and the other nine have no cue before them at
+all. `applyCueNear()` now looks only at the 300 characters before the link, with a whole-post fallback for
+a DOM anchor the text never renders. A link *after* the cue window does not count: "\<link\>, apply by
+email" is a link that is not the application route.
+
+**A fourth column, `channels`, rather than deriving the set at query time.** Extraction is unconditional,
+so a post kept for its email still records the marketing link beside it — and seven of the 27 live rows do.
+A UI filter written as `json_array_length(links) > 0` would have returned exactly the vendor CTAs the cue
+gate exists to reject. Writing the computed set once keeps the scraper gate, the Posts badge and the
+channel filter from ever disagreeing.
+
+**The yield table deliberately diverges from the `usable` KPI.** Both were going to gain `applied_at IS
+NULL` together. They should not: the KPI measures what is still waiting for the owner, so an application
+removes a post from it, while the yield table rates the *search term*. A dismissal is the owner saying a
+post was not worth having and counts against the term that found it; an application is them saying it was.
+Dropping applied posts there would make the best term in the table look like the worst.
+
+**Channel order is normalised server-side.** The plan put the ordering in the Settings form's save path.
+That leaves the guarantee depending on one client remembering to do it, so `parseSettings` now orders and
+dedupes `contactChannels` the way it already normalises country names — the order the dirty check depends
+on is a property of the stored row.
+
+**Two things fixed that this feature only made worse.** The row-actions column was already being pushed
+off-screen below about 1500px, and a third button would have made an unreachable Dismiss button harder
+still; it is now sticky to the right, verified at 1440, 1280 and 1024 in both themes. And the guard
+invariants were matching over whole files, so dropping `dismissed_at IS NULL` from the batch drafter queue
+alone left the suite green — they are now sliced per query, and each of the four mutations was checked to
+fail the right test.
+
+## Still unexercised
+
+`link` and `phone` have never run against live LinkedIn. Both ship off. The stored corpus is email-bearing
+by construction and cannot say how common a link-only or phone-only post is, nor how the extractors behave
+on cards the email gate has always discarded — `npm run dry` prints the channels and the admission verdict
+per card, and is the instrument for that.
