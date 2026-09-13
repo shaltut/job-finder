@@ -5,7 +5,7 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 ## What this is
 
 A personal job-search pipeline, for whoever runs it. It scrapes LinkedIn **posts** (not the Jobs tab) —
-content search plus the account's own home feed — for roles that carry a contact email, scores each post
+content search plus the account's own home feed — for roles that carry a way to reach the poster, scores each post
 against the owner's CV, stores everything in a local SQLite database, and drafts tailored application emails.
 Sending is always manual.
 
@@ -55,7 +55,8 @@ npm run dev ──► http://127.0.0.1:3939
 1. **Scraper** `scraper/run.ts`: drives the installed Chrome (`playwright-core`, `channel: 'chrome'`, headed,
    its own profile in `./profile`) through LinkedIn content search, one term at a time (the literal term
    **`feed`** scrapes `linkedin.com/feed/` instead — same cards, no `datePosted` filter), scrolls until the
-   card count stops growing, expands "… more", keeps posts whose text contains an email, sends survivors to
+   card count stops growing, expands "… more", keeps posts offering a contact route the owner switched on
+   in Settings (`contactChannels`, email-only by default), sends survivors to
    OpenAI (`gpt-5-nano`, Responses API, strict JSON schema) with the CV text in the prompt.
    **It never writes the database.** Pure helpers live in `scraper/lib.ts` so the server and the tests share them.
 2. **Ingest** `server/utils/ingest.ts`: the one place scraper output becomes rows. Used by the server (which
@@ -72,7 +73,7 @@ npm run dev                                  # http://127.0.0.1:3939 (port pinne
 npm test                                     # helpers, settings, ingest, dismiss, drafter, background, stages, MIME, invariants, identity
 npm run lint / npm run typecheck
 npm run login                                # one-time LinkedIn login into ./profile (redo when runs exit 2)
-npm run dry -- --terms "vue nuxt developer" --max 10   # prints cards, stores nothing, no OpenAI call
+npm run dry -- --terms "vue nuxt developer" --max 10   # prints cards + contact routes, stores nothing, no OpenAI call
 node scraper/run.ts | node scraper/ingest.ts # CLI scrape; normally you press Start scrape in the Run view
 npm run db:generate && npm run db:migrate    # after editing server/db/schema.ts
 node scripts/screenshot.mjs [outDir]         # screenshots every view (see the localhost gotcha)
@@ -80,7 +81,7 @@ sqlite3 data/jobfinder.db                    # macOS ships sqlite3 at /usr/bin/s
 sqlite3 data/jobfinder.db 'select json from settings'   # the settings that replaced config.json
 ```
 
-`--rescore` and `--reflag` are carried over. Both *update* existing rows, which the read-only scraper cannot
+`--rescore`, `--reflag` and `--reextract` all *update* existing rows, which the read-only scraper cannot
 do, so they use the same NDJSON channel: the scraper emits `{op:'update'|'reflag', ...}` and the server applies
 it. Trigger them from the Run view's Maintenance row.
 
@@ -100,8 +101,8 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
 - **`posts`** — one row per scraped post. `key` = sha1(author_url + first 160 chars of text with drifting
   header markers stripped). `post_url` is the permalink, null when the run could not resolve one — see the
   URN gotcha below. `score` 0-10 and `reason` are model output against the CV: **ordering hints only,
-  and `reason` overclaims** — never copy it into an email. `emails` comes from a deterministic regex, never
-  from the model. `in_scope` (was `mena`) means Egypt/Saudi/UAE/Qatar or genuinely location-free remote.
+  and `reason` overclaims** — never copy it into an email. `emails`, `links`, `phones` and `ref_ids` all come
+  from deterministic regexes, never from the model. `in_scope` (was `mena`) means Egypt/Saudi/UAE/Qatar or genuinely location-free remote.
   `post_type` is `hiring` | `seeking` | `other` — **who is posting**. Only `hiring` is a job; `seeking` is
   another developer advertising themselves and `other` is not a job post at all. NULL means the row was
   scored before the column existed, so every consumer reads `coalesce(post_type, 'hiring')` — without that
@@ -132,6 +133,20 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   because those measure the scrape rather than the triage. A dismissal survives a re-scrape only because
   the insert is `ON CONFLICT (key) DO NOTHING` and the `--rescore` / `--reflag` updates name their columns
   explicitly — `test/dismiss.test.ts` pins all three.
+- **`posts.links` / `phones` / `ref_ids` / `channels`** — the other ways a post can be reached. The first
+  three are what the card carried; **`channels` is the judgement**, from `channelsOf()` in `scraper/lib.ts`,
+  and it is what the scraper gate, the Posts badge and the `channel` filter all read. Stored rather than
+  derived because extraction is unconditional while admission is not — a post kept for its email still
+  records the marketing link beside it, so `json_array_length(links) > 0` is a lie in the UI. Measured:
+  7 of the 27 live rows carry a link and **none** is an application link. `ref_ids` is metadata only, never
+  a channel. **`links` is not `post_url`** — that is the post's own LinkedIn permalink.
+- **`posts.applied_at`** — the owner applied by hand, through the post's link or number. Same shape and same
+  reasoning as `dismissed_at`, written by `POST /api/posts/applied` through `setApplied()`, and deliberately
+  **not** a third `applications` verdict: the follow-up sweep finds unmentioned roles by the *absence* of a
+  `named in ...` reason, so a `manual` verdict row would read as a role still owed an email. It rides beside
+  `dismissed_at` in all three email-deciding queries and in `usable` / `unprocessed`. It is **not** in the
+  yield table's `usable`, on purpose — that column rates the search term, and an application is the owner
+  saying a post *was* worth having, the opposite signal to a dismissal.
 - **`applications`** — one row per post touched. `verdict` drafted|skipped. Reasons for drafted posts **must**
   start with `named in application` / `named in follow-up`; the follow-up query relies on that prefix.
 - **`settings`** — exactly one row (`id = 1`), holding the whole config as JSON. One column rather than
@@ -170,6 +185,11 @@ and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
 - `cv` — repo-relative path under `data/cv/`, written by the upload endpoint rather than typed. The scoring
   model reads the PDF itself once per run (`input_file`); no PDF library.
 - `terms` (the home feed plus 8 searches), `titles` (30, for the scoring prompt), `max`, `since`.
+- `contactChannels` — which contact routes admit a post, `['email' | 'link' | 'phone']`, default `['email']`
+  so an existing install is unchanged. `CONTACT_CHANNELS` in `shared/settings.ts` is the one definition
+  (`scraper/lib.ts` re-exports it — it imports `node:crypto` and cannot be what a browser bundle reads).
+  `parseSettings` orders and dedupes it, so the order the Settings dirty check depends on is a property of
+  the stored row. Empty saves but `missingFields()` refuses to run: the usual two-schema split.
 - **`.env`** — `OPENAI_API_KEY`; optionally `JOBFINDER_DB`, `JOBFINDER_MODEL`, `PROFILE_DIR`. Loaded with
   Node's `--env-file-if-exists`. Never write the key into a tracked file.
 
@@ -202,6 +222,21 @@ drafts keep arguing from a stale CV.
 
 ### LinkedIn and the scraper
 
+- **Every outbound link LinkedIn renders is an opaque `lnkd.in` hash**, in the anchor `href` as well as the
+  text — 11 of 11 across both stored corpora. So you cannot tell a careers page from a blog post, and
+  domain filtering (`lever.co`, `/careers`) is impossible without following the redirect. Link admission
+  is therefore gated on the **prose**, and on proximity, not on the URL: `applyCueNear()` in
+  `scraper/lib.ts` wants an apply cue within **300 characters before** the link. Whole-text matching was
+  tried first and was wrong — it admitted a BBC Writers post whose link is introduced as "you can find the
+  blog post here", because the prose elsewhere says writers "need to apply separately". Measured, and the
+  two cases separate cleanly: the one genuine apply link sits 163 characters after its cue, that false
+  positive 779, and the other nine links have no cue before them at all. Re-measure with
+  `npm run dry` before touching `APPLY_CUE` or `CUE_WINDOW`.
+- **A phone number needs proof.** Years, salaries and "5-7 years" are all digit runs, so `extractPhones`
+  takes an international number on its leading `+` and a local one only where a contact word precedes it.
+  `\b` is ASCII-only in a JS regex, so it is on the Latin cues (or `tel` fires inside `hotel`) and off the
+  Arabic ones, where it would never match. **Never write a literal number in `scraper/lib.ts`** — a regex
+  source is safe, a number in a comment is not: `test/identity.test.ts` scans that directory for the shape.
 - **Do not add `contentType=["jobs"]` to the search URL.** It means "posts embedding a Job card" and returns
   almost nothing with no emails. Only `datePosted` is used.
 - **LinkedIn's DOM has hashed class names and no post URN.** Cards are found structurally (the container whose
@@ -359,11 +394,19 @@ back on a different host, port and path — which Google accepts.
 
 ## Known gaps
 
+- **The `link` and `phone` channels have never run against live LinkedIn.** Both are switched off by
+  default, unit tested, and measured against the 48 stored posts — but that corpus is email-bearing *by
+  construction*, so it cannot say how common a phone-only or link-only post is, nor how the extractors
+  behave on cards the email gate has always discarded. `npm run dry` now prints the channels and the
+  admission verdict per card: **run it on a couple of terms before switching either channel on**, and tune
+  `APPLY_CUE` from what real posts say rather than from the seven vendor CTAs in the current database.
+- **Widening admission widens the OpenAI bill.** Admission runs before `scorePost`, so every newly admitted
+  post is a scoring call and `max` now caps a broader population.
 - **The Google round trip is authorised but has not yet created a real draft.** Consent and token exchange
   have run against Google; refresh, real draft creation with the CV attached, and a real sweep are written
   and unit tested but still unexercised end to end. The first drafted post is the test.
 - The **Usable** KPI counts `score >= 6 AND post_type is hiring AND no flags AND not dismissed AND
-  (in_scope OR remote)`, so a
+  (in_scope OR remote) AND not applied`, so a
   strong role whose post never states a location is missing from the headline number. It still appears in the
   Posts list, and the **drafter queue deliberately omits the `(in_scope OR remote)` half** — the scorer leaves
   `location` unknown often enough that adding it would have excluded the one post that was legitimately
