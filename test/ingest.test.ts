@@ -117,6 +117,27 @@ test('the drafter queue and the usable KPI both exclude a non-hiring post', () =
   assert.equal(usable.n, 0, 'a job seeker scoring 7 must never reach the queue that emails people')
 })
 
+test('an excluded post is out of the drafter queue, however well it scored', () => {
+  // The case this was built for: a post scoring 9 with a real contact route, from a source the owner
+  // has ruled out. Only the flag stands between it and an application email.
+  const key = 'e'.repeat(40)
+  applyRecord(db, post({ key, postType: 'hiring', score: 9, inScope: true, remote: true, emails: ['hr@example.com'], flags: ['excluded'] }))
+  const n = db.prepare(`
+    SELECT count(*) n FROM posts p LEFT JOIN applications a ON a.key = p.key
+    WHERE p.key = ? AND a.key IS NULL
+      AND json_array_length(p.emails) > 0
+      AND coalesce(p.post_type, 'hiring') = 'hiring'
+      AND json_array_length(p.flags) = 0
+      AND p.score >= 6 AND p.dismissed_at IS NULL AND p.applied_at IS NULL
+  `).get(key) as { n: number }
+  assert.equal(n.n, 0, 'an excluded post must never reach the drafter')
+
+  // and removing the rule brings it back — the reversibility that made this a flag, not a deletion
+  applyRecord(db, { op: 'reflag', key, flags: [], postedAt: null })
+  const back = db.prepare('SELECT count(*) n FROM posts WHERE key = ? AND json_array_length(flags) = 0').get(key) as { n: number }
+  assert.equal(back.n, 1)
+})
+
 test('a reflag record replaces flags and backfills posted_at without clobbering it', () => {
   const before = db.prepare('SELECT posted_at FROM posts WHERE key = ?').get('a'.repeat(40)) as { posted_at: number }
   applyRecord(db, { op: 'reflag', key: 'a'.repeat(40), flags: ['night-shift'], postedAt: '2020-01-01T00:00:00.000Z' })

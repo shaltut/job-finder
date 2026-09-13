@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   admits, ageOf, applyCueFor, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds,
-  fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, normalize, postedAt, postUrlFrom, prescreen,
+  excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, normalize, postedAt, postUrlFrom, prescreen,
   resolveUrls, SCORE_SCHEMA, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
@@ -84,6 +84,57 @@ test('postedAt: pins a relative age to an instant', () => {
 test('searchUrl: encodes the term and the date filter', () => {
   assert.match(searchUrl('vue nuxt developer', 'past-24h'), /keywords=vue%20nuxt%20developer&datePosted=%5B%22past-24h%22%5D$/)
   assert.match(searchUrl('x', 'past-week'), /datePosted=%5B%22past-week%22%5D$/)
+})
+
+test('excludeRule: an empty list produces no rule at all', () => {
+  // Fails OPEN, like every rule in flagRules(). The alternative is /(?:)/, which matches every post
+  // and would silently empty the drafter queue the first time someone cleared the list.
+  assert.equal(excludeRule([]), null)
+  assert.equal(excludeRule(['', '   ']), null)
+})
+
+test('excludeRule: whole words, so a short needle cannot eat the corpus', () => {
+  // Measured over the 42 stored posts: bare `ai` matched 36 of them, 9 with boundaries. That gap is
+  // the whole reason this rule is not a substring match.
+  assert.equal(excludeRule(['ai'])!.test('send your cv by email'), false)
+  assert.equal(excludeRule(['ai'])!.test('an AI role, remote'), true)
+  assert.equal(excludeRule(['intern'])!.test('Internix.io is hiring'), false)
+  assert.equal(excludeRule(['intern'])!.test('paid intern wanted'), true)
+})
+
+test('excludeRule: a boundary is only added where \\b can see it', () => {
+  // \b is ASCII-only in a JS regex, so wrapping these would stop them matching anything at all —
+  // the same trap extractPhones documents for its Arabic cues.
+  assert.equal(excludeRule(['C#'])!.test('strong C# skills'), true)
+  assert.equal(excludeRule(['مطلوب'])!.test('مطلوب مهندس'), true)
+  assert.equal(excludeRule(['.net'])!.test('a .net shop'), true)
+})
+
+test('excludeRule: a needle is a literal, never a pattern', () => {
+  // The list is typed by hand, so a stray metacharacter must not silently widen the rule.
+  assert.equal(excludeRule(['c++'])!.test('c++ developer'), true)
+  assert.equal(excludeRule(['c++'])!.test('c developer'), false)
+  assert.equal(excludeRule(['a|b'])!.test('a shop'), false)
+  assert.equal(excludeRule(['(test)'])!.test('a test'), false)
+})
+
+test('excludeRule: a domain written in the prose is what actually matches', () => {
+  // LinkedIn rewrites the href to an opaque lnkd.in hash, so the readable name only ever survives in
+  // the post text. This is the real shape of the case the feature was built for.
+  const re = excludeRule(['micro1.ai'])!
+  assert.equal(re.test('Apply here: https://lnkd.in/abc\n\njobs.micro1.ai'), true)
+  assert.equal(re.test('MICRO1.AI is hiring'), true, 'case-insensitive')
+  assert.equal(re.test('micro2.ai is hiring'), false)
+})
+
+test('prescreen: the exclude list becomes the `excluded` flag, and only when it is set', () => {
+  const post = 'Frontend Engineer, remote. Apply: jobs.micro1.ai'
+  assert.deepEqual(prescreen(post, config), [], 'no rules configured, no flag')
+  const excluding = { ...config, excludes: ['micro1.ai'] }
+  assert.deepEqual(prescreen(post, excluding), ['excluded'])
+  // and it rides alongside the derived rules rather than replacing them
+  const both = prescreen('Hiring fresh graduates at micro1.ai', excluding)
+  assert.ok(both.includes('excluded') && both.includes('junior'))
 })
 
 test('prescreen: years-of-experience only counts phrases tied to experience wording', () => {

@@ -115,6 +115,20 @@ test('a post the owner applied to by hand is out of those same queries', () => {
   }
 })
 
+test('the drafter queue still skips flagged posts', () => {
+  // This is what makes the owner's exclude list true. `excluded` is an ordinary entry in `flags`, so
+  // the list only removes anything from the queue for as long as this predicate stands — and losing
+  // it fails silently: every rule keeps matching, the UI keeps hiding, and the drafter keeps emailing
+  // the company the owner told it to never contact again.
+  const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
+  const queue = jobs.slice(jobs.indexOf('LEFT JOIN applications a ON a.key = p.key'))
+  assert.match(
+    queue.slice(0, 900),
+    /json_array_length\(p\.flags\) = 0/,
+    'the drafter queue must keep its flags guard'
+  )
+})
+
 test('the drafter queue still requires an email address', () => {
   // This guard used to be free: the scraper stored a post only if its text carried an address, so
   // every row satisfied it. Now that a post can be admitted on its link or its phone number alone, it

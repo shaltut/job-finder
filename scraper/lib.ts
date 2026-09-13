@@ -300,6 +300,33 @@ export const FLAG_RULES: Record<string, RegExp> = {
 const escapeRe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
+ * The owner's own exclude list, compiled to one alternation. Unlike `scope.excludedRoles`, which is
+ * prose the scoring model is merely asked to honour, this is deterministic — the same reasoning that
+ * put `gateOnPostType` in code rather than in the prompt.
+ *
+ * Matched against the whole post text, which begins with the LinkedIn card header. That is why one
+ * list covers three things the owner might mean: a domain written in the prose, a company name, and
+ * the name of a recruiter whose posts are never relevant.
+ *
+ * WORD BOUNDARIES ARE NOT OPTIONAL, and they are conditional on the needle's own edges. Measured over
+ * the 42 stored posts: `ai` as a bare substring matches 36 of them and 9 with boundaries; `intern`
+ * matches 12 and 7; `micro1.ai` matches 2 either way. But `\b` is ASCII-only in a JS regex — the same
+ * trap `extractPhones` documents above — so a boundary is added only where the edge character is one
+ * `\b` can see. Wrapping `C#` or an Arabic needle in `\b` would stop it matching anything at all.
+ *
+ * Fails OPEN, like every rule in flagRules(): an empty list yields null, never `/(?:)/`, which matches
+ * every post and would silently empty the drafter queue.
+ */
+export function excludeRule(list: readonly string[]): RegExp | null {
+  const parts = list.map(v => v.trim()).filter(Boolean).map((v) => {
+    const lead = /^[A-Za-z0-9_]/.test(v) ? '\\b' : ''
+    const tail = /[A-Za-z0-9_]$/.test(v) ? '\\b' : ''
+    return `${lead}${escapeRe(v)}${tail}`
+  })
+  return parts.length ? new RegExp(parts.join('|'), 'i') : null
+}
+
+/**
  * Time-zone demands that are only a night shift for somebody outside that region. Three entries is
  * enough: these are the coverage demands that actually appear in postings.
  */
@@ -351,6 +378,12 @@ export function flagRules(config: Config): Record<string, RegExp> {
   if (config.scope.seniorityFloor >= 3) {
     rules['junior'] = /\bfresh(ers?|\s+graduates?)\b|\bjuniors?\b|\bintern(ship)?s?\b|\bentry[- ]level\b|\btrainees?\b/i
   }
+
+  // The owner's own list. Last because it is the only rule here they wrote themselves: the others
+  // infer a rule from who they are, this one is a decision they already made.
+  const excluded = excludeRule(config.excludes)
+  if (excluded) rules['excluded'] = excluded
+
   return rules
 }
 
