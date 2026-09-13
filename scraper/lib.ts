@@ -19,6 +19,139 @@ const trimLabel = (e: string) => e.replace(/\.([A-Z][a-z]+)$/, '')
 export const extractEmails = (text: string, mailtos: string[] = []): string[] =>
   [...new Set([...mailtos, ...(text.match(EMAIL_RE) || []).map(trimLabel)].map(e => e.toLowerCase()))]
 
+// ---------------- contact channels ----------------
+// An email is the only contact route that reaches the drafter, but it is not the only one a post
+// carries. These extractors are deterministic — regex over the card text plus the anchors the DOM
+// reader hands over — for the same reason `emails` is: a contact detail invented by a model is a
+// message sent to a stranger. The model never sees any of this.
+
+export const CHANNELS = ['email', 'link', 'phone'] as const
+export type Channel = (typeof CHANNELS)[number]
+
+// LinkedIn's own hosts: every card links its author, the company, and each hashtag. `lnkd.in` is
+// deliberately NOT here — that shortener is what an external link looks like once LinkedIn has
+// rewritten it, and it is the only form an application link ever arrives in.
+const LINKEDIN_HOST = /^https?:\/\/(?:[a-z0-9-]+\.)*linkedin\.com(?:[/?#]|$)/i
+const URL_RE = /https?:\/\/[^\s<>"'`]+/g
+// innerText runs a sentence into its link: 'apply at https://x.example/jobs.Thanks', '(https://…)'
+const trimUrl = (u: string) => u.replace(/[.,;:!?)\]}>'"]+$/, '')
+
+/**
+ * External links on the card, DOM anchors first. The destination is NOT knowable from these: LinkedIn
+ * rewrites every outbound URL to an opaque `lnkd.in` hash, in the href as well as the text, so nothing
+ * here can tell a careers page from a blog post. That is why `channelsOf` gates on the prose instead.
+ */
+export const extractLinks = (text: string, hrefs: string[] = []): string[] =>
+  [...new Set([...hrefs, ...(text.match(URL_RE) || [])].map(trimUrl))]
+    .filter(u => u && !LINKEDIN_HOST.test(u))
+
+// Two forms, because a bare run of digits is not a phone number — years, salaries and "5-7 years" all
+// look like one. An international number carries its own proof in the leading '+'; a local one counts
+// only where the prose calls it a way to reach somebody.
+const PHONE_INTL = /\+[\s(]*\d[\d\s().-]{6,18}\d/g
+// \b is ASCII-only in a JS regex, so it is on the Latin cues (or 'tel' would fire inside 'hotel') and
+// deliberately off the Arabic ones, where it would never match at all.
+const PHONE_CUED = /(?:\b(?:whatsapp|whats\s?app|telegram|telephone|tel|mobile|phone|call|contact)|واتساب|واتس|اتصل|تليفون|جوال|موبايل|رقم)[^\d\n]{0,20}(\d[\d\s().-]{7,18}\d)/gi
+const WA_LINK = /(?:wa\.me|api\.whatsapp\.com\/send\?phone=)\/?(\d{9,15})/i
+
+/** Digits only, keeping a leading '+', or null when the run is too short or too long to be a number. */
+function normalizePhone(raw: string): string | null {
+  const plus = raw.trim().startsWith('+')
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length < 9 || digits.length > 15) return null
+  return plus ? `+${digits}` : digits
+}
+
+/** Contact numbers on the card. Deduped by digits, so one number written two ways is one number. */
+export function extractPhones(text: string, hrefs: string[] = []): string[] {
+  const byDigits = new Map<string, string>()
+  const add = (raw: string) => {
+    const p = normalizePhone(raw)
+    if (!p) return
+    const digits = p.replace(/\D/g, '')
+    // the international form proves itself, so it wins over a cued local match of the same digits
+    if (!byDigits.has(digits) || p.startsWith('+')) byDigits.set(digits, p)
+  }
+  for (const m of text.match(PHONE_INTL) || []) add(m)
+  for (const m of text.matchAll(PHONE_CUED)) add(m[1]!)
+  for (const h of hrefs) {
+    const m = WA_LINK.exec(h)
+    if (m) add(`+${m[1]}`)
+  }
+  return [...byDigits.values()]
+}
+
+// Narrow on purpose. The loose version of this returned 'Requirements', 'required' and 'Position:
+// Frontend' out of the stored corpus and not one genuine identifier, so a label word alone is not
+// enough: an explicit id-word, or a recognised prefix glued to digits, has to be there.
+const REF_LABELLED = /\b(?:job|req(?:uisition)?|vacancy|position|posting)\s*(?:id|code|ref(?:erence)?|no\.?|number|#)\s*[:#-]?\s*([A-Z0-9][A-Z0-9-]{2,14})\b/gi
+const REF_BARE = /\bref(?:erence)?\s*(?:no\.?|number|code|#)?\s*[:#]\s*([A-Z0-9][A-Z0-9-]{2,14})\b/gi
+const REF_PREFIXED = /\b((?:REQ|JR|VAC|JOB)-?\d{3,})\b/g
+
+/** Requisition identifiers. Metadata for the reader — never a contact channel, never an admission reason. */
+export const extractRefIds = (text: string): string[] =>
+  [...new Set([
+    ...[...text.matchAll(REF_LABELLED)].map(m => m[1]!),
+    ...[...text.matchAll(REF_BARE)].map(m => m[1]!),
+    ...[...text.matchAll(REF_PREFIXED)].map(m => m[1]!)
+  ].map(r => r.toUpperCase()))]
+
+// The whole weight of link admission rests here, because the URL itself says nothing. Measured against
+// the stored corpus: seven posts carried a link and none was an application link — they were vendor
+// pitches ('tell us what engineers you need') and blog links. Every one of them fails this test.
+const APPLY_CUE = /\bapply\s+(?:here|now|via|through|at|on|by|online|using|directly)\b|\bto\s+apply\b|\bapplication\s+link\b|\bapply\s+link\b|\bclick\s+(?:here|below|the\s+link)\b|\bregister\s+(?:here|now)\b|\bsubmit\s+your\s+(?:cv|resume|application)\b|\bfill\s+(?:in|out)\s+the\s+form\b|للتقديم|رابط\s*التقديم|قدم\s*من\s*هنا|التقديم\s*من\s*خلال/i
+
+/** Does the post invite an application anywhere in its prose? */
+export const hasApplyCue = (text: string): boolean => APPLY_CUE.test(text)
+
+/**
+ * How far before a link an apply cue still counts as pointing AT that link.
+ *
+ * Measured over the 11 link-bearing posts in the two stored corpora, which separate cleanly: the one
+ * genuine apply link ('How to Apply … or <link>') sits 163 characters after its cue, and the one
+ * false positive — a BBC Writers post whose link is introduced as "you can find the blog post here",
+ * in prose that elsewhere says writers "need to apply separately" — sits 779. Every other link has no
+ * cue before it at all.
+ */
+const CUE_WINDOW = 300
+
+/**
+ * Does an apply cue point at THIS link? A post can discuss applying and still link somewhere else, so
+ * whole-text matching is not enough — it admitted the BBC blog link above. Only the window before the
+ * link counts: "<link>, apply by email" is a link that is not the application route.
+ *
+ * A link the DOM handed over but the text never renders has no position to measure, so it falls back
+ * to the whole-post test rather than being silently dropped.
+ */
+export function applyCueNear(text: string, link: string): boolean {
+  const at = text.indexOf(link)
+  if (at < 0) return hasApplyCue(text)
+  return hasApplyCue(text.slice(Math.max(0, at - CUE_WINDOW), at))
+}
+
+/**
+ * The contact routes this post actually offers, in CHANNELS order.
+ *
+ * Extraction runs for every card whatever the settings say; only admission is configured. So a post
+ * kept for its email still records the link and the number it carries, and this set — stored on the
+ * row — is what the scraper gate, the Posts badge and the channel filter all read, so the three can
+ * never drift apart.
+ */
+export function channelsOf(
+  found: { emails: string[], links: string[], phones: string[] },
+  text: string
+): Channel[] {
+  const out: Channel[] = []
+  if (found.emails.length) out.push('email')
+  if (found.links.some(l => applyCueNear(text, l))) out.push('link')
+  if (found.phones.length) out.push('phone')
+  return out
+}
+
+/** Keep the post? True when any route it offers is switched on in Settings. */
+export const admits = (channels: readonly Channel[], enabled: readonly Channel[]): boolean =>
+  channels.some(c => enabled.includes(c))
+
 // ---------------- post permalinks ----------------
 
 // LinkedIn's rendered DOM carries no post URN: cards are hashed markup, and the only id on a card is

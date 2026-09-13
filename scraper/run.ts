@@ -15,8 +15,8 @@ import Database from 'better-sqlite3'
 import OpenAI from 'openai'
 import { chromium } from 'playwright-core'
 import {
-  ageOf, dedupeKey, extractEmails, gateOnPostType, normalize, postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl,
-  sleep, systemPrompt, urnMap
+  ageOf, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, gateOnPostType, normalize,
+  postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
 import { emptySettings, readSettingsFrom } from '../shared/settings.ts'
@@ -147,13 +147,16 @@ function readCards() {
       authorUrl,
       text: (card as HTMLElement).innerText.slice(0, 3000),
       mailtos: [...card.querySelectorAll('a[href^="mailto:"]')].map(m => (m as HTMLAnchorElement).href.slice(7).split('?')[0]!),
+      // Outbound anchors, for the link contact channel. LinkedIn's own hosts are filtered in lib.ts
+      // rather than here: every card links its author, the company and each hashtag.
+      hrefs: [...card.querySelectorAll('a[href^="http"]')].map(a => (a as HTMLAnchorElement).href),
       // never card.closest(): that walks up to a shared ancestor and would give every card one id
       token: card.querySelector('[id^="expanded"],[id^="collapsed"]')?.id ?? null
     }]
   })
 }
 
-type Card = { author: string, authorUrl: string, text: string, mailtos: string[], token: string | null }
+type Card = { author: string, authorUrl: string, text: string, mailtos: string[], hrefs: string[], token: string | null }
 
 async function scrapeTerm(page: import('playwright-core').Page, term: string): Promise<(Card & { postUrl: string | null })[]> {
   // Post permalinks: the URNs ride in the payloads that render the results — the document itself, then the
@@ -276,9 +279,16 @@ async function run({ dry }: { dry: boolean }) {
         const text = normalize(c.text) // Arabic-rendered cards, before the age regex and the key see them
         const age = ageOf(text)
         const emails = extractEmails(text, c.mailtos)
+        const links = extractLinks(text, c.hrefs)
+        const phones = extractPhones(text, c.hrefs)
         const key = dedupeKey(c.authorUrl, text)
         if (dry) {
-          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${emails.join(' ') || '-'} | ${c.postUrl || 'NO URL'} | ${text.replace(/\s+/g, ' ').slice(0, 80)}`)
+          // The dry run is how the admission rules were set, so it reports what the gate would decide
+          // and the raw material behind it — deliberately ignoring contactChannels, because a
+          // measurement gated by the current settings cannot tell you what to set them to.
+          const would = channelsOf({ emails, links, phones }, text)
+          const refs = extractRefIds(text)
+          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${would.join('+') || 'NO CHANNEL'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refs.join(' ') || '-'} | ${c.postUrl || 'NO URL'} | ${text.replace(/\s+/g, ' ').slice(0, 60)}`)
           continue
         }
         if (!emails.length) continue

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  ageOf, dedupeKey, extractEmails, fieldRule, FLAG_RULES, gateOnPostType, normalize, postedAt, postUrlFrom,
-  prescreen, resolveUrls, SCORE_SCHEMA, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
+  admits, ageOf, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds,
+  fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, normalize, postedAt, postUrlFrom, prescreen,
+  resolveUrls, SCORE_SCHEMA, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
 import { emptySettings } from '../shared/settings.ts'
@@ -298,4 +299,147 @@ test('a URN two cards both claim is dropped rather than linked to the wrong post
     resolveUrls([id('A'.repeat(24)), id('B'.repeat(24)), id('C'.repeat(24)), id('D'.repeat(24)), null], urns),
     [null, null, 'https://www.linkedin.com/feed/update/urn:li:activity:333/', null, null]
   )
+})
+
+// ---------------- contact channels ----------------
+// Every phone number below is deliberately fake (a zeroed subscriber part). test/ is outside the
+// surface identity.test.ts scans, which is exactly why a fixture may look like a real detail — but a
+// fixture that could be somebody's actual number is how you get a support request instead of a test.
+
+test('extractLinks: keeps external links, drops LinkedIn chrome', () => {
+  // author, company and hashtag anchors are all linkedin.com and are not application links
+  const hrefs = [
+    'https://www.linkedin.com/in/someone',
+    'https://www.linkedin.com/company/acme',
+    'https://www.linkedin.com/feed/hashtag/hiring',
+    'https://lnkd.in/eAbCdEfG'
+  ]
+  assert.deepEqual(extractLinks('', hrefs), ['https://lnkd.in/eAbCdEfG'])
+})
+
+test('extractLinks: reads the text too, and merges with the DOM hrefs', () => {
+  const text = 'Apply here: https://lnkd.in/eAbCdEfG and see https://acme.example/careers'
+  assert.deepEqual(
+    extractLinks(text, ['https://lnkd.in/eAbCdEfG']),
+    ['https://lnkd.in/eAbCdEfG', 'https://acme.example/careers']
+  )
+})
+
+test('extractLinks: strips punctuation innerText glues to the end', () => {
+  assert.deepEqual(extractLinks('see https://acme.example/jobs.'), ['https://acme.example/jobs'])
+  assert.deepEqual(extractLinks('(https://acme.example/jobs)'), ['https://acme.example/jobs'])
+  assert.deepEqual(extractLinks('link: https://acme.example/jobs, then'), ['https://acme.example/jobs'])
+})
+
+test('extractLinks: nothing to find is an empty array, not a null', () => {
+  assert.deepEqual(extractLinks('no links at all here'), [])
+})
+
+test('extractPhones: takes an international number and normalises the separators away', () => {
+  assert.deepEqual(extractPhones('Reach me on +20 100 000 0000 any time'), ['+201000000000'])
+  assert.deepEqual(extractPhones('call +971-50-000-0000'), ['+971500000000'])
+  assert.deepEqual(extractPhones('WhatsApp: +(966) 50 000 0000'), ['+966500000000'])
+})
+
+test('extractPhones: a local number needs a contact cue to count', () => {
+  assert.deepEqual(extractPhones('WhatsApp 01000000000 for details'), ['01000000000'])
+  assert.deepEqual(extractPhones('واتساب 01000000000'), ['01000000000'])
+  // the same digits with nothing calling them a phone number are not one
+  assert.deepEqual(extractPhones('order reference 01000000000 was shipped'), [])
+})
+
+test('extractPhones: numbers that are not phone numbers stay out', () => {
+  assert.deepEqual(extractPhones('5-7 years of experience, salary 15000 EGP, posted 2026'), [])
+  assert.deepEqual(extractPhones('Call us for 5 roles'), [])
+  assert.deepEqual(extractPhones('budget is 50,000 - 70,000 per month'), [])
+})
+
+test('extractPhones: picks a number out of a wa.me link', () => {
+  assert.deepEqual(extractPhones('', ['https://wa.me/201000000000']), ['+201000000000'])
+})
+
+test('extractPhones: dedupes the same number written two ways', () => {
+  assert.deepEqual(extractPhones('+20 100 000 0000 or +201000000000'), ['+201000000000'])
+})
+
+test('extractRefIds: only an explicitly labelled identifier', () => {
+  assert.deepEqual(extractRefIds('Job ID: REQ-4821 — apply now'), ['REQ-4821'])
+  assert.deepEqual(extractRefIds('Requisition Code JR00123'), ['JR00123'])
+  assert.deepEqual(extractRefIds('quote ref: 2026-DEV-11'), ['2026-DEV-11'])
+})
+
+test('extractRefIds: the words that look like a label are not one', () => {
+  // the loose version of this regex returned 'Requirements', 'required', 'Position: Frontend'
+  assert.deepEqual(extractRefIds('Requirements: 5 years. Position: Frontend. Skills required.'), [])
+  assert.deepEqual(extractRefIds('This job requires a portfolio'), [])
+})
+
+test('hasApplyCue: fires on prose that points at a link, in either language', () => {
+  for (const t of ['Apply here', 'apply now', 'Application link below', 'To apply, use the link',
+    'Click here to register', 'Submit your CV through the portal', 'للتقديم من خلال الرابط']) {
+    assert.equal(hasApplyCue(t), true, t)
+  }
+})
+
+test('hasApplyCue: does not fire on a vendor pitch that merely has a link', () => {
+  // all seven link-bearing posts in the stored corpus read like these, and none was an application link
+  for (const t of ['Tell us what engineers you need and we will send a talent overview within 48 hours.',
+    'You can find the blog post here:', 'Take the free Hire Match Test and discover what fits.',
+    'We will show you what India via EOR can deliver in 4 weeks.']) {
+    assert.equal(hasApplyCue(t), false, t)
+  }
+})
+
+test('channelsOf: a link only counts as a channel when the prose invites an application', () => {
+  const link = ['https://lnkd.in/eAbCdEfG']
+  assert.deepEqual(channelsOf({ emails: [], links: link, phones: [] }, 'Apply here for the role'), ['link'])
+  assert.deepEqual(channelsOf({ emails: [], links: link, phones: [] }, 'Read our blog post here'), [])
+})
+
+test('channelsOf: returns every channel present, in a fixed order', () => {
+  const all = channelsOf(
+    { emails: ['hr@acme.example'], links: ['https://lnkd.in/eAbCdEfG'], phones: ['+201000000000'] },
+    'Apply here or email us'
+  )
+  assert.deepEqual(all, ['email', 'link', 'phone'])
+})
+
+test('channelsOf: an email alone is still the ordinary case', () => {
+  assert.deepEqual(channelsOf({ emails: ['hr@acme.example'], links: [], phones: [] }, 'send your CV'), ['email'])
+})
+
+test('admits: a post is kept when any channel it carries is switched on', () => {
+  assert.equal(admits(['email'], ['email']), true)
+  assert.equal(admits(['link'], ['email']), false)
+  assert.equal(admits(['email', 'link'], ['link']), true)
+  // an empty admission set admits nothing — missingFields() is what stops a scrape starting that way
+  assert.equal(admits(['email'], []), false)
+  assert.equal(admits([], ['email', 'link', 'phone']), false)
+})
+
+test('applyCueNear: a cue far from the link does not point at it', () => {
+  const link = 'https://acme.example/blog'
+  assert.equal(applyCueNear(`How to apply: send your details. ${link}`, link), true)
+  const far = `writers need to apply separately to the other programme. ${'context. '.repeat(60)}read the blog post here: ${link}`
+  assert.equal(applyCueNear(far, link), false)
+})
+
+test('applyCueNear: a link the text never renders falls back to the whole post', () => {
+  // a DOM-only anchor has no position to measure against
+  assert.equal(applyCueNear('To apply, use the button', 'https://acme.example/x'), true)
+  assert.equal(applyCueNear('Read our blog', 'https://acme.example/x'), false)
+})
+
+test('channelsOf: a post that discusses applying but links a blog is not a link route', () => {
+  // shaped on the BBC Writers post in the stored corpus, which the whole-text version admitted
+  const link = 'https://lnkd.in/eAbCdEfG'
+  const text = `DDN writers no longer need to apply separately to both programmes. ${'context. '.repeat(60)}You can find the blog post here: ${link}`
+  assert.deepEqual(channelsOf({ emails: [], links: [link], phones: [] }, text), [])
+})
+
+test('channelsOf: an apply cue a sentence before the link does point at it', () => {
+  // shaped on the one genuine apply link in the corpus: an 'or <link>' alternative to the email route
+  const link = 'https://lnkd.in/gKFzEnpK'
+  const text = `How to Apply: if you are interested, drop your CV to hr@acme.example with the subject Name - Job Position, or ${link}`
+  assert.deepEqual(channelsOf({ emails: [], links: [link], phones: [] }, text), ['link'])
 })
