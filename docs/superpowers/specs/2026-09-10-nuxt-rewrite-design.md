@@ -10,10 +10,10 @@ immediately after it records what changed once the code met reality.
 
 ## Context
 
-`shaltoot-job-finder` was cloned fresh. It is the original author's personal job-search pipeline: a Playwright
+`job-finder` was cloned fresh. It is the original author's personal job-search pipeline: a Playwright
 scraper drives real Chrome through LinkedIn **posts**, keeps the ones carrying a contact email, scores them
 against a CV with `gpt-5-nano`, stores them in Postgres, and a Claude Code skill drafts application emails as
-Gmail drafts. Every profile fact, search term and screening rule in it is Ahmed's.
+Gmail drafts. Every profile fact, search term and screening rule in it is the original author's.
 
 Two jobs, and they are entangled:
 

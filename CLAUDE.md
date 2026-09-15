@@ -352,6 +352,22 @@ drafts keep arguing from a stale CV.
 
 ### Environment
 
+- **Also runs on Windows 11.** What differs:
+  - **Node is pinned by Volta** (`"volta"` in `package.json`, 22.23.2). Type stripping is default-on only from
+    22.18; an older Node makes `npm test`, the scraper and the server's scraper spawn die with a SyntaxError on
+    the first type annotation. Install dependencies under the pinned Node: `better-sqlite3` is native.
+  - **`npm run db:migrate` fails on a fresh clone** (`data/` does not exist and drizzle-kit does not create it).
+    Skip it: `npm run dev` creates `data/` and migrates at boot.
+  - **Paths built with `join()` use backslashes** — compare against `join(...)`, never a `/` literal
+    (`test/invariants.test.ts` failed on exactly that).
+  - **Stop is a hard kill.** `child.kill('SIGTERM')` is `TerminateProcess` on Windows, so the scraper's
+    `stopping` flag never runs and Chrome can outlive it, holding the `./profile` lock until closed by hand.
+- **`claude -p` still loads the user-global `~/.claude/CLAUDE.md`, hooks and plugins** — `neutralCwd()` only
+  avoids the *project* CLAUDE.md, and `--strict-mcp-config` only skips MCP. Measured on a Windows install: a
+  one-post draft took ~175s, and the drafter's report quoted a location from the global file that
+  contradicted the injected settings. Keep the global file consistent with Settings, or find a flag that
+  skips user memory.
+
 - **PostgreSQL is not installed and Docker owns port 5432** (`onebench-postgres`, another project). That is
   why this branch moved to SQLite rather than following the original `SETUP.md`.
 - **npm, not pnpm.** The Nuxt UI dashboard template ships `packageManager: pnpm@12.3.4`, `pnpm-lock.yaml` and

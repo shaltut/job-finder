@@ -39,7 +39,7 @@ drafts application emails.
    down database or a wrong CV path fails fast).
 2. For each term open
    `https://www.linkedin.com/search/results/content/?keywords=<term>&datePosted=%5B%22past-24h%22%5D`.
-   Since 2026-09-10 the literal term `feed` opens `https://www.linkedin.com/feed/` instead — Ahmed's own home
+   Since 2026-09-10 the literal term `feed` opens `https://www.linkedin.com/feed/` instead — the original author's own home
    feed carries recruiter posts the search terms miss, and every later step is identical (there is no
    `datePosted` filter on the feed, so its age spread is whatever the feed serves).
    If the URL lands on a login page, log `login expired` and exit code 2.

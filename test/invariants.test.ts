@@ -188,7 +188,7 @@ test('config.json is not read anywhere: the database is the only source of setti
   // comments may still name the file to explain the migration, so strip them first — as the
   // identity test above does — and look only at code
   const offenders = [...serverFiles, 'scraper/run.ts', 'scraper/lib.ts']
-    .filter(f => f !== 'server/plugins/migrate.ts')
+    .filter(f => f !== join('server', 'plugins', 'migrate.ts')) // join, not a literal: walk() emits backslashes on Windows
     .filter((f) => {
       const code = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
       return /config\.json/.test(code)
