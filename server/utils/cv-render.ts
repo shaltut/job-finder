@@ -60,7 +60,9 @@ export function renderCvHtml(cv: CvContent, profile: Profile): string {
     section('Experience', roles),
     section('Education', list(cv.education)),
     section('Certifications', list(cv.certifications)),
+    section('Personal Details', list(cv.personalDetails)),
     section('Languages', list(cv.languages)),
+    section('Interests', list(cv.interests)),
     '</body></html>'
   ].join('')
 }

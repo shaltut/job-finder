@@ -15,6 +15,8 @@ export interface CvContent {
   education: string[]
   certifications: string[]
   achievements: string[]
+  personalDetails: string[]
+  interests: string[]
   languages: string[]
 }
 
@@ -36,6 +38,8 @@ export interface MasterCv {
   education: string[]
   certifications: string[]
   achievements: string[]
+  personalDetails: string[]
+  interests: string[]
   languages: string[]
 }
 
@@ -55,6 +59,8 @@ export function assignIds(cv: CvContent): MasterCv {
     education: [...cv.education],
     certifications: [...cv.certifications],
     achievements: [...cv.achievements],
+    personalDetails: [...cv.personalDetails],
+    interests: [...cv.interests],
     languages: [...cv.languages]
   }
 }
@@ -74,6 +80,8 @@ export function toContent(master: MasterCv): CvContent {
     education: [...master.education],
     certifications: [...master.certifications],
     achievements: [...master.achievements],
+    personalDetails: [...master.personalDetails],
+    interests: [...master.interests],
     languages: [...master.languages]
   }
 }
@@ -117,7 +125,7 @@ const list = { type: 'array', items: { type: 'string' } } as const
 const CV_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['summary', 'roles', 'skills', 'education', 'certifications', 'achievements', 'languages'],
+  required: ['summary', 'roles', 'skills', 'education', 'certifications', 'achievements', 'personalDetails', 'interests', 'languages'],
   properties: {
     summary: { type: 'string' },
     roles: {
@@ -148,6 +156,8 @@ const CV_SCHEMA = {
     education: list,
     certifications: list,
     achievements: list,
+    personalDetails: list,
+    interests: list,
     languages: list
   }
 } as const
@@ -161,6 +171,10 @@ const EXTRACT_INSTRUCTIONS = [
   'separator such as a dash stranded in a field.',
   'Put a section of standalone achievements — often titled "Selected Achievements" or similar — in',
   'achievements, one entry per item, verbatim. Leave it empty when the CV has no such section.',
+  'Put a personal-details section — date of birth, nationality, marital status and the like — in',
+  'personalDetails, one entry per item, verbatim, but leave languages out of it: they have their own field.',
+  'Put an interests or hobbies section in interests, one entry per item. Leave either empty when the CV has',
+  'no such section.',
   'Leave out the name and the contact details; they are supplied elsewhere.'
 ].join(' ')
 

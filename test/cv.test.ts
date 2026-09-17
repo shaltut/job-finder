@@ -42,6 +42,8 @@ const content = (): CvContent => ({
   education: ['BSc Computer Science, Example University, 2015'],
   certifications: ['Cloud Architect Certification'],
   achievements: ['Cut cloud spend 30% by consolidating three billing pipelines.'],
+  personalDetails: ['Date of Birth: 1 January 1990'],
+  interests: ['Reading', 'Football'],
   languages: ['English (native)', 'Spanish (professional)']
 })
 
@@ -210,6 +212,8 @@ test('a CV reordered and reworded within the rules passes, roles still in date o
   assert.deepEqual(r.cv.skills.map(s => s.group), ['Data', 'Backend'])
   assert.deepEqual(r.cv.education, content().education)
   assert.deepEqual(r.cv.achievements, content().achievements)
+  assert.deepEqual(r.cv.personalDetails, content().personalDetails)
+  assert.deepEqual(r.cv.interests, content().interests)
 })
 
 test('a malformed cv block is a rejection, never a throw', () => {
@@ -338,6 +342,8 @@ test('renderCvHtml renders every role, bullet and skill, in the CV\'s own font',
   }
   assert.ok(html.includes('ASP.NET Core'))
   assert.ok(html.includes(content().achievements[0]!), 'the achievements section must render')
+  assert.ok(html.includes(content().personalDetails[0]!), 'the personal details section must render')
+  assert.ok(html.includes(content().interests[0]!), 'the interests section must render')
   assert.match(html, /font-family:\s*Carlito, Calibri, sans-serif/)
 })
 

@@ -47,6 +47,8 @@ const masterText = (m: MasterCv): string => [
   ...m.education,
   ...m.certifications,
   ...m.achievements,
+  ...m.personalDetails,
+  ...m.interests,
   ...m.languages
 ].join('\n')
 
@@ -126,6 +128,8 @@ export function tailoredCv(raw: unknown, master: MasterCv): TailorResult {
       education: [...master.education],
       certifications: [...master.certifications],
       achievements: [...master.achievements],
+      personalDetails: [...master.personalDetails],
+      interests: [...master.interests],
       languages: [...master.languages]
     }
   }

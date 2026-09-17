@@ -241,6 +241,8 @@ const cvContent = {
   education: [],
   certifications: [],
   achievements: [],
+  personalDetails: [],
+  interests: [],
   languages: []
 }
 
