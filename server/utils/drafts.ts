@@ -22,7 +22,7 @@ export interface StoredDraft {
 }
 
 /** Filenames must round-trip an email address safely. */
-const slug = (email: string) => email.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+export const slug = (email: string) => email.toLowerCase().replace(/[^a-z0-9]+/g, '_')
 
 /**
  * The signature the skill is told not to write. Kept here so it is identical on every draft and so the

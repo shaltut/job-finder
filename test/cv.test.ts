@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assignIds, loadMasterCv, masterCvBlock, matchKey, missingBullets, pdfSha256, toContent, type CvContent, type Extractor } from '../server/utils/cv-master.ts'
 import { tailoredCv } from '../server/utils/cv-tailor.ts'
+import { emptySettings } from '../shared/settings.ts'
+import { createCvRenderer, renderCvHtml, tailoredCvPath } from '../server/utils/cv-render.ts'
 
 /** A neutral CV — nobody's real career. */
 const content = (): CvContent => ({
@@ -314,4 +316,39 @@ test('a multi-line extracted value stays on the line of its id, so it can never 
   const block = masterCvBlock(m)
   assert.equal(block.includes('\n\n---\n\n'), false)
   assert.match(block, /\(r0\.b0\) Led a team of 12 engineers --- across backend and DevOps\./)
+})
+
+const profile = { ...emptySettings().profile, name: 'Test Person', title: 'Engineering Manager', email: 'test@example.com' }
+
+test('renderCvHtml escapes every value, so a CV can never inject markup', () => {
+  const cv = content()
+  cv.roles[0]!.bullets[0] = 'Shipped <script>alert(1)</script> & more'
+  const html = renderCvHtml(cv, profile)
+  assert.equal(html.includes('<script>alert'), false)
+  assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt; &amp; more'))
+})
+
+test('renderCvHtml renders every role, bullet and skill, in the CV\'s own font', () => {
+  const html = renderCvHtml(content(), profile)
+  for (const role of content().roles) {
+    assert.ok(html.includes(role.title), role.title)
+    for (const bullet of role.bullets) assert.ok(html.includes(bullet), bullet)
+  }
+  assert.ok(html.includes('ASP.NET Core'))
+  assert.match(html, /font-family:\s*Carlito, Calibri, sans-serif/)
+})
+
+test('a tailored CV keeps the uploaded filename, in a folder of its own per recruiter', () => {
+  // createDraft names the attachment basename(path), so this filename is what the recruiter sees
+  assert.equal(tailoredCvPath('data/cv/My-CV.pdf', 'HR@Acme.sa'), join('data', 'cv', 'tailored', 'hr_acme_sa', 'My-CV.pdf'))
+})
+
+test('the renderer launches no browser until something is rendered', async () => {
+  let launches = 0
+  const renderer = createCvRenderer(async () => {
+    launches++
+    throw new Error('must not launch')
+  })
+  await renderer.close()
+  assert.equal(launches, 0)
 })
