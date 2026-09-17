@@ -217,8 +217,12 @@ to the posts in this email:
 - Education, certifications and languages are not returned; they are copied from the master CV unchanged.
 - Never copy an id such as `r0.b3` into a bullet or into the email.
 
-Every rule here is checked in code, and a CV that breaks any of them is discarded in favour of the
-original. Staying inside them is the only way a tailored CV is actually sent.
+The structural rules above — the ids, the ordering, the sets, the lengths, a number or a technology
+appearing from nowhere — are checked in code, and a CV that breaks one is discarded in favour of the
+original. The rule that the summary states only facts the master CV contains is **not fully checked and
+cannot be**: code can see a digit that came from nowhere, not a sentence that is unfair. Where the checks
+end you are the only guard, and the CV goes out over the owner's name. Staying inside all of them is the
+only way a tailored CV is actually sent.
 
 ## Follow-up mode
 
