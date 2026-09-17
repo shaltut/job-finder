@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildMime, findAttachment, renderHtml } from '../server/utils/gmail.ts'
+import { buildMime, ccFrom, findAttachment, renderHtml, replyHeaders } from '../server/utils/gmail.ts'
 import { classifyMessage, decideStage, FOLLOW_UP_AFTER_MS, untilDue, type GmailMessage } from '../server/utils/stages.ts'
 
 const ME = 'me@gmail.com'
@@ -174,4 +174,67 @@ test('findAttachment locates the PDF at any nesting depth', () => {
   const payload = { parts: [{ parts: [{ filename: '', mimeType: 'text/plain' }] }, { filename: 'cv.pdf', body: { size: 1381 } }] }
   assert.equal(findAttachment(payload, 'cv.pdf'), 1381)
   assert.equal(findAttachment(payload, 'other.pdf'), null)
+})
+
+// ---------------- Cc ----------------
+//
+// The post that prompted this said "send to X / CC Y" and the draft went to X alone, so the person who
+// screens the CVs never saw it. Both addresses were in posts.emails the whole time; only emails[0] was used.
+
+test('buildMime carries a Cc when given one and omits the header entirely when not', () => {
+  const withCc = buildMime({ to: REC, cc: 'reem@acme.sa', subject: 'Role', text: 'x' })
+  assert.ok(withCc.includes('Cc: reem@acme.sa'), 'Cc header missing')
+  assert.ok(!buildMime({ to: REC, subject: 'Role', text: 'x' }).includes('Cc:'), 'empty Cc must not emit a header')
+})
+
+test('ccFrom keeps the other addresses, drops the recipient and the owner, and dedupes case', () => {
+  const lists = [['hr@acme.sa', 'Reem@acme.sa'], ['reem@acme.sa', 'owner@mine.com']]
+  assert.deepEqual(ccFrom(lists, 'hr@acme.sa', 'owner@mine.com'), ['reem@acme.sa'])
+})
+
+test('ccFrom excludes the recipient wherever it sits, not just at index 0', () => {
+  // the follow-up sweep finds a contact through json_each at any index, so position proves nothing
+  assert.deepEqual(ccFrom([['second@acme.sa', 'first@acme.sa']], 'first@acme.sa'), ['second@acme.sa'])
+})
+
+test('ccFrom returns nothing when the post named one address', () => {
+  assert.deepEqual(ccFrom([['hr@acme.sa']], 'hr@acme.sa'), [])
+})
+
+// ---------------- threading the follow-up onto the application ----------------
+
+test('row 6 hands back the application message, so the follow-up can reply to it', () => {
+  const sent = NOW - FOLLOW_UP_AFTER_MS
+  const application = msg({
+    id: 'app', threadId: 'thread-1', messageId: '<app@mail.gmail.com>',
+    subject: 'Senior .NET Developer — Application', from: ME, date: sent
+  })
+  const d = decideStage({ ...base, messages: [application] })
+  assert.equal(d.row, 6)
+  assert.equal(d.replyTo?.threadId, 'thread-1')
+  assert.equal(d.replyTo?.messageId, '<app@mail.gmail.com>')
+})
+
+test('the follow-up inherits the application subject verbatim and claims all three criteria', () => {
+  // Gmail joins a draft to a thread only when threadId, RFC 2822 In-Reply-To/References AND a matching
+  // Subject are all present. The model returns a subject of its own regardless of the procedure telling
+  // it not to — "Follow up" went out on 17 Sep — so the subject is taken from the thread, in code.
+  const h = replyHeaders({ threadId: 'thread-1', messageId: '<app@mail>', subject: 'Senior .NET Developer' })
+  assert.equal(h.subject, 'Senior .NET Developer', 'verbatim is the only form the matching-Subject rule guarantees')
+  assert.equal(h.inReplyTo, '<app@mail>')
+  assert.equal(h.references, '<app@mail>')
+  assert.equal(h.threadId, 'thread-1')
+})
+
+test('without a Message-ID the follow-up keeps the subject but never claims the thread', () => {
+  // Fail open, the way every derived flag rule does: a detached email carrying the real role name beats
+  // one titled "Follow up". Claiming the thread without the headers is what Gmail rejects.
+  const h = replyHeaders({ threadId: 'thread-1', subject: 'Senior .NET Developer' })
+  assert.equal(h.subject, 'Senior .NET Developer')
+  assert.equal(h.threadId, undefined, 'all three criteria or none of them')
+  assert.equal(h.inReplyTo, undefined)
+})
+
+test('no application message at all leaves every header to the caller', () => {
+  assert.deepEqual(replyHeaders(undefined), {})
 })

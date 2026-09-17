@@ -158,6 +158,14 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   records the marketing link beside it, so `json_array_length(links) > 0` is a lie in the UI. Measured:
   7 of the 27 live rows carry a link and **none** is an application link. `ref_ids` is metadata only, never
   a channel. **`links` is not `post_url`** — that is the post's own LinkedIn permalink.
+- **The first address is the recipient; every other address on the post becomes the `Cc`.** `ccFrom()` in
+  `server/utils/gmail.ts` decides it, and both draft paths pass it. A post that says "send to X, CC Y" is
+  giving an instruction, and dropping Y is not cosmetic — it cost a real application, because the second
+  address was the person screening the CVs. The **group key stays `emails[0]`**: `contacts` keeps one row
+  per recruiter, so a Cc'd party never becomes a contact of their own and never earns their own email —
+  the two-emails-ever ceiling counts recruiters, not addresses. Exclusion is **by value, not position**,
+  because the follow-up sweep matches a contact through `json_each` at any index; the owner's own address
+  is dropped too. Pinned by `test/stages.test.ts`.
 - **`posts.applied_at`** — the owner applied by hand, through the post's link or number. Same shape and same
   reasoning as `dismissed_at`, written by `POST /api/posts/applied` through `setApplied()`, and deliberately
   **not** a third `applications` verdict: the follow-up sweep finds unmentioned roles by the *absence* of a
@@ -192,8 +200,15 @@ the tests and the browser's types all read the same file. `server/utils/config.t
 and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
 
 - `profile` — name, title, location, email, phone, LinkedIn, GitHub, languages, years.
-- `constraints` — `remoteAnywhere`, `onsiteCountries`, `willRelocate`, `canStartImmediately`, `workingHours`,
-  and `workingHours`. (`stackWeighting` is gone — see `scope` below.)
+- `constraints` — `remoteAnywhere`, `onsiteCountries`, `willRelocate`, `canStartImmediately`, `workingHours`
+  and `expectedSalary`. (`stackWeighting` is gone — see `scope` below.) `expectedSalary` is **free text**,
+  not an amount and a currency: what a post wants back may be a range and may differ by work model, and a
+  number field would force a guess at exactly the value a guess must never be made about. Quoted verbatim
+  when a post asks. It is deliberately **not** in `missingFields()` — most posts never ask, so an empty one
+  must not block every draft; a post that does ask and finds it empty is skipped, never drafted with a
+  blank. The prompt says `NOT PROVIDED` rather than omitting the line, so the model can tell "the owner
+  gave me none" from "no post asked". An existing row needs no migration: `upgradeSettings()` shapes every
+  read over `EMPTY_SETTINGS`, so a new key arrives with its default.
 - `scope` — `roleFamily`, `primarySkills`, `secondarySkills`, `excludedRoles`, `seniorityFloor`. **Read by
   the scorer, the pre-screen and the drafter**, which is why it is separate from `background`. Every one is
   omitted from its prompt when empty rather than emitted blank.
@@ -309,6 +324,20 @@ drafts keep arguing from a stale CV.
   rewrote the verdict to `skipped`, destroying the `named in ...` prefix the follow-up query needs — the
   recruiter would later have been told about a role the first email already covered. The skip insert carries
   `WHERE applications.verdict <> 'drafted'`.
+- **An email with a hole in it must never be deliverable.** A draft went out reading
+  `Expected monthly salary: [ADD BEFORE SENDING]` and the recruiter replied to point at the gap. Nothing
+  downstream reads the body before Gmail does, so `PLACEHOLDER` in `server/utils/drafter.ts` rejects a
+  square-bracketed slot or a `TBD`/`TODO` in the subject or body, inside `checkContract`. **In code, not in
+  the prompt**, for the same reason `gateOnPostType()` is: the model follows a written instruction most of
+  the time, and "most of the time" is the failure. Both directions are pinned by `test/drafter.test.ts` — a
+  clean email must still pass, or the guard would quietly empty the queue.
+  **A rejection and a skip are not the same outcome, and the difference is which queue the post falls back
+  into.** The procedure tells the model to skip a post whose required value was not injected, which is the
+  intended path and writes a `skipped` row — and the batch queue is `WHERE a.key IS NULL`, so that post
+  never returns to it; after filling the missing setting it is re-drafted per post from the Posts view,
+  whose single-key query carries no such filter. A guard rejection writes no row at all, so those posts stay
+  unprocessed and the next run picks them up, the same posture as a failed score. `jobs.ts` catches per
+  recruiter, so either way one recruiter fails and the other eight still get their emails.
 
 ### Settings
 
@@ -406,6 +435,18 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   draft that logs `NO CV ATTACHED` means the PDF path is wrong.
 - **`renderHtml` emits real anchors.** Gmail rewrites bare URLs in a plain-text body into `google.com/url?q=`
   redirects; two applications went out that way on the original.
+- **The follow-up is a reply, in the application's own thread.** Gmail adds a draft to a thread only when
+  all three of its criteria hold — `threadId` on the request, RFC 2822 `In-Reply-To`/`References`, **and a
+  Subject header that matches** — so the subject is taken from the application verbatim and whatever the
+  model returned is discarded. `replyHeaders()` in `server/utils/gmail.ts` is the one place that decides it,
+  fed by `Decision.replyTo` (row 6 of the stage machine, the application message itself). The procedure has
+  always said "return no `subject`", and the model returns one anyway: three follow-ups went out on 17 Sep as
+  fresh threads, one titled **"Follow up"**. In code, not in the prompt — the `gateOnPostType()` rule again.
+  A missing `Message-ID` **fails open**: the real subject on a new thread, never a bare "Follow up".
+  `createDraft` returns the thread it actually landed in and the sweep logs `NEW THREAD` when it differs,
+  the same verify-don't-assume posture as the attached byte count. Measured 2026-09-17: a verbatim subject
+  threads. A `Re: ` prefix was **not** tested — Gmail very likely normalises it, but verbatim is the only
+  form the documented rule guarantees, so that is what ships.
 - **The stage machine is a pure function** in `server/utils/stages.ts` — the original's 8-row table in code,
   with a test per row. Order matters: a bounce or an auto-reply must never be read as a human reply, or a
   live application stops dead. Silence is 72 hours from the last outgoing message.
@@ -452,9 +493,12 @@ back on a different host, port and path — which Google accepts.
   CTAs the gate exists to reject.
 - **Widening admission widens the OpenAI bill.** Admission runs before `scorePost`, so every newly admitted
   post is a scoring call and `max` now caps a broader population.
-- **The Google round trip is authorised but has not yet created a real draft.** Consent and token exchange
-  have run against Google; refresh, real draft creation with the CV attached, and a real sweep are written
-  and unit tested but still unexercised end to end. The first drafted post is the test.
+- **The Google round trip is exercised end to end.** Measured 2026-09-17: 25 `applications` rows carry a
+  `gmail_draft_id`, `contacts` holds 20 recruiters across every stage from `drafted` to `replied`, so
+  refresh, draft creation with the CV attached, sending and the sweep have all run against the real
+  account. What that run also proved is the cost of an unreviewed draft: one went out with an unfilled
+  placeholder where a salary belonged, and one went to a single address on a post that named a Cc. Both
+  are now guarded above.
 - The **Usable** KPI counts `score >= 6 AND post_type is hiring AND no flags AND not dismissed AND
   (in_scope OR remote) AND not applied`, so a
   strong role whose post never states a location is missing from the headline number. It still appears in the

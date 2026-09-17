@@ -111,7 +111,13 @@ export function profileBlock(config: AppConfig): string {
     `On-site or hybrid roles are in scope only in: ${c.onsiteCountries.join(', ')}`,
     `Willing to relocate to: ${c.willRelocate.length ? c.willRelocate.join(', ') : 'nowhere'}`,
     `Can start immediately: ${c.canStartImmediately ? 'yes' : 'no — there is a notice period'}`,
-    `Acceptable working hours: ${c.workingHours}`
+    `Acceptable working hours: ${c.workingHours}`,
+    // Stated only when a post asks for it. Injected either way, because the model has to be able to
+    // tell "the owner did not give me one" apart from "no post asked": the first is a reason to skip
+    // a post outright, and the second is not. Neither is a reason to invent a number.
+    c.expectedSalary
+      ? `Expected salary, to quote verbatim when a post asks for one: ${c.expectedSalary}`
+      : 'Expected salary: NOT PROVIDED. If a post requires one, skip that post and say so in `reason`.'
   ].filter(Boolean).join('\n')
 }
 
@@ -193,6 +199,23 @@ export function parseResponse(raw: string): DraftResponse {
 }
 
 /**
+ * An unfilled slot the model left for a human to complete. The drafter has no tools and no reviewer, so
+ * whatever it returns is what the recruiter reads: one `[ADD BEFORE SENDING]` went out and the recruiter
+ * replied to say the email had a blank in it. A plain-text application written properly carries no square
+ * brackets, so the shape is the rule.
+ *
+ * In code rather than in the procedure for the same reason gateOnPostType() is: the model follows a
+ * written instruction most of the time, and "most of the time" is the failure. The prompt asks for a
+ * complete email; this is what makes an incomplete one impossible to deliver.
+ *
+ * ponytail: a shape check on the one failure actually observed, not a completeness proof. It does not
+ * catch `______`, `(please fill in)`, `<amount>` or a bare `N/A`. Widen it when a second shape is seen,
+ * not before — a guess at the next shape costs a lead every time it is wrong, and the procedure already
+ * tells the model to skip a post whose value it does not have.
+ */
+export const PLACEHOLDER = /\[[^\]\n]{0,120}\]|\b(?:TBD|TODO|FIXME|XXX)\b/i
+
+/**
  * Guards the contract the database depends on: every requested post gets exactly one verdict, drafted posts
  * carry the `named in ...` prefix the follow-up query looks for, and at most one post carries the email.
  */
@@ -216,6 +239,14 @@ export function checkContract(req: DraftRequest, res: DraftResponse): string[] {
   if (withBody.length > 1) problems.push('more than one post carries an email body; expected one per recruiter')
   if (req.mode === 'apply' && withBody.length === 1 && !withBody[0]!.subject) {
     problems.push('the drafted email has a body but no subject')
+  }
+
+  // Fail closed: a draft with a hole in it is worse than no draft, because nothing downstream reviews it.
+  for (const r of res.results) {
+    for (const [field, value] of [['subject', r.subject], ['body', r.body]] as const) {
+      const hit = value?.match(PLACEHOLDER)
+      if (hit) problems.push(`the ${field} for ${r.key} still carries an unfilled placeholder: ${hit[0]}`)
+    }
   }
   return problems
 }

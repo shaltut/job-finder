@@ -10,6 +10,8 @@ export type MessageKind = 'outgoing' | 'bounce' | 'auto-reply' | 'reply' | 'othe
 export interface GmailMessage {
   id: string
   threadId: string
+  /** The RFC 2822 Message-ID header, not Gmail's own id. Absent unless the caller asked for it. */
+  messageId?: string
   from: string
   subject: string
   snippet: string
@@ -58,6 +60,11 @@ export interface Decision {
   postsReason: string
   /** when the follow-up becomes due, if we are waiting */
   followUpDueAt: number | null
+  /**
+   * The application this follow-up answers, on row 6 only. Gmail needs its subject and Message-ID to put
+   * the follow-up in the same thread; see replyHeaders() in gmail.ts for what it does with them.
+   */
+  replyTo?: GmailMessage
 }
 
 export const FOLLOW_UP_AFTER_MS = 72 * 3600_000 // "three days of silence"
@@ -112,7 +119,7 @@ export function decideStage(input: DecideInput): Decision {
       return { row: 5, stage: 'contacted', action: 'none', note: `follow-up due ${new Date(due).toISOString()}`, postsReason: 'recruiter contacted, follow-up due', followUpDueAt: due }
     }
     // 6 — three days of silence: write the one follow-up he is allowed
-    return { row: 6, stage: 'followed_up', action: 'draft-the-follow-up', note: 'silent for 3 days', postsReason: 'named in follow-up', followUpDueAt: due }
+    return { row: 6, stage: 'followed_up', action: 'draft-the-follow-up', note: 'silent for 3 days', postsReason: 'named in follow-up', followUpDueAt: due, replyTo: outgoing[0]! }
   }
 
   // 7 — nothing sent yet, but a draft is already waiting. Never edit it.

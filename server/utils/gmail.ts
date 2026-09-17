@@ -185,11 +185,56 @@ const encHeader = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Bu
 
 export interface MimeInput {
   to: string
+  /** Comma-separated and already deduped by ccFrom(). Empty or absent means no Cc header at all. */
+  cc?: string
   subject?: string
   inReplyTo?: string
   references?: string
   text: string
   html?: string
+}
+
+/**
+ * Every address the posts named except the one being written to. A post that says "send to X, CC Y" is
+ * giving an instruction, and dropping Y is not cosmetic: it cost a real application, because the second
+ * address was the person who actually screens the CVs.
+ *
+ * Excluded BY VALUE, not by position. The drafter groups on emails[0], but the follow-up sweep matches a
+ * contact through json_each at any index, so `to` can be any element of the list. The owner's own
+ * address is dropped for the same reason: a post that quotes it back would otherwise self-address the
+ * application. Lower-cased and deduped because one post can name the same address twice.
+ */
+export const ccFrom = (lists: string[][], to: string, own = ''): string[] => {
+  const drop = new Set([to.toLowerCase(), own.toLowerCase()].filter(Boolean))
+  const seen = new Set<string>()
+  return lists.flat().map(e => e.trim().toLowerCase())
+    .filter(e => e && !drop.has(e) && !seen.has(e) && seen.add(e))
+}
+
+/**
+ * What a follow-up must carry to land inside the application's own thread instead of beside it.
+ *
+ * Gmail adds a draft to a thread only when all three hold: the threadId is on the request, In-Reply-To
+ * and References are RFC 2822, and the Subject headers MATCH. That last one is why the subject is taken
+ * from the application verbatim and the model's is thrown away — `Re: ` is not a matching header, and the
+ * procedure's "return no subject (the thread's is inherited)" has never been obeyed: three follow-ups went
+ * out on 17 Sep as fresh threads, one of them titled "Follow up". Same lesson as gateOnPostType() and
+ * PLACEHOLDER — a rule the email depends on lives in code, not in the prompt.
+ *
+ * No Message-ID fails open to the right subject on a new thread, the way every derived flag rule fails
+ * open: a detached email naming the real role still beats one titled "Follow up".
+ */
+export function replyHeaders(
+  anchor?: { threadId: string, messageId?: string, subject: string }
+): { subject?: string, inReplyTo?: string, references?: string, threadId?: string } {
+  if (!anchor) return {}
+  if (!anchor.messageId) return { subject: anchor.subject }
+  return {
+    subject: anchor.subject,
+    inReplyTo: anchor.messageId,
+    references: anchor.messageId,
+    threadId: anchor.threadId
+  }
 }
 
 /** multipart/mixed [ multipart/alternative [text, html], application/pdf ]. */
@@ -198,6 +243,7 @@ export function buildMime(m: MimeInput, pdfName?: string, pdf?: Buffer): string 
   const B = `alt${Date.now()}`
   const head = [
     `To: ${m.to}`,
+    m.cc ? `Cc: ${m.cc}` : '',
     m.subject ? `Subject: ${encHeader(m.subject)}` : '',
     m.inReplyTo ? `In-Reply-To: ${m.inReplyTo}` : '',
     m.references ? `References: ${m.references}` : '',

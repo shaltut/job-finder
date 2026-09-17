@@ -39,7 +39,12 @@ export const settingsSchema = z.object({
     onsiteCountries: z.array(z.string().trim().min(1)),
     willRelocate: z.array(z.string().trim().min(1)),
     canStartImmediately: z.boolean(),
-    workingHours: z.string().trim()
+    workingHours: z.string().trim(),
+    // Free text, not an amount and a currency. What a post wants back may be a range, may differ by
+    // work model ("X remote, Y hybrid"), and carries a unit only the owner knows is expected — a
+    // number field would force a guess at exactly the value a guess must never be made about.
+    // Not in missingFields(): most posts never ask, so an empty one must not block every draft.
+    expectedSalary: z.string().trim().max(200)
   }),
   // What counts as a match. Read by the scorer, the pre-screen AND the drafter — which is why it is
   // separate from `background` below, whose only consumer is the drafter. Nothing here names a
@@ -114,7 +119,8 @@ export const EMPTY_SETTINGS: StoredSettings = {
     onsiteCountries: [],
     willRelocate: [],
     canStartImmediately: true,
-    workingHours: ''
+    workingHours: '',
+    expectedSalary: ''
   },
   scope: { roleFamily: '', primarySkills: [], secondarySkills: [], excludedRoles: [], seniorityFloor: 0 },
   cv: '',

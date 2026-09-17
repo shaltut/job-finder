@@ -10,6 +10,8 @@ export const DRAFTS_DIR = resolve(process.cwd(), 'data/drafts')
 
 export interface StoredDraft {
   recruiterEmail: string
+  /** Optional: drafts written before the Cc fix have no such key and must still parse. */
+  cc?: string[]
   mode: 'apply' | 'follow-up'
   subject: string | null
   body: string

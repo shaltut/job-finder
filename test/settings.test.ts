@@ -35,7 +35,8 @@ const complete = (): StoredSettings => ({
   },
   constraints: {
     remoteAnywhere: true, onsiteCountries: ['Egypt'], willRelocate: [],
-    canStartImmediately: true, workingHours: '09:00-21:00 Africa/Cairo'
+    canStartImmediately: true, workingHours: '09:00-21:00 Africa/Cairo',
+    expectedSalary: '8,000 USD / month'
   },
   cv: 'data/cv/test.pdf',
   terms: ['vue nuxt developer'],
@@ -260,7 +261,8 @@ const oldShapeRow = () => ({
   },
   constraints: {
     remoteAnywhere: true, onsiteCountries: ['Egypt'], willRelocate: [],
-    canStartImmediately: true, workingHours: '09:00-21:00 Africa/Cairo'
+    canStartImmediately: true, workingHours: '09:00-21:00 Africa/Cairo',
+    expectedSalary: '8,000 USD / month'
   },
   cv: 'data/cv/test.pdf',
   terms: ['vue nuxt developer', 'feed'],

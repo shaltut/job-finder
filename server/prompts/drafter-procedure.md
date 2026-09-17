@@ -75,6 +75,13 @@ Rules for the fields:
   recruiter, the others get `verdict: "drafted"` with `reason` starting `named in application` and no body.
 - `body` is **plain text only.** No markdown, no HTML, no `&`. The server renders the HTML part and
   appends the signature — do not write a signature yourself.
+- **The email must be sendable exactly as written.** Never leave a placeholder, a blank, a
+  square-bracketed slot or a "TBD" for someone to fill in later: you have no way to fill it, nothing
+  reviews the text, and the server creates the draft from what you return. One unfilled slot reached a
+  real recruiter, who replied to say the email had a gap where a number should be. If a post requires a
+  value that was not injected above, return `verdict: "skipped"` and name the missing value in `reason`
+  — a post you cannot answer in full is one you do not answer at all. The server rejects a body that
+  carries a placeholder, so the whole recruiter batch is lost rather than sent incomplete.
 - `reason` for a drafted post must start with `named in application` (or `named in follow-up` in follow-up
   mode). The follow-up query depends on that prefix.
 
@@ -173,7 +180,9 @@ rate and time zone. Named companies with real job specs get the full treatment. 
 plain sentences: the role and the date of the original email; still interested; one line naming any further
 roles from this recruiter that pass screening; an offer to provide anything further; "CV attached again."
 **No new claims and no new evidence** — the application already made the case. `reason` starts
-`named in follow-up`. Return no `subject` (the thread's is inherited).
+`named in follow-up`. Return no `subject`: the follow-up is sent as a reply inside the original thread, and
+the server takes the subject from the application itself. Any `subject` you return is discarded — Gmail only
+joins the thread when the Subject header matches the original exactly.
 
 ## Before you return
 

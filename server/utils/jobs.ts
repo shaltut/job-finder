@@ -8,9 +8,9 @@
 // session pays 3-5 minutes of setup regardless of how many posts it handles.
 import { spawn, type ChildProcess } from 'node:child_process'
 import { readConfig, readConfigForDraft } from './config'
-import { runDrafter, type DraftPost, type DraftRequest } from './drafter'
+import { runDrafter, type DraftPost, type DraftRequest, type DraftResponse } from './drafter'
 import { isClosed, persist, signature, writeDraftFile } from './drafts'
-import { createDraft, gmailStatus, renderHtml } from './gmail'
+import { ccFrom, createDraft, gmailStatus, renderHtml } from './gmail'
 import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 import { sweep } from './sync'
 
@@ -278,8 +278,13 @@ async function runDraftJob(
       return 0
     }
 
-    // group by first email — one recruiter, one email
+    // Group by first email — one recruiter, one email. The other addresses on a post are not thrown
+    // away: they become the Cc, because a post naming a second address is usually naming the person
+    // who actually screens the CVs. The key stays emails[0] so `contacts` keeps one row per recruiter
+    // and a Cc'd party never becomes a contact of their own, which would later earn them an email of
+    // their own — the two-emails-ever ceiling counts recruiters, not addresses.
     const groups = new Map<string, DraftPost[]>()
+    const groupEmails = new Map<string, string[][]>()
     for (const r of rows as Record<string, unknown>[]) {
       const emails = JSON.parse((r.emails as string) || '[]') as string[]
       const to = emails[0]?.toLowerCase()
@@ -295,6 +300,7 @@ async function runDraftJob(
         text: r.text as string
       }
       groups.set(to, [...(groups.get(to) ?? []), post])
+      groupEmails.set(to, [...(groupEmails.get(to) ?? []), emails])
     }
     push(`${rows.length} post(s) across ${groups.size} recruiter(s)`)
 
@@ -320,8 +326,21 @@ async function runDraftJob(
         continue
       }
 
+      const cc = ccFrom(groupEmails.get(email) ?? [], email, config.profile.email)
       const req: DraftRequest = { mode: 'apply', recruiterEmail: email, posts }
-      const res = await runDrafter(req, config, { onLog: push, signal })
+      // One recruiter must not end the batch. The contract check now rejects an email carrying an unfilled
+      // placeholder, which makes a rejection an ordinary event rather than a rare one. A rejection writes
+      // NO applications row, so these posts stay `a.key IS NULL` and the next run picks them up again,
+      // exactly as a failed score does. That is the difference from a skip: a skipped post does have a row
+      // and never returns to this queue — it is re-drafted per post from the Posts view, which is the path
+      // to use after filling in a setting the drafter said was missing.
+      let res: DraftResponse
+      try {
+        res = await runDrafter(req, config, { onLog: push, signal })
+      } catch (e) {
+        push(`${email}: ${(e as Error).message} — nothing drafted, the posts stay unprocessed and retry next run`)
+        continue
+      }
 
       const carrier = res.results.find(r => r.body)
       let ref: string | null = null
@@ -333,6 +352,7 @@ async function runDraftJob(
         if (gmailStatus().authorized) {
           const created = await createDraft({
             to: email,
+            cc: cc.join(', ') || undefined,
             subject: carrier.subject,
             text: `${carrier.body}\n\n${sig}`,
             html: renderHtml(carrier.body, sig)
@@ -342,6 +362,7 @@ async function runDraftJob(
         } else {
           const file = writeDraftFile({
             recruiterEmail: email,
+            cc,
             mode: 'apply',
             subject: carrier.subject ?? null,
             body: carrier.body,

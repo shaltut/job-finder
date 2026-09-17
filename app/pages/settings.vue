@@ -432,6 +432,16 @@ async function disconnectGmail() {
                 class="w-full"
               />
             </UFormField>
+            <UFormField
+              label="Expected salary"
+              help="Quoted verbatim when a post asks for one. Left empty, a post that demands a figure is skipped rather than drafted with a blank in it."
+            >
+              <UInput
+                v-model="form.constraints.expectedSalary"
+                class="w-full"
+                placeholder="e.g. 8,000 USD / month, or a range"
+              />
+            </UFormField>
           </div>
 
           <div class="space-y-3">

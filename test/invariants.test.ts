@@ -195,3 +195,13 @@ test('config.json is not read anywhere: the database is the only source of setti
     })
   assert.deepEqual(offenders, [], `these files still read config.json: ${offenders.join(', ')}`)
 })
+
+test('the follow-up never sends the model its own subject: Gmail threads only on a matching Subject', () => {
+  // The procedure has always said "Return no subject (the thread's is inherited)" — and on 17 Sep the
+  // model returned "Follow up" anyway, on a draft nothing threaded. Same lesson as gateOnPostType() and
+  // PLACEHOLDER: a rule the email depends on belongs in code, not in the prompt.
+  const sync = readFileSync('server/utils/sync.ts', 'utf8')
+  const fn = sync.slice(sync.indexOf('async function draftFollowUp'))
+  assert.ok(!/carrier\.subject/.test(fn), 'the follow-up subject must come from the application, not the model')
+  assert.ok(/replyHeaders\(/.test(fn), 'the follow-up must build its headers from the application message')
+})

@@ -189,3 +189,46 @@ test('an empty config still composes a usable prompt rather than a confident bla
 test('candidateBlock and the procedure are the two halves, and only the first one varies', () => {
   assert.ok(buildSystemPrompt(config).startsWith(candidateBlock(config)))
 })
+
+// ---------------- the placeholder guard ----------------
+//
+// A real recruiter received an application whose salary line read "[ADD BEFORE SENDING]" and replied to
+// point it out. The drafter has no tools and nothing reviews its output, so a body with a hole in it is
+// delivered verbatim unless something refuses it. These four pin both directions: an incomplete email
+// must be rejected, and an ordinary one must still pass, or the guard would quietly empty the queue.
+
+test('checkContract rejects a body that still carries an unfilled placeholder', () => {
+  const holed = {
+    results: [{ ...ok.results[0], body: 'Hello. Expected monthly salary: [ADD BEFORE SENDING]. CV attached.' }, ok.results[1]],
+    report: ''
+  }
+  const problems = checkContract(req, parseResponse(JSON.stringify(holed)))
+  assert.ok(problems.some(p => p.includes('placeholder')), problems.join('; '))
+})
+
+test('checkContract rejects a placeholder left in the subject', () => {
+  const holed = { results: [{ ...ok.results[0], subject: 'Application - [POSITION]' }, ok.results[1]], report: '' }
+  const problems = checkContract(req, parseResponse(JSON.stringify(holed)))
+  assert.ok(problems.some(p => p.includes('placeholder')), problems.join('; '))
+})
+
+test('checkContract rejects a TBD standing in for a value', () => {
+  const holed = { results: [{ ...ok.results[0], body: 'Expected salary: TBD, happy to discuss.' }, ok.results[1]], report: '' }
+  const problems = checkContract(req, parseResponse(JSON.stringify(holed)))
+  assert.ok(problems.some(p => p.includes('placeholder')), problems.join('; '))
+})
+
+test('checkContract passes a complete email that states a real figure', () => {
+  const filled = {
+    results: [{ ...ok.results[0], body: 'Hello. Expected monthly salary: 8,000 USD. CV attached.' }, ok.results[1]],
+    report: ''
+  }
+  assert.deepEqual(checkContract(req, parseResponse(JSON.stringify(filled))), [])
+})
+
+test('profileBlock quotes the expected salary, and says so plainly when there is none', () => {
+  const withSalary = { ...config, constraints: { ...config.constraints, expectedSalary: '8,000 USD / month' } }
+  assert.match(profileBlock(withSalary), /quote verbatim when a post asks for one: 8,000 USD/)
+  // Empty must not read as a blank value: the model has to know it is missing so it skips the post.
+  assert.match(profileBlock({ ...config, constraints: { ...config.constraints, expectedSalary: '' } }), /NOT PROVIDED/)
+})
