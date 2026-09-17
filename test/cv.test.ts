@@ -2,7 +2,10 @@
 // rules, rendering and the attachment decision. See docs/superpowers/specs/2026-09-17-tailored-cv-design.md.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { assignIds, matchKey, missingBullets, pdfSha256, toContent, type CvContent } from '../server/utils/cv-master.ts'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { assignIds, loadMasterCv, matchKey, missingBullets, pdfSha256, toContent, type CvContent, type Extractor } from '../server/utils/cv-master.ts'
 
 /** A neutral CV — nobody's real career. */
 const content = (): CvContent => ({
@@ -85,4 +88,77 @@ test('the PDF hash follows the bytes and nothing else', () => {
   assert.equal(a, pdfSha256(bytes('%PDF-1.4 a')))
   assert.notEqual(a, pdfSha256(bytes('%PDF-1.4 b')))
   assert.match(a, /^[0-9a-f]{64}$/)
+})
+
+const fakeExtractor = (over: { content?: CvContent } = {}) => {
+  const calls = { extract: 0, verbatim: 0 }
+  const extractor: Extractor = {
+    model: 'fake-model',
+    extract: async () => {
+      calls.extract++
+      return over.content ?? content()
+    },
+    verbatim: async () => {
+      calls.verbatim++
+      return verbatim
+    }
+  }
+  return { extractor, calls }
+}
+
+/** A throwaway PDF and cache location; call `done()` in `finally`. */
+const scratch = (bytes: string) => {
+  const dir = mkdtempSync(join(tmpdir(), 'jobfinder-cv-'))
+  const pdf = join(dir, 'cv.pdf')
+  writeFileSync(pdf, bytes)
+  return { pdf, cache: join(dir, 'master.json'), done: () => rmSync(dir, { recursive: true, force: true }) }
+}
+
+test('the first load extracts and caches; the second is served from the cache', async () => {
+  const s = scratch('%PDF-1.4 one')
+  try {
+    const { extractor, calls } = fakeExtractor()
+    const first = await loadMasterCv(s.pdf, extractor, s.cache)
+    const second = await loadMasterCv(s.pdf, extractor, s.cache)
+    assert.deepEqual(first, second)
+    assert.deepEqual(calls, { extract: 1, verbatim: 1 })
+    assert.equal(JSON.parse(readFileSync(s.cache, 'utf8')).model, 'fake-model')
+  } finally {
+    s.done()
+  }
+})
+
+test('a new PDF invalidates the cache with no extra code: its bytes, and so its hash, changed', async () => {
+  const s = scratch('%PDF-1.4 one')
+  try {
+    const { extractor, calls } = fakeExtractor()
+    await loadMasterCv(s.pdf, extractor, s.cache)
+    writeFileSync(s.pdf, '%PDF-1.4 two')
+    await loadMasterCv(s.pdf, extractor, s.cache)
+    assert.equal(calls.extract, 2)
+  } finally {
+    s.done()
+  }
+})
+
+test('an extraction carrying a bullet the PDF text lacks is refused, and nothing is cached', async () => {
+  const s = scratch('%PDF-1.4 one')
+  try {
+    const bad = content()
+    bad.roles[0]!.bullets.push('Invented a scheduler nobody built.')
+    await assert.rejects(loadMasterCv(s.pdf, fakeExtractor({ content: bad }).extractor, s.cache), /r0\.b3/)
+    assert.throws(() => readFileSync(s.cache, 'utf8'))
+  } finally {
+    s.done()
+  }
+})
+
+test('an extraction with no roles is refused — the empty table a weak model returns under a strict schema', async () => {
+  const s = scratch('%PDF-1.4 one')
+  try {
+    const empty = { ...content(), roles: [] }
+    await assert.rejects(loadMasterCv(s.pdf, fakeExtractor({ content: empty }).extractor, s.cache), /no roles/)
+  } finally {
+    s.done()
+  }
 })
