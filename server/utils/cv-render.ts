@@ -40,7 +40,7 @@ export function renderCvHtml(cv: CvContent, profile: Profile): string {
   const section = (heading: string, body: string) => body ? `<h2>${heading}</h2>${body}` : ''
   const roles = cv.roles.map(r => [
     '<div class="role">',
-    `<div class="role-head"><span>${esc(r.title)} — ${esc(r.employer)}</span>`,
+    `<div class="role-head"><span>${[r.title, r.employer].filter(Boolean).map(esc).join(' — ')}</span>`,
     `<span class="role-meta">${esc([r.start, r.end].filter(Boolean).join(' – '))}</span></div>`,
     r.location ? `<div class="role-meta">${esc(r.location)}</div>` : '',
     list(r.bullets),

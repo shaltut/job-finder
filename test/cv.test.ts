@@ -355,3 +355,13 @@ test('the renderer launches no browser until something is rendered', async () =>
   await renderer.close()
   assert.equal(launches, 0)
 })
+
+test('a role with no employer renders no stray separator', () => {
+  // The extraction returns an empty string for a field the CV does not have, and a hard-coded " — "
+  // between title and employer then prints a dash with nothing after it.
+  const cv = content()
+  cv.roles[0]!.employer = ''
+  const html = renderCvHtml(cv, profile)
+  assert.equal(html.includes('Engineering Manager — <'), false)
+  assert.match(html, /<span>Engineering Manager<\/span>/)
+})
