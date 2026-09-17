@@ -535,8 +535,10 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   strips them before comparing while `missingBullets` only covers bullet text, so nothing else would have
   caught one before it printed into a CV. Education, certifications, achievements, personal details,
   languages and interests are never tailored: copied from the master verbatim and never shown to the model
-  (`masterCvBlock` lists only the summary, roles and skills) — the last three joined the list only after a
-  preview run against the real CV showed they were being silently dropped. The drafter returns a `cv` block
+  (`masterCvBlock` lists only the summary, roles and skills). Education, certifications and languages were
+  in the schema from the start; achievements, personal details and interests joined it only after separate
+  preview runs against the real uploaded CV showed each was being silently dropped — the schema had no
+  field for it at all, not just an empty one. The drafter returns a `cv` block
   beside the email, kept `z.unknown()` so it can never fail the email, and `tailoredCv()` in
   `server/utils/cv-tailor.ts` checks it: the same roles in date order, each bullet once under its own role,
   skills renamed never, no new number, no technology the master CV does not name, no bullet longer than
