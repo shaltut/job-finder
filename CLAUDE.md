@@ -498,8 +498,8 @@ drafts keep arguing from a stale CV.
   v12 is what breaks corepack.
 - **`@unovis` was dropped** from the template: it pulls `maplibre-gl` with a critical XSS advisory whose fix
   needs a major bump `@unovis` cannot take, and nothing here renders a map or a chart.
-- **The CV PDF is ~1.4 MB** (the original was built around 75 KB). Fine for the OpenAI file read and for
-  Gmail, but every application carries it.
+- **The CV PDF is ~56 KB** (measured 2026-09-17: two pages, no images, set in Carlito). Earlier notes said
+  ~1.4 MB; that was an older file.
 
 ## Conventions
 
@@ -527,6 +527,29 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   because the MCP tool corrupted base64 passed through the model; here the bytes are read from disk by the
   server and never touch a model. `createDraft` re-reads the draft and reports the attached byte count — a
   draft that logs `NO CV ATTACHED` means the PDF path is wrong.
+- **A tailored CV, when `tailorCv` is on** (off by default). The PDF is extracted once into a master CV,
+  cached in `data/cv/master.json` against its sha256, and every bullet must appear in a verbatim extraction
+  of the same PDF or nothing is cached. `assignIds` also strips control and format characters from every
+  extracted string, keeping tab, newline and carriage return: a PDF's text layer carries characters the eye
+  never sees — a stable `\x0E` turned up in the real CV's summary on every extraction — and `matchKey`
+  strips them before comparing while `missingBullets` only covers bullet text, so nothing else would have
+  caught one before it printed into a CV. Education, certifications, achievements, personal details,
+  languages and interests are never tailored: copied from the master verbatim and never shown to the model
+  (`masterCvBlock` lists only the summary, roles and skills) — the last three joined the list only after a
+  preview run against the real CV showed they were being silently dropped. The drafter returns a `cv` block
+  beside the email, kept `z.unknown()` so it can never fail the email, and `tailoredCv()` in
+  `server/utils/cv-tailor.ts` checks it: the same roles in date order, each bullet once under its own role,
+  skills renamed never, no new number, no technology the master CV does not name, no bullet longer than
+  1.5× its source plus 20 characters, no placeholder. **Any failure attaches the uploaded PDF** —
+  extraction, the prompt budget, the check, or rendering — and says why in the job log, with a
+  `cv: N tailored, M fell back` line per job. `contacts.cv_path` records a tailored CV sent (null for the
+  uploaded one); the follow-up reuses it. Tailored PDFs live in `data/cv/tailored/<recruiter>/` under the
+  uploaded file's own name, because `createDraft` names the attachment after the file. Rendering uses a
+  fresh headless Chrome, never `./profile`. Tune the template with
+  `node --env-file-if-exists=.env scripts/preview-cv.ts`, which renders the master CV through it unchanged
+  so the result can be compared with the uploaded PDF after any CSS change — the first run against a new
+  CV costs two OpenAI calls, and later ones reuse `data/cv/master.json`. Design:
+  `docs/superpowers/specs/2026-09-17-tailored-cv-design.md`.
 - **`renderHtml` emits real anchors.** Gmail rewrites bare URLs in a plain-text body into `google.com/url?q=`
   redirects; two applications went out that way on the original.
 - **The follow-up is a reply, in the application's own thread.** Gmail adds a draft to a thread only when

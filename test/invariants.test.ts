@@ -216,3 +216,22 @@ test('the draft gate asks Gmail, and still falls back to the cache without a tok
   assert.match(loop, /closedInGmail\(/, 'the per-recruiter gate must consult Gmail when a token exists')
   assert.match(loop, /isClosed\(/, 'and must fall back to the contacts cache when it does not')
 })
+
+test('CV rendering never touches the LinkedIn profile: a fresh headless browser, never a persistent one', () => {
+  // The draft lane runs alongside the scrape lane, which holds ./profile's lock for the whole scrape. A
+  // renderer that opened it would fail every tailored CV during a scrape, or break the scrape itself.
+  const src = readFileSync('server/utils/cv-render.ts', 'utf8')
+  assert.doesNotMatch(src, /launchPersistentContext|PROFILE_DIR|['"`]\.\/profile/)
+  assert.match(src, /headless:\s*true/)
+})
+
+test('the drafter keeps the cv block untyped, so a malformed CV can never fail an email', () => {
+  const src = readFileSync('server/utils/drafter.ts', 'utf8')
+  assert.match(src, /cv:\s*z\.unknown\(\)\.optional\(\)/)
+})
+
+test('switching tailoring off returns follow-ups to the uploaded PDF, not only new applications', () => {
+  const sync = readFileSync('server/utils/sync.ts', 'utf8')
+  const fn = sync.slice(sync.indexOf('async function draftFollowUp'))
+  assert.match(fn, /config\.tailorCv\s*\?\s*followUpAttachment\(/)
+})
