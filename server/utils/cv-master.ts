@@ -14,6 +14,7 @@ export interface CvContent {
   skills: { group: string, items: string[] }[]
   education: string[]
   certifications: string[]
+  achievements: string[]
   languages: string[]
 }
 
@@ -34,6 +35,7 @@ export interface MasterCv {
   skills: MasterSkillGroup[]
   education: string[]
   certifications: string[]
+  achievements: string[]
   languages: string[]
 }
 
@@ -52,6 +54,7 @@ export function assignIds(cv: CvContent): MasterCv {
     skills: cv.skills.map((s, i) => ({ id: `s${i}`, group: s.group, items: [...s.items] })),
     education: [...cv.education],
     certifications: [...cv.certifications],
+    achievements: [...cv.achievements],
     languages: [...cv.languages]
   }
 }
@@ -70,6 +73,7 @@ export function toContent(master: MasterCv): CvContent {
     skills: master.skills.map(s => ({ group: s.group, items: [...s.items] })),
     education: [...master.education],
     certifications: [...master.certifications],
+    achievements: [...master.achievements],
     languages: [...master.languages]
   }
 }
@@ -113,7 +117,7 @@ const list = { type: 'array', items: { type: 'string' } } as const
 const CV_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['summary', 'roles', 'skills', 'education', 'certifications', 'languages'],
+  required: ['summary', 'roles', 'skills', 'education', 'certifications', 'achievements', 'languages'],
   properties: {
     summary: { type: 'string' },
     roles: {
@@ -143,6 +147,7 @@ const CV_SCHEMA = {
     },
     education: list,
     certifications: list,
+    achievements: list,
     languages: list
   }
 } as const
@@ -151,6 +156,11 @@ const EXTRACT_INSTRUCTIONS = [
   'Extract this CV into the schema, copying text exactly as it is written.',
   'Copy every bullet verbatim: never reword, merge, split, summarise or correct one.',
   'Keep roles in the order the CV lists them. Use an empty string or an empty list for anything absent.',
+  'Each field holds only its own value: employer is the organisation name alone, location is the place alone,',
+  'and start and end are the dates alone. Never repeat a date inside employer or location, and never leave a',
+  'separator such as a dash stranded in a field.',
+  'Put a section of standalone achievements — often titled "Selected Achievements" or similar — in',
+  'achievements, one entry per item, verbatim. Leave it empty when the CV has no such section.',
   'Leave out the name and the contact details; they are supplied elsewhere.'
 ].join(' ')
 

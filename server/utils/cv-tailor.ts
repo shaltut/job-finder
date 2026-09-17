@@ -46,6 +46,7 @@ const masterText = (m: MasterCv): string => [
   ...m.skills.flatMap(s => [s.group, ...s.items]),
   ...m.education,
   ...m.certifications,
+  ...m.achievements,
   ...m.languages
 ].join('\n')
 
@@ -124,6 +125,7 @@ export function tailoredCv(raw: unknown, master: MasterCv): TailorResult {
       skills: t.skills.map(g => ({ group: master.skills.find(s => s.id === g.id)!.group, items: [...g.items] })),
       education: [...master.education],
       certifications: [...master.certifications],
+      achievements: [...master.achievements],
       languages: [...master.languages]
     }
   }

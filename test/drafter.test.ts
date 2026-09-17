@@ -240,6 +240,7 @@ const cvContent = {
   skills: [{ group: 'Backend', items: ['C#', '.NET'] }],
   education: [],
   certifications: [],
+  achievements: [],
   languages: []
 }
 

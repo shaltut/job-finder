@@ -55,6 +55,7 @@ export function renderCvHtml(cv: CvContent, profile: Profile): string {
     profile.title ? `<div class="title">${esc(profile.title)}</div>` : '',
     `<div class="contact">${contact}</div></header>`,
     section('Summary', cv.summary ? `<p>${esc(cv.summary)}</p>` : ''),
+    section('Achievements', list(cv.achievements)),
     section('Skills', skills ? `<div class="skills">${skills}</div>` : ''),
     section('Experience', roles),
     section('Education', list(cv.education)),
