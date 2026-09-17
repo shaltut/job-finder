@@ -221,7 +221,7 @@ test('CV rendering never touches the LinkedIn profile: a fresh headless browser,
   // The draft lane runs alongside the scrape lane, which holds ./profile's lock for the whole scrape. A
   // renderer that opened it would fail every tailored CV during a scrape, or break the scrape itself.
   const src = readFileSync('server/utils/cv-render.ts', 'utf8')
-  assert.doesNotMatch(src, /launchPersistentContext|PROFILE_DIR|['"`]\.\/profile/)
+  assert.doesNotMatch(src, /launchPersistentContext|PROFILE_DIR|user-data-dir|['"`]\.\/profile/)
   assert.match(src, /headless:\s*true/)
 })
 
@@ -233,5 +233,7 @@ test('the drafter keeps the cv block untyped, so a malformed CV can never fail a
 test('switching tailoring off returns follow-ups to the uploaded PDF, not only new applications', () => {
   const sync = readFileSync('server/utils/sync.ts', 'utf8')
   const fn = sync.slice(sync.indexOf('async function draftFollowUp'))
-  assert.match(fn, /config\.tailorCv\s*\?\s*followUpAttachment\(/)
+  // The else branch is the half that matters: it IS the rollback lever. A regex stopping at
+  // `followUpAttachment(` would stay green if someone rewrote `: config.cv` to `: null`.
+  assert.match(fn, /config\.tailorCv\s*\?\s*followUpAttachment\([^)]*\)\s*:\s*config\.cv/)
 })
