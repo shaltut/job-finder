@@ -46,7 +46,8 @@ role reposted: treat it as one.
 
 `score`, `post_type` and `flags` are hints from the scraper. `score` is an ordering hint from a small
 model and it overclaims — never repeat its wording. `post_type` is that model's answer to "who is
-posting"; it is `"hiring"` for everything the server queues, and `null` on rows scored before the
+posting"; it is `"hiring"` for everything the *batch* queue sends, but a post the owner chose by
+hand (`chosen: true`) reaches you whatever its type, and it is `null` on rows scored before the
 field existed. `flags` are regex guesses; confirm each one, and `post_type`, in the post text before
 you act on it.
 
@@ -115,6 +116,21 @@ Rules for the fields:
 
 Personal email addresses (gmail, outlook, yahoo) are **not** a skip. Much real recruiting, in many
 markets, runs on them. Screen the post on its content.
+
+### When `chosen` is true, the owner picked this post by hand
+
+The batch queue did not select it — the owner read it in the Posts view and pressed Draft. They are
+overruling the fit screen, and they are allowed to: they know what they are willing to apply for.
+
+**Bullets 2-7 stop being skips** — location, the residency gate, the seniority floor, hours, a
+must-have the Gaps say they lack, and outside the field of work all become soft flags. Draft the
+strongest **honest** email and put the mismatch plainly in the report so they know the odds. Never
+invent experience, never soften a gap into something it is not: write what is true about them and
+let the recruiter judge. A gap stated in one clear sentence is worth more than a gap papered over.
+
+**Bullets 1 and 8 stay hard skips**, and so does a required value that was not injected. Choosing a
+post cannot conjure a vacancy that is not there: if the author is advertising themselves, or the
+post has nothing to tailor to, there is no email to write and no amount of intent changes that.
 
 ### Soft flags — draft, but say the odds are low in the report
 

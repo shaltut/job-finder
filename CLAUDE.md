@@ -377,8 +377,28 @@ drafts keep arguing from a stale CV.
 - **The skill must never see a tool.** `test/invariants.test.ts` asserts the deny list and the neutral cwd.
 - **A skip must never downgrade a `drafted` verdict.** Re-drafting a recruiter with a pending draft once
   rewrote the verdict to `skipped`, destroying the `named in ...` prefix the follow-up query needs — the
-  recruiter would later have been told about a role the first email already covered. The skip insert carries
-  `WHERE applications.verdict <> 'drafted'`.
+  recruiter would later have been told about a role the first email already covered. The **Gmail-gate**
+  skip insert in `jobs.ts` carries `WHERE applications.verdict <> 'drafted'`; `persist()` in `drafts.ts`,
+  which writes the model's own verdicts, does **not**. The batch queue can never reach it with an existing
+  row (`a.key IS NULL`), and the single-key path no longer writes a skip at all (below), so the gap is not
+  currently reachable — but it is a gap, not a decision.
+- **Pressing Draft on one post is the owner overruling the fit screen, and it never writes a `skipped`
+  row.** `const manual = !!args.keys?.length` in `runDraftJob` is the whole discriminator: `pump()` only
+  coalesces single-post requests with each other, so a `{ n }` job can never arrive carrying keys. In that
+  mode the Gmail gate and `persist()` both refuse to record a skip — they write nothing, which leaves
+  whatever was already there. **Two different outcomes, and the distinction matters when reading a row:**
+  a post with no prior row stays unprocessed and the next bulk run re-triages it; a post carrying an
+  earlier *bulk* `skipped` row keeps that row and its reason, stays out of the batch queue, and keeps its
+  Draft button to be pressed again. So the log's `passed over (no verdict recorded)` is about **this run**
+  — the button's tooltip may still show the older bulk reason. **In code, not in the prompt** — the procedure's `chosen: true` block
+  softens the *fit* hard skips (location, residency, seniority, hours, gaps, field of work) into soft
+  flags, but the model still returns `skipped` sometimes, and a persisted skip on a hand-picked post is
+  no email and no way back. `test/manual-draft.test.ts` pins both directions, including the control that
+  a **bulk** skip is still recorded — without it the guard could quietly empty the triage queue.
+  Two skips stay hard even when chosen: **the author is not hiring**, and **no content**. Choosing a post
+  cannot conjure a vacancy, and the cost is asymmetric — a wrong draft emails a fellow job seeker. The
+  drafter earns that rule: on the 2026-09-17 backup it caught a staffing agency's sales pitch the scorer
+  had scored 6.
 - **An email with a hole in it must never be deliverable.** A draft went out reading
   `Expected monthly salary: [ADD BEFORE SENDING]` and the recruiter replied to point at the gap. Nothing
   downstream reads the body before Gmail does, so `PLACEHOLDER` in `server/utils/drafter.ts` rejects a
@@ -390,9 +410,15 @@ drafts keep arguing from a stale CV.
   into.** The procedure tells the model to skip a post whose required value was not injected, which is the
   intended path and writes a `skipped` row — and the batch queue is `WHERE a.key IS NULL`, so that post
   never returns to it; after filling the missing setting it is re-drafted per post from the Posts view,
-  whose single-key query carries no such filter. **That re-draft now depends on the recruiter**: if an
-  application to them has already gone out, the Gmail gate closes at row 5 and pressing Draft skips the
-  post again rather than sending a second application. It is not lost — a skipped reason does not start
+  whose single-key query carries no such filter. **That recovery path was prose only until 2026-09-17**:
+  the Draft button was hidden whenever the row had a verdict, and `'skipped'` is as truthy as `'drafted'`,
+  so a skipped post had no control that could reach the single-key path — it was reachable by `curl` and
+  nothing else. It gates on `r.verdict === 'drafted'` now, and carries the skip reason as its `title`.
+  Pinned by `test/manual-draft.test.ts`, because the bug was invisible: nothing failed, posts just quietly
+  stopped existing. **The re-draft still depends on the recruiter**: if an
+  application to them has already gone out, the Gmail gate closes at row 5 and pressing Draft declines the
+  post again rather than sending a second application — but writes no row, so the button stays. It is not
+  lost either way — a skipped reason does not start
   with `named in `, so the follow-up picks the role up and names it there. A guard rejection writes no row at all, so those posts stay
   unprocessed and the next run picks them up, the same posture as a failed score. `jobs.ts` catches per
   recruiter, so either way one recruiter fails and the other eight still get their emails.

@@ -248,6 +248,11 @@ async function runDraftJob(
   const mail = gmailStatus(config.profile.email)
   const { db, close } = openWritableDb()
   try {
+    // The Posts view's Draft button, not the batch queue: pump() only ever coalesces single-post
+    // requests with each other, so a `{ n }` job can never arrive carrying keys and vice versa.
+    // That makes this the whole discriminator — no flag needs threading through the queue.
+    const manual = !!args.keys?.length
+
     const rows = args.keys?.length
       // dismissed_at and applied_at here too, not just in the batch query below: the Posts view hides the
       // Draft button on both, but a tab left open beforehand must not be able to email about them.
@@ -329,22 +334,27 @@ async function runDraftJob(
         continue
       }
       if (closed) {
-        push(`${email}: ${closed} — skipping`)
-        for (const p of posts) {
-          // A skip must never downgrade a post that an email already names: the M4 follow-up query finds
-          // unmentioned posts by the `named in ...` prefix, so losing it would name the role twice.
-          db.prepare(`
-            INSERT INTO applications (key, verdict, reason, recruiter_email)
-            VALUES (?, 'skipped', ?, ?)
-            ON CONFLICT (key) DO UPDATE SET verdict = excluded.verdict, reason = excluded.reason
-            WHERE applications.verdict <> 'drafted'
-          `).run(p.key, closed, email)
+        // Still a refusal when the owner chose the post — this is the two-emails-ever ceiling, not a
+        // fit judgement, and the role rides in the follow-up instead. But it writes no row, so the
+        // post stays live and visible rather than being buried by a decision the owner did not make.
+        push(`${email}: ${closed}${manual ? ' — no email, and no row: the post stays live' : ' — skipping'}`)
+        if (!manual) {
+          for (const p of posts) {
+            // A skip must never downgrade a post that an email already names: the M4 follow-up query finds
+            // unmentioned posts by the `named in ...` prefix, so losing it would name the role twice.
+            db.prepare(`
+              INSERT INTO applications (key, verdict, reason, recruiter_email)
+              VALUES (?, 'skipped', ?, ?)
+              ON CONFLICT (key) DO UPDATE SET verdict = excluded.verdict, reason = excluded.reason
+              WHERE applications.verdict <> 'drafted'
+            `).run(p.key, closed, email)
+          }
         }
         continue
       }
 
       const cc = ccFrom(groupEmails.get(email) ?? [], email, config.profile.email)
-      const req: DraftRequest = { mode: 'apply', recruiterEmail: email, posts }
+      const req: DraftRequest = { mode: 'apply', chosen: manual, recruiterEmail: email, posts }
       // One recruiter must not end the batch. The contract check now rejects an email carrying an unfilled
       // placeholder, which makes a rejection an ordinary event rather than a rare one. A rejection writes
       // NO applications row, so these posts stay `a.key IS NULL` and the next run picks them up again,
@@ -395,7 +405,10 @@ async function runDraftJob(
 
       const { drafted, skipped } = persist(db, req, res, ref)
       job.added += drafted
-      push(`${email}: ${drafted} drafted, ${skipped} skipped${where}`)
+      // "skipped" would be a lie on the manual path: nothing was recorded, so the post is still live
+      // and the next bulk run will see it again. Say what actually happened to it.
+      const passed = manual ? `${skipped} passed over (no verdict recorded)` : `${skipped} skipped`
+      push(`${email}: ${drafted} drafted, ${passed}${where}`)
       if (res.report) res.report.split('\n').filter(Boolean).forEach(push)
     }
     return 0

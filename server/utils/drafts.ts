@@ -77,6 +77,21 @@ export function persist(
 
   const tx = db.transaction(() => {
     for (const r of res.results) {
+      // A post the owner chose by hand is never recorded as skipped. An `applications` row —
+      // drafted or skipped — removes the post from the batch queue for good (`a.key IS NULL`),
+      // so persisting the model's second thoughts about a post the owner deliberately picked
+      // buries it: no email, and until the Posts view learned to show a skipped post's Draft
+      // button again, no way back.
+      //
+      // Writing nothing leaves whatever was already there, which differs by how the post got here:
+      // a post with no row stays unprocessed and the next bulk run re-triages it; a post carrying an
+      // earlier bulk `skipped` row keeps that row, that reason and its Draft button, and simply does
+      // not change. Neither is buried, and neither is silently downgraded.
+      // Counted below either way, so the job log stays honest.
+      if (req.chosen && r.verdict === 'skipped') {
+        skipped++
+        continue
+      }
       db.prepare(`
         INSERT INTO applications (key, verdict, reason, recruiter_email, gmail_draft_id, created_at)
         VALUES (@key, @verdict, @reason, @email, @draftId, @now)

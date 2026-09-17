@@ -336,8 +336,13 @@ const columns: TableColumn<PostRow>[] = [
             })
           : null,
         // no second email to a recruiter already handled, nothing to draft without an address, and
-        // nothing to draft for a role the owner has already applied to themselves
-        r.dismissedAt || r.appliedAt || r.verdict || !r.emails.length
+        // nothing to draft for a role the owner has already applied to themselves.
+        // `verdict === 'drafted'`, not `verdict`: a *skipped* post must keep its button. A skip is
+        // the model's opinion, and pressing Draft again is how the owner overrules it — the recovery
+        // path this file has always been documented as providing and never did, because 'skipped' is
+        // as truthy as 'drafted'. The post is out of the batch queue for good by then, so hiding the
+        // button was the whole of what buried it.
+        r.dismissedAt || r.appliedAt || r.verdict === 'drafted' || !r.emails.length
           ? null
           : h(UButton, {
               label: 'Draft',
@@ -346,6 +351,10 @@ const columns: TableColumn<PostRow>[] = [
               color: 'neutral',
               variant: 'outline',
               disabled: queued.value.has(r.key),
+              // why the model passed on it, so the owner can judge before overruling
+              title: r.verdict === 'skipped' && r.verdictReason
+                ? `Skipped: ${r.verdictReason}\n\nDraft anyway — you chose it, so the fit screen is relaxed.`
+                : undefined,
               onClick: () => draft(r.key)
             }),
         // Every per-row verdict lives behind one trigger, leaving Draft as the only button. Keeping

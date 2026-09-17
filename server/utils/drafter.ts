@@ -67,6 +67,14 @@ export interface DraftPost {
 
 export interface DraftRequest {
   mode: 'apply' | 'follow-up'
+  /**
+   * The owner picked these posts by hand in the Posts view, rather than the batch queue picking
+   * them. It softens the procedure's fit screen (see drafter-procedure.md), but the promise that
+   * a chosen post is never recorded as `skipped` is kept in code — by persist() and by the Gmail
+   * gate in jobs.ts — because the model follows a written instruction only most of the time, the
+   * same reason gateOnPostType() and PLACEHOLDER are code rather than prompt.
+   */
+  chosen?: boolean
   recruiterEmail: string
   posts: DraftPost[]
 }
@@ -270,6 +278,7 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
 
   const payload = JSON.stringify({
     mode: req.mode,
+    chosen: req.chosen ?? false,
     recruiter_email: req.recruiterEmail,
     posts: req.posts.map(p => ({
       key: p.key, title: p.title, company: p.company, location: p.location,
