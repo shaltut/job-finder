@@ -76,6 +76,11 @@ export const settingsSchema = z.object({
   // owner has to apply to by hand. Not `.min(1)` here on purpose: this schema checks shape only and a
   // half-filled form must still save (see the note at the top). missingFields() is the run gate.
   contactChannels: z.array(z.enum(CONTACT_CHANNELS)),
+  // Attach a CV tailored to each application instead of the uploaded PDF. Off by default so an existing
+  // install is unchanged, and the rollback lever if a tailored CV ever looks wrong: switching it off puts
+  // every draft back on the uploaded PDF with no code change.
+  // See docs/superpowers/specs/2026-09-17-tailored-cv-design.md.
+  tailorCv: z.boolean(),
   // What an application email may say. Replaces the hand-written Evidence and Gaps sections that
   // used to live in the drafter skill file, so retargeting this tool stays data entry.
   //
@@ -130,6 +135,7 @@ export const EMPTY_SETTINGS: StoredSettings = {
   max: 40,
   since: 'past-24h',
   contactChannels: ['email'],
+  tailorCv: false,
   background: { strengths: [], evidence: '', gaps: [], neverClaim: [] }
 }
 

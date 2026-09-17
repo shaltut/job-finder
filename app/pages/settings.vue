@@ -504,6 +504,12 @@ async function disconnectGmail() {
             </p>
           </div>
 
+          <USwitch
+            v-model="form.tailorCv"
+            label="Tailor the CV to each application"
+            description="Reorders and rewords this CV in each post's own terms — the same facts, checked in code — and attaches that instead. Any failure attaches this PDF unchanged."
+          />
+
           <p
             v-if="status.cv"
             class="font-mono text-xs text-muted"

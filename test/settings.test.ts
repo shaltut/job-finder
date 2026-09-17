@@ -453,3 +453,13 @@ test('a channel listed twice is stored once', () => {
   const parsed = parseSettings({ ...emptySettings(), contactChannels: ['link', 'email', 'link'] })
   assert.deepEqual(parsed.contactChannels, ['email', 'link'])
 })
+
+test('a settings row written before tailorCv existed reads as switched off, in form key order', () => {
+  // An existing install must behave exactly as it did until the owner opts in. Key order matters as
+  // much as the value: the Settings page's dirty check is a JSON.stringify comparison.
+  const legacy = emptySettings() as Record<string, unknown>
+  delete legacy.tailorCv
+  const upgraded = upgradeSettings(legacy) as StoredSettings
+  assert.equal(upgraded.tailorCv, false)
+  assert.deepEqual(Object.keys(upgraded), Object.keys(EMPTY_SETTINGS))
+})
