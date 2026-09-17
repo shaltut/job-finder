@@ -73,7 +73,7 @@ npm run dev                                  # http://127.0.0.1:3939 (port pinne
 npm test                                     # helpers, settings, ingest, dismiss, drafter, background, stages, MIME, invariants, identity
 npm run lint / npm run typecheck
 npm run login                                # one-time LinkedIn login into ./profile (redo when runs exit 2)
-npm run dry -- --terms "vue nuxt developer" --max 10   # prints cards + contact routes, stores nothing, no OpenAI call
+npm run dry -- --terms "<a term from Settings>" --max 10  # cards + contact routes, stores nothing, no OpenAI call
 node scraper/run.ts | node scraper/ingest.ts # CLI scrape; normally you press Start scrape in the Run view
 npm run db:generate && npm run db:migrate    # after editing server/db/schema.ts
 node scripts/screenshot.mjs [outDir]         # screenshots every view (see the localhost gotcha)
@@ -287,6 +287,33 @@ drafts keep arguing from a stale CV.
   source is safe, a number in a comment is not: `test/identity.test.ts` scans that directory for the shape.
 - **Do not add `contentType=["jobs"]` to the search URL.** It means "posts embedding a Job card" and returns
   almost nothing with no emails. Only `datePosted` is used.
+- **A search term is an AND of its content words, so every word multiplies the pool by that word's frequency
+  in post prose.** Stopwords are effectively dropped — a four-word term whose literal phrase appears in 11%
+  of posts still returned 56 cards, so `we are X` searched as `X`. Content words are not dropped, and **one
+  rare word zeroes the term outright**. Measured 2026-09-17: a four-content-word term whose rarest word
+  appears in under 3% of posts returned LinkedIn's **"No results found"** page — a genuine empty result, not
+  the throttle, and `logs/zero-<term>.png` is how you tell those two apart. Three of nine configured terms
+  were returning zero rows this way, silently, for weeks.
+  **The counter-intuitive part: the owner's own specialist vocabulary is usually the rarest word in
+  postings**, so a term naming the exact stack they want returns nothing while a term naming only the role
+  family fills its quota. Let the CV scorer sort for stack fit; do not ask the query to do it.
+  **Keep a term to three or four common content words**, and measure before adding one that names a
+  technology, a country or a two-word job title — count how many stored hiring posts contain the candidate
+  word:
+  ```bash
+  sqlite3 <db> "select json_group_array(lower(text)) from posts
+    where coalesce(post_type,'hiring') = 'hiring'" > /tmp/corpus.json
+  ```
+  A word under ~5% will strangle whatever term it is added to. **The count is only unbiased for a word no
+  existing term searched for** — the corpus was gathered by the current terms, so a query word's own
+  frequency is inflated and proves nothing.
+- **Precision matters as much as recall, because `max` is per term.** Measured across one nine-term run, the
+  best term returned 12 usable posts from 50 cards while the broadest returned 2 from 56 — same volume, a
+  sixth of the yield. A broad term that fills its quota with junk spends the card budget and the OpenAI bill
+  a sharper term would have used, since admission runs before scoring. Naming the seniority floor in the term
+  itself was the cheapest precision lever measured. The per-term yield table is the evidence:
+  `select search_term, count(*), sum(score >= 6 and coalesce(post_type, 'hiring') = 'hiring'
+  and json_array_length(flags) = 0) from posts group by 1`.
 - **LinkedIn's DOM has hashed class names and no post URN.** Cards are found structurally (the container whose
   children each hold an author link) and read via `innerText`. Results live inside a scrolling `<main>`;
   scroll with `page.mouse.wheel`, not `window.scrollTo`. Emails render as `mailto:` links.
