@@ -95,7 +95,14 @@ returns one.
   the model cannot touch them.
 
 **What the model sees:** the cached master CV, with its ids, in the system prompt beside the existing
-profile block — about 6,000 characters.
+profile block — about 6,000 characters. Ids are written in parentheses, never square brackets: `PLACEHOLDER`
+rejects square brackets, so a copied `[r0.b3]` would cost the email.
+
+**Added during planning — the command line is a hard limit.** The system prompt travels as the
+`--append-system-prompt` argument, and `claude` here is a native `claude.exe`, so Windows' 32,767-character
+command-line cap applies (measured 2026-09-17: ~17,400 characters today, ~6,500 more with a master CV).
+`PROMPT_BUDGET = 28_000` leaves room for the other arguments and escaping. Over it, the master CV is simply
+not injected and the original PDF is attached — the fallback rule, applied before the drafter runs.
 
 **Parsing is isolated.** `responseSchema` gains `cv: z.unknown().optional()`. Zod strips unknown keys by
 default, so without it the block would silently vanish; with it the block's shape can never affect the
@@ -166,6 +173,7 @@ tailored file on disk, indistinguishable from what was sent. `null` means the or
 | Failure | Outcome |
 |---|---|
 | Extraction errors, or a bullet is absent from the verbatim text | Nothing cached; this job attaches the original; the next job retries |
+| The master CV would push the system prompt past `PROMPT_BUDGET` | Master CV not injected; original attached |
 | The drafter returns no `cv`, or a malformed one | Original attached |
 | The check rejects under any of rules 1-7 | Original attached |
 | Chrome will not launch, or `page.pdf()` throws | Original attached |
