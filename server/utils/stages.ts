@@ -131,6 +131,22 @@ export function decideStage(input: DecideInput): Decision {
   return { row: 8, stage: dbStage ?? 'drafted', action: 'draft-the-application', note: 'not contacted yet', postsReason: 'to draft', followUpDueAt: null }
 }
 
+/**
+ * The draft gate, as a read of the stage machine: may this recruiter be sent an application right now?
+ * `false` means yes; a string is the reason not to, and is what the skipped `applications` row records.
+ *
+ * Row 8 is the only open one, which is the point — it is the single row meaning "Gmail has never been
+ * written to about this address". Everything else is a conversation already in progress, including row 5,
+ * where a second application would burn the two-emails ceiling on a role the follow-up is meant to carry.
+ *
+ * `note` and never `postsReason`: row 6's postsReason is literally 'named in follow-up', the prefix the
+ * follow-up query uses to find roles no email has mentioned yet. Writing that onto a skipped row would
+ * tell the follow-up its own posts were already covered and quietly empty it.
+ */
+export function closedBy(d: Decision): false | string {
+  return d.action === 'draft-the-application' ? false : d.note
+}
+
 /** Human-readable countdown for the Pipeline view. */
 export function untilDue(dueAt: number | null, now: number): string | null {
   if (!dueAt) return null

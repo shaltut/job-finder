@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { buildMime, ccFrom, findAttachment, renderHtml, replyHeaders } from '../server/utils/gmail.ts'
-import { classifyMessage, decideStage, FOLLOW_UP_AFTER_MS, untilDue, type GmailMessage } from '../server/utils/stages.ts'
+import { classifyMessage, closedBy, decideStage, FOLLOW_UP_AFTER_MS, untilDue, type GmailMessage } from '../server/utils/stages.ts'
 
 const ME = 'me@gmail.com'
 const REC = 'hr@acme.sa'
@@ -237,4 +237,47 @@ test('without a Message-ID the follow-up keeps the subject but never claims the 
 
 test('no application message at all leaves every header to the caller', () => {
   assert.deepEqual(replyHeaders(undefined), {})
+})
+
+// ---------------- the draft gate, asked of Gmail ----------------
+
+/** Every row of the table, built through decideStage rather than hand-assembled. */
+const allRows = (): Record<number, ReturnType<typeof decideStage>> => {
+  const sent = NOW - FOLLOW_UP_AFTER_MS
+  const out = (over = {}) => msg({ from: ME, date: sent, ...over })
+  return {
+    1: decideStage({ ...base, messages: [msg({ from: 'mailer-daemon@googlemail.com' })] }),
+    2: decideStage({ ...base, messages: [msg()] }),
+    3: decideStage({ ...base, messages: [out(), out({ id: 'm2', date: sent + 1000 })] }),
+    4: decideStage({ ...base, dbStage: 'followed_up', hasPendingDraft: true, messages: [out()] }),
+    5: decideStage({ ...base, messages: [out({ date: NOW - 1000 })] }),
+    6: decideStage({ ...base, messages: [out()] }),
+    7: decideStage({ ...base, hasPendingDraft: true, messages: [] }),
+    8: decideStage({ ...base, messages: [] })
+  }
+}
+
+test('only a recruiter Gmail has never been written to is open for an application', () => {
+  const rows = allRows()
+  assert.equal(closedBy(rows[8]!), false, 'row 8 is the one row that earns an application')
+  for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+    assert.notEqual(closedBy(rows[n]!), false, `row ${n} must not earn a second application`)
+  }
+})
+
+test('row 5 closes the door: a recruiter already written to gets the follow-up, not a second application', () => {
+  // The behaviour the contacts cache had backwards — `contacted` was not closed, so a new post from a
+  // recruiter already emailed once earned a second application, burning the two-emails ceiling on a role
+  // the follow-up is meant to carry ("one line naming any further roles from this recruiter").
+  assert.match(String(closedBy(allRows()[5]!)), /follow-up due/)
+})
+
+test('a skip reason never starts with "named in": that prefix means an email already named the post', () => {
+  // applications.reason is where this lands, and the follow-up query finds unmentioned roles with
+  // `reason NOT LIKE 'named in %'`. Row 6's postsReason IS 'named in follow-up', so reusing that field
+  // here would tell the follow-up its own posts were already covered and silently empty it.
+  for (const [n, d] of Object.entries(allRows())) {
+    const reason = closedBy(d)
+    if (reason !== false) assert.doesNotMatch(reason, /^named in /, `row ${n} would poison the follow-up query`)
+  }
 })

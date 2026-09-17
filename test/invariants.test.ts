@@ -205,3 +205,14 @@ test('the follow-up never sends the model its own subject: Gmail threads only on
   assert.ok(!/carrier\.subject/.test(fn), 'the follow-up subject must come from the application, not the model')
   assert.ok(/replyHeaders\(/.test(fn), 'the follow-up must build its headers from the application message')
 })
+
+test('the draft gate asks Gmail, and still falls back to the cache without a token', () => {
+  // `contacts` is only ever as fresh as the last sweep: a recruiter who replied still reads `contacted`,
+  // and one written to outside this app has no row at all. Reverting to the cache alone would be silent —
+  // the run would look identical and simply email people mid-conversation. The fallback is equally
+  // load-bearing in the other direction: without it a machine with no google-oauth.json cannot draft.
+  const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
+  const loop = jobs.slice(jobs.indexOf('for (const [email, posts] of groups)'), jobs.indexOf('const cc = ccFrom'))
+  assert.match(loop, /closedInGmail\(/, 'the per-recruiter gate must consult Gmail when a token exists')
+  assert.match(loop, /isClosed\(/, 'and must fall back to the contacts cache when it does not')
+})

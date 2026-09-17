@@ -1,14 +1,16 @@
 // The stage sweep: re-check every open recruiter against Gmail and move their stage.
 //
 // A recruiter's stage changes without any new post appearing — he sends the draft, the recruiter replies,
-// three days pass. So this runs at the start of every drafter run, from the Pipeline view's button, and once
-// a day on a schedule, whether or not the address has a post in the batch.
+// three days pass. So it runs from the Pipeline view's button and once a day on a schedule, whether or not
+// the address has a post in the batch. It is NOT run by a drafter run: that asks Gmail per recruiter
+// instead, through closedInGmail() below, because the sweep only iterates addresses `contacts` already
+// knows and a recruiter written to outside this app has no row there at all.
 import type Database from 'better-sqlite3'
 import type { AppConfig } from './config'
 import { runDrafter, type DraftPost } from './drafter'
 import { persist, signature } from './drafts'
 import { ccFrom, createDraft, gmail, renderHtml, replyHeaders } from './gmail'
-import { decideStage, untilDue, type Decision, type GmailMessage } from './stages'
+import { closedBy, decideStage, untilDue, type Decision, type GmailMessage } from './stages'
 
 interface RawMessage {
   id: string
@@ -47,6 +49,31 @@ async function threadMessages(email: string): Promise<GmailMessage[]> {
 async function hasPendingDraft(email: string): Promise<boolean> {
   const r = await gmail<{ drafts?: unknown[] }>(`drafts?q=${encodeURIComponent(`to:${email}`)}&maxResults=5`)
   return !!r.drafts?.length
+}
+
+/**
+ * isClosed() asked of Gmail rather than of the contacts cache, for the one question a draft run turns on:
+ * may this recruiter be sent an application right now?
+ *
+ * The cache is only ever as fresh as the last sweep, and two of the ways it goes stale cost something: a
+ * recruiter who has replied still reads `contacted`, so a new post earns them a second email in the middle
+ * of a conversation; and a recruiter written to outside this app has no row at all, so they read as a
+ * stranger. Gmail knows both. `dbStage` is still passed for one narrow job: rows 4 and 7 are both "a draft
+ * is waiting", and only `contacts` says whether that draft is the application or the follow-up.
+ */
+export async function closedInGmail(
+  db: Database.Database, email: string, selfEmail: string, now = Date.now()
+): Promise<false | string> {
+  const cached = db.prepare('SELECT stage FROM contacts WHERE email = ?')
+    .get(email.toLowerCase()) as { stage: Decision['stage'] } | undefined
+  return closedBy(decideStage({
+    messages: await threadMessages(email),
+    selfEmail,
+    recruiterEmail: email,
+    dbStage: cached?.stage ?? null,
+    hasPendingDraft: await hasPendingDraft(email),
+    now
+  }))
 }
 
 export interface SweepLine {

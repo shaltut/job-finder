@@ -12,7 +12,7 @@ import { runDrafter, type DraftPost, type DraftRequest, type DraftResponse } fro
 import { isClosed, persist, signature, writeDraftFile } from './drafts'
 import { ccFrom, createDraft, gmailStatus, renderHtml } from './gmail'
 import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
-import { sweep } from './sync'
+import { closedInGmail, sweep } from './sync'
 
 export type Lane = 'scrape' | 'draft'
 export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync'
@@ -188,6 +188,9 @@ function runJob(lane: Lane, item: QueueItem) {
     if (!job.child) return
     close()
     if (code === 2) push('LinkedIn rejected the session — run `npm run login` again')
+    // Not a broken session: the account is rate-limited and the scrape stopped itself rather than keep
+    // asking. Nothing to fix; scraping again today only extends it.
+    if (code === 3) push('LinkedIn paused search on this account (too many scrapes) — leave it until tomorrow')
     push(`${job.added} row(s) written`)
     finish(code)
   })
@@ -242,6 +245,7 @@ async function runDraftJob(
   signal: AbortSignal
 ): Promise<number> {
   const config = readConfigForDraft()
+  const mail = gmailStatus(config.profile.email)
   const { db, close } = openWritableDb()
   try {
     const rows = args.keys?.length
@@ -309,8 +313,21 @@ async function runDraftJob(
         push('stopped')
         return 1
       }
-      // never a third email, and never edit a draft that is already waiting to be sent
-      const closed = isClosed(db, email)
+      // Never a third email, and never edit a draft already waiting to be sent — but asked of Gmail, which
+      // is the truth about who has been written to, rather than of `contacts`, which is only as fresh as
+      // the last sweep. With no token there is no truth to ask and the cache is all there is, which keeps
+      // the local-file draft path working on an install that has never seen Google Cloud.
+      let closed: false | string
+      try {
+        closed = mail.authorized
+          ? await closedInGmail(db, email, mail.email ?? config.profile.email)
+          : isClosed(db, email)
+      } catch (e) {
+        // A network blip must not mark posts skipped: that verdict is permanent as far as this queue is
+        // concerned. Writing no row leaves them unprocessed, the same posture as a drafter rejection.
+        push(`${email}: could not reach Gmail to check the stage (${(e as Error).message}) — left for the next run`)
+        continue
+      }
       if (closed) {
         push(`${email}: ${closed} — skipping`)
         for (const p of posts) {
@@ -387,7 +404,11 @@ async function runDraftJob(
   }
 }
 
-/** The stage sweep, run alone. Also the first thing a drafter run should do, once Gmail is connected. */
+/**
+ * The stage sweep: the follow-up engine, and the thing that refreshes `contacts` for the Pipeline view.
+ * A drafter run does NOT call it — it asks Gmail per recruiter through closedInGmail() instead, which also
+ * covers addresses `contacts` has never heard of.
+ */
 async function runSyncJob(push: (line: string) => void): Promise<number> {
   const config = readConfig()
   const status = gmailStatus(config.profile.email)
