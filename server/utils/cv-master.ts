@@ -228,6 +228,9 @@ export async function loadMasterCv(
 
 export const MASTER_CV_HEADING = '# Master CV — tailor from this, and only this'
 
+/** One line per value, so a value the extraction returned with line breaks can never split an id from its text. */
+const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
+
 /**
  * The master CV as the drafter sees it, every line carrying the id a tailored bullet must return.
  * Ids go in parentheses: PLACEHOLDER rejects square brackets, so a copied "[r0.b3]" would cost the email.
@@ -237,13 +240,13 @@ export function masterCvBlock(master: MasterCv): string {
   return [
     MASTER_CV_HEADING,
     '',
-    `Summary: ${master.summary}`,
+    `Summary: ${oneLine(master.summary)}`,
     '',
     ...master.roles.flatMap(r => [
-      `(${r.id}) ${r.title} — ${r.employer}, ${r.location} (${r.start} – ${r.end})`,
-      ...r.bullets.map(b => `  (${b.id}) ${b.text}`)
+      `(${r.id}) ${oneLine(r.title)} — ${oneLine(r.employer)}, ${oneLine(r.location)} (${oneLine(r.start)} – ${oneLine(r.end)})`,
+      ...r.bullets.map(b => `  (${b.id}) ${oneLine(b.text)}`)
     ]),
     '',
-    ...master.skills.map(s => `(${s.id}) ${s.group}: ${s.items.join(' | ')}`)
+    ...master.skills.map(s => `(${s.id}) ${oneLine(s.group)}: ${s.items.map(oneLine).join(' | ')}`)
   ].join('\n')
 }

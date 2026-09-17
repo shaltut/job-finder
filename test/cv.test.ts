@@ -305,3 +305,13 @@ test('the master CV block gives every bullet its id — in parentheses, never sq
   // a markdown rule would make PROMPT_SEPARATOR ambiguous
   assert.equal(block.includes('\n\n---\n\n'), false)
 })
+
+test('a multi-line extracted value stays on the line of its id, so it can never carry the prompt separator', () => {
+  // The extraction is model output. A value returned with line breaks would split an id from its own text
+  // in the model's view, and a blank-line rule inside one would put a second separator in the prompt.
+  const m = master()
+  m.roles[0]!.bullets[0]!.text = 'Led a team of 12 engineers\n\n---\n\nacross backend and DevOps.'
+  const block = masterCvBlock(m)
+  assert.equal(block.includes('\n\n---\n\n'), false)
+  assert.match(block, /\(r0\.b0\) Led a team of 12 engineers --- across backend and DevOps\./)
+})
