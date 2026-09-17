@@ -49,8 +49,11 @@ export interface MasterCv {
  * them before comparing, missingBullets only covers bullet text) and would print into a CV a recruiter
  * opens. Stripped here, at the one point where raw extraction becomes the master, so the prompt, the
  * checks and the render all see the same text. Tab, newline and carriage return are kept.
+ *
+ * Exported because the model's own tailored strings need the same treatment (cv-tailor.ts): they are the
+ * only other text that reaches the rendered PDF, and nothing else strips them.
  */
-const clean = (s: string): string =>
+export const clean = (s: string): string =>
   // eslint-disable-next-line no-control-regex -- the point of this regex is to match control characters
   s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\uFEFF]/g, '')
 
@@ -122,7 +125,19 @@ export const pdfSha256 = (bytes: Uint8Array): string => createHash('sha256').upd
 
 export const MASTER_CACHE = 'data/cv/master.json'
 
-export interface CachedMaster { pdfSha256: string, extractedAt: string, model: string, cv: MasterCv }
+/**
+ * Bump whenever MasterCv's shape changes. The cache was keyed on the PDF's bytes alone, and the PDF does
+ * not change when the schema does: `achievements`, `personalDetails` and `interests` were all added to
+ * MasterCv after caches existed, and a cache written before them is served forever afterwards.
+ * masterCvBlock never reads those fields, so the prompt looks fine; masterText spreads them, so
+ * tailoredCv throws "m.achievements is not iterable" — caught, so every email still goes out on the
+ * uploaded PDF, but tailoring is off for good until someone deletes the file by hand. It cost a debugging
+ * session once already. A cache with no version, or the wrong one, is a miss: re-extraction is two model
+ * calls, once.
+ */
+export const MASTER_CACHE_VERSION = 1
+
+export interface CachedMaster { version: number, pdfSha256: string, extractedAt: string, model: string, cv: MasterCv }
 
 /** The two model calls, injectable so the cache logic is testable without a network. */
 export interface Extractor {
@@ -245,7 +260,7 @@ export async function loadMasterCv(
 ): Promise<MasterCv> {
   const hash = pdfSha256(readFileSync(pdfPath))
   const cached = readCache(cachePath)
-  if (cached?.pdfSha256 === hash) return cached.cv
+  if (cached?.pdfSha256 === hash && cached.version === MASTER_CACHE_VERSION) return cached.cv
 
   const [extracted, text] = await Promise.all([extractor.extract(pdfPath), extractor.verbatim(pdfPath)])
   const master = assignIds(extracted)
@@ -256,7 +271,13 @@ export async function loadMasterCv(
   }
 
   mkdirSync(dirname(cachePath), { recursive: true })
-  const record: CachedMaster = { pdfSha256: hash, extractedAt: new Date().toISOString(), model: extractor.model, cv: master }
+  const record: CachedMaster = {
+    version: MASTER_CACHE_VERSION,
+    pdfSha256: hash,
+    extractedAt: new Date().toISOString(),
+    model: extractor.model,
+    cv: master
+  }
   writeFileSync(cachePath, `${JSON.stringify(record, null, 2)}\n`)
   return master
 }

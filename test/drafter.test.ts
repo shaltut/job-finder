@@ -227,6 +227,29 @@ test('checkContract passes a complete email that states a real figure', () => {
   assert.deepEqual(checkContract(req, parseResponse(JSON.stringify(filled))), [])
 })
 
+// A master CV bullet id is written "(r0.b3)" in the prompt so PLACEHOLDER's square-bracket half cannot
+// reject the email over it. Inside the CV a copied id fails rule 5, because masterText carries values and
+// never ids; the email half was prompt-only, and this repo has already delivered one prompt-only rule.
+
+test('checkContract rejects a master-CV bullet id copied into the email', () => {
+  const leaked = {
+    results: [{ ...ok.results[0], body: 'I led that migration (r0.b3) end to end. CV attached.' }, ok.results[1]],
+    report: ''
+  }
+  const problems = checkContract(req, parseResponse(JSON.stringify(leaked)))
+  assert.ok(problems.some(p => p.includes('r0.b3')), problems.join('; '))
+})
+
+test('checkContract leaves an ordinary email alone: a bare role id shape is not an id', () => {
+  // The other direction, and the reason only the dotted form is matched: a guard that also rejected "R2"
+  // or "S1" would fail the same post every run, because a contract failure writes no row.
+  const plain = {
+    results: [{ ...ok.results[0], body: 'I shipped the R2 release and ran the S1 rollout. CV attached.' }, ok.results[1]],
+    report: ''
+  }
+  assert.deepEqual(checkContract(req, parseResponse(JSON.stringify(plain))), [])
+})
+
 test('profileBlock quotes the expected salary, and says so plainly when there is none', () => {
   const withSalary = { ...config, constraints: { ...config.constraints, expectedSalary: '8,000 USD / month' } }
   assert.match(profileBlock(withSalary), /quote verbatim when a post asks for one: 8,000 USD/)

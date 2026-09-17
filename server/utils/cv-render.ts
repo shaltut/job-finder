@@ -1,6 +1,7 @@
 // Printing a CV: an HTML template modelled on the uploaded two-page layout, printed to PDF by headless
 // Chrome. No templating dependency — a string, with every value escaped.
 // See docs/superpowers/specs/2026-09-17-tailored-cv-design.md, section 4.
+import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { Browser } from 'playwright-core'
@@ -119,6 +120,16 @@ export function createCvRenderer(
 /**
  * Where a recruiter's tailored CV is written: a folder of its own, under the SAME filename as the uploaded
  * CV. createDraft names the attachment basename(path), so a tailored CV is indistinguishable by name.
+ *
+ * The folder is the slug AND eight hex of the full address, because `slug` alone is not injective: it
+ * collapses every run of non-alphanumerics to one `_`, so `first.last@`, `first-last@` and `first_last@`
+ * at one agency all land on the same folder. contacts.cv_path records the file for the follow-up to
+ * re-attach, so a second recruiter's render overwriting the first one's file means a recruiter is later
+ * sent a CV tailored for somebody else's job — every claim in it checked, and all of them about the
+ * wrong role. The slug stays in front so the folder is still readable in a file listing.
  */
+const folderFor = (email: string): string =>
+  `${slug(email)}-${createHash('sha1').update(email.toLowerCase()).digest('hex').slice(0, 8)}`
+
 export const tailoredCvPath = (cvPath: string, recruiterEmail: string): string =>
-  join('data', 'cv', 'tailored', slug(recruiterEmail), basename(cvPath))
+  join('data', 'cv', 'tailored', folderFor(recruiterEmail), basename(cvPath))

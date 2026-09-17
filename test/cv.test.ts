@@ -4,8 +4,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { assignIds, loadMasterCv, masterCvBlock, matchKey, missingBullets, pdfSha256, toContent, type CvContent, type Extractor } from '../server/utils/cv-master.ts'
+import { basename, dirname, join } from 'node:path'
+import { MASTER_CACHE_VERSION, assignIds, loadMasterCv, masterCvBlock, matchKey, missingBullets, pdfSha256, toContent, type CvContent, type Extractor } from '../server/utils/cv-master.ts'
 import { tailoredCv } from '../server/utils/cv-tailor.ts'
 import { emptySettings } from '../shared/settings.ts'
 import { createCvRenderer, renderCvHtml, tailoredCvPath } from '../server/utils/cv-render.ts'
@@ -143,6 +143,28 @@ test('a new PDF invalidates the cache with no extra code: its bytes, and so its 
     writeFileSync(s.pdf, '%PDF-1.4 two')
     await loadMasterCv(s.pdf, extractor, s.cache)
     assert.equal(calls.extract, 2)
+  } finally {
+    s.done()
+  }
+})
+
+test('a cache written under an older MasterCv shape is a miss, not a wrong answer', async () => {
+  // The PDF's bytes do not change when the schema does, and the hash is all the key used to be. Three
+  // fields joined MasterCv mid-branch; a cache predating them makes masterText throw on every draft, so
+  // tailoring silently stops until the file is deleted by hand. The version is what makes it a miss.
+  const s = scratch('%PDF-1.4 one')
+  try {
+    const { extractor, calls } = fakeExtractor()
+    await loadMasterCv(s.pdf, extractor, s.cache)
+    const stale = JSON.parse(readFileSync(s.cache, 'utf8'))
+    assert.equal(stale.version, MASTER_CACHE_VERSION)
+    delete stale.version
+    writeFileSync(s.cache, JSON.stringify(stale))
+    await loadMasterCv(s.pdf, extractor, s.cache)
+    assert.equal(calls.extract, 2, 'an unversioned cache must be re-extracted, not served')
+    writeFileSync(s.cache, JSON.stringify({ ...stale, version: MASTER_CACHE_VERSION + 1 }))
+    await loadMasterCv(s.pdf, extractor, s.cache)
+    assert.equal(calls.extract, 3, 'a cache from a future shape must be re-extracted too')
   } finally {
     s.done()
   }
@@ -374,7 +396,21 @@ test('renderCvHtml renders every role, bullet and skill, in the CV\'s own font',
 
 test('a tailored CV keeps the uploaded filename, in a folder of its own per recruiter', () => {
   // createDraft names the attachment basename(path), so this filename is what the recruiter sees
-  assert.equal(tailoredCvPath('data/cv/My-CV.pdf', 'HR@Acme.sa'), join('data', 'cv', 'tailored', 'hr_acme_sa', 'My-CV.pdf'))
+  const p = tailoredCvPath('data/cv/My-CV.pdf', 'HR@Acme.sa')
+  assert.equal(join(p, '..', '..'), join('data', 'cv', 'tailored'))
+  assert.equal(basename(p), 'My-CV.pdf')
+  assert.match(basename(dirname(p)), /^hr_acme_sa-[0-9a-f]{8}$/)
+  // case-insensitive, or one recruiter would own two folders and the follow-up could miss its own file
+  assert.equal(tailoredCvPath('data/cv/My-CV.pdf', 'hr@acme.sa'), p)
+})
+
+test('two recruiters never share a tailored-CV folder, however alike their addresses slug', () => {
+  // slug() collapses every non-alphanumeric run to "_", so these three are one folder without the hash —
+  // and the second render overwrites the file contacts.cv_path recorded for the first, whose follow-up
+  // then attaches a CV tailored for the wrong job. All three spellings are ordinary at one agency.
+  const of = (email: string) => dirname(tailoredCvPath('data/cv/My-CV.pdf', email))
+  const folders = ['a.b@x.com', 'a-b@x.com', 'a_b@x.com'].map(of)
+  assert.equal(new Set(folders).size, 3, folders.join(' '))
 })
 
 test('the renderer launches no browser until something is rendered', async () => {
@@ -411,6 +447,33 @@ test('a control character in the extraction never reaches the master CV', () => 
   assert.deepEqual(m.interests, ['Reading'])
 })
 
+// Built with fromCharCode, never a backslash-u escape: a write path in this repo has twice turned that
+// escape text into the raw byte, which still runs and still passes while the source is corrupt.
+const CTRL = String.fromCharCode(14) // U+000E, the one the real CV text layer carried
+const ZWSP = String.fromCharCode(8203) // U+200B
+
+test('a control character the model emitted never reaches the rendered CV either', () => {
+  // The master is cleaned in assignIds; the tailored summary and bullets are model output and were not,
+  // so a stray control character passed all seven rules and printed into the PDF a recruiter opens.
+  // Cleaning runs before the rules, so it also cannot be used to hide a token from rule 5.
+  const t = tailored()
+  t.summary = 'Backend engineer with 9 years' + CTRL + ' delivering payment systems on .NET and PostgreSQL.'
+  t.roles[0]!.bullets[0]!.text = 'Reduced invoice' + ZWSP + ' generation latency by 40% by tuning query plans.'
+  const r = tailoredCv(t, master())
+  assert.ok(r.ok, r.ok ? '' : r.reason)
+  assert.equal(r.cv.summary, 'Backend engineer with 9 years delivering payment systems on .NET and PostgreSQL.')
+  assert.equal(r.cv.roles[0]!.bullets[0], 'Reduced invoice generation latency by 40% by tuning query plans.')
+  assert.equal(renderCvHtml(r.cv, profile).includes(CTRL), false)
+})
+
+test('a control character cannot smuggle a technology past rule 5', () => {
+  const t = tailored()
+  t.roles[1]!.bullets[0]!.text = 'Delivered REST APIs in C# and ASP.NET Core on A' + CTRL + 'WS for a payments integration.'
+  const r = tailoredCv(t, master())
+  assert.equal(r.ok, false, 'expected a rejection')
+  if (!r.ok) assert.match(r.reason, /^rule 5 at r1\.b0: "AWS"/)
+})
+
 const fakeRenderer = (failWith?: string) => {
   const written: string[] = []
   return {
@@ -441,7 +504,7 @@ test('a CV that passes every rule is rendered and attached under the uploaded fi
   const { renderer, written } = fakeRenderer()
   const a = await attach({ renderer })
   assert.equal(a.tailored, true)
-  assert.equal(a.path, join('data', 'cv', 'tailored', 'hr_acme_sa', 'My-CV.pdf'))
+  assert.equal(a.path, tailoredCvPath('data/cv/My-CV.pdf', 'hr@acme.sa'))
   assert.deepEqual(written, [a.path])
   assert.match(a.note, /^cv: tailored/)
 })

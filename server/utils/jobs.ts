@@ -454,8 +454,14 @@ async function runDraftJob(
     if (config.tailorCv) push(`cv: ${tailoredCount} tailored, ${fellBack} fell back`)
     return 0
   } finally {
-    await renderer.close()
+    // Neither close may depend on the other surviving. Closing the browser first meant a rejected
+    // renderer.close() — a browser whose transport already died — leaked the sqlite handle, and a hung
+    // one left runDraftJob's promise unsettled, so lanes.draft.current was never cleared and the draft
+    // lane stayed wedged until a server restart: that state is on globalThis, so an HMR reload does not
+    // clear it either. Started before close() and awaited after, with its rejection already handled.
+    const closingBrowser = renderer.close().catch(() => {})
     close()
+    await closingBrowser
   }
 }
 

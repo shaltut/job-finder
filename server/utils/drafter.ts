@@ -224,10 +224,16 @@ export function parseResponse(raw: string): DraftResponse {
 }
 
 /**
- * An unfilled slot the model left for a human to complete. The drafter has no tools and no reviewer, so
- * whatever it returns is what the recruiter reads: one `[ADD BEFORE SENDING]` went out and the recruiter
- * replied to say the email had a blank in it. A plain-text application written properly carries no square
- * brackets, so the shape is the rule.
+ * An unfilled slot the model left for a human to complete — or a master-CV bullet id copied into prose.
+ * The drafter has no tools and no reviewer, so whatever it returns is what the recruiter reads: one
+ * `[ADD BEFORE SENDING]` went out and the recruiter replied to say the email had a blank in it. A
+ * plain-text application written properly carries no square brackets, so the shape is the rule.
+ *
+ * The id half arrived with tailoring. Ids ride in the prompt as `(r0.b3)` precisely so this regex cannot
+ * reject the email over them, which leaves the model free to write one into a sentence; inside the CV
+ * rule 5 catches it (masterText carries values, never ids), and the email had no equivalent guard. Only
+ * the dotted bullet form is matched: a bare `r0` or `s1` collides with ordinary prose ("R2", "S1"), and
+ * a false rejection here writes no row, so the post is retried and fails the same way every run.
  *
  * In code rather than in the procedure for the same reason gateOnPostType() is: the model follows a
  * written instruction most of the time, and "most of the time" is the failure. The prompt asks for a
@@ -238,7 +244,7 @@ export function parseResponse(raw: string): DraftResponse {
  * not before — a guess at the next shape costs a lead every time it is wrong, and the procedure already
  * tells the model to skip a post whose value it does not have.
  */
-export const PLACEHOLDER = /\[[^\]\n]{0,120}\]|\b(?:TBD|TODO|FIXME|XXX)\b/i
+export const PLACEHOLDER = /\[[^\]\n]{0,120}\]|\b(?:TBD|TODO|FIXME|XXX)\b|\br\d+\.b\d+\b/i
 
 /**
  * Guards the contract the database depends on: every requested post gets exactly one verdict, drafted posts
@@ -270,7 +276,7 @@ export function checkContract(req: DraftRequest, res: DraftResponse): string[] {
   for (const r of res.results) {
     for (const [field, value] of [['subject', r.subject], ['body', r.body]] as const) {
       const hit = value?.match(PLACEHOLDER)
-      if (hit) problems.push(`the ${field} for ${r.key} still carries an unfilled placeholder: ${hit[0]}`)
+      if (hit) problems.push(`the ${field} for ${r.key} still carries an unfilled placeholder or a CV id: ${hit[0]}`)
     }
   }
   return problems

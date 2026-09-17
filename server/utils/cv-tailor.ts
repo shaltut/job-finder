@@ -6,7 +6,7 @@
 // name is exactly what "most of the time" cannot cover.
 // See docs/superpowers/specs/2026-09-17-tailored-cv-design.md, section 3.
 import { z } from 'zod'
-import type { CvContent, MasterCv } from './cv-master.ts'
+import { clean, type CvContent, type MasterCv } from './cv-master.ts'
 import { PLACEHOLDER } from './drafter.ts'
 
 // Every id must have the shape code assigns. The structure rules compare ids as joined strings, so an id
@@ -71,6 +71,15 @@ export function tailoredCv(raw: unknown, master: MasterCv): TailorResult {
   const parsed = cvBlock.safeParse(raw)
   if (!parsed.success) return fail(`malformed cv block: ${parsed.error.issues[0]?.message ?? 'unreadable'}`)
   const t = parsed.data
+
+  // assignIds cleans the master; these two are the only other strings that reach the rendered PDF, and
+  // they are model output, so they were printing whatever control or format characters the model emitted.
+  // Cleaned here rather than in the return block, so every rule below sees exactly the text that will
+  // print: a control character wedged inside a token would otherwise hide that token from rule 5.
+  // Skill items need none — rule 3 requires them identical to the master's already-clean strings.
+  t.summary = clean(t.summary)
+  for (const role of t.roles) for (const b of role.bullets) b.text = clean(b.text)
+
   const inOrder = (xs: { id: string }[]) => xs.map(x => x.id).join(',')
   const asSet = (xs: { id: string }[]) => xs.map(x => x.id).sort().join(',')
 
