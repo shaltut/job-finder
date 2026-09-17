@@ -18,11 +18,13 @@ export interface StoredDraft {
   signature: string
   keys: string[]
   gaps: string[]
+  /** The CV this draft would attach. Absent on drafts written before tailoring existed. */
+  cv?: string
   createdAt: string
 }
 
 /** Filenames must round-trip an email address safely. */
-const slug = (email: string) => email.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+export const slug = (email: string) => email.toLowerCase().replace(/[^a-z0-9]+/g, '_')
 
 /**
  * The signature the skill is told not to write. Kept here so it is identical on every draft and so the
@@ -69,7 +71,8 @@ export function persist(
   db: Database.Database,
   req: DraftRequest,
   res: DraftResponse,
-  draftFile: string | null
+  draftFile: string | null,
+  cvPath: string | null = null
 ): { drafted: number, skipped: number } {
   const now = Math.floor(Date.now() / 1000)
   let drafted = 0
@@ -116,15 +119,20 @@ export function persist(
     if (drafted > 0) {
       const stage = req.mode === 'follow-up' ? 'followed_up' : 'drafted'
       db.prepare(`
-        INSERT INTO contacts (email, stage, note, updated_at)
-        VALUES (@email, @stage, @note, @now)
+        INSERT INTO contacts (email, stage, note, cv_path, updated_at)
+        VALUES (@email, @stage, @note, @cvPath, @now)
         ON CONFLICT (email) DO UPDATE SET
-          stage = excluded.stage, note = excluded.note, updated_at = excluded.updated_at
+          stage = excluded.stage, note = excluded.note, updated_at = excluded.updated_at,
+          cv_path = CASE WHEN @apply = 1 THEN excluded.cv_path ELSE contacts.cv_path END
         WHERE contacts.stage <> 'final'
       `).run({
         email: req.recruiterEmail.toLowerCase(),
         stage,
         note: draftFile ? `draft written to ${draftFile}` : null,
+        // An application records the CV it carried, null included. A follow-up reuses that CV, so it
+        // must never overwrite it — not with null, and not with a path of its own.
+        cvPath: req.mode === 'apply' ? cvPath : null,
+        apply: req.mode === 'apply' ? 1 : 0,
         now
       })
     }

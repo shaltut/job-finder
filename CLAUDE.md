@@ -498,8 +498,8 @@ drafts keep arguing from a stale CV.
   v12 is what breaks corepack.
 - **`@unovis` was dropped** from the template: it pulls `maplibre-gl` with a critical XSS advisory whose fix
   needs a major bump `@unovis` cannot take, and nothing here renders a map or a chart.
-- **The CV PDF is ~1.4 MB** (the original was built around 75 KB). Fine for the OpenAI file read and for
-  Gmail, but every application carries it.
+- **The CV PDF is ~56 KB** (measured 2026-09-17: two pages, no images, set in Carlito). Earlier notes said
+  ~1.4 MB; that was an older file.
 
 ## Conventions
 
@@ -527,6 +527,49 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   because the MCP tool corrupted base64 passed through the model; here the bytes are read from disk by the
   server and never touch a model. `createDraft` re-reads the draft and reports the attached byte count — a
   draft that logs `NO CV ATTACHED` means the PDF path is wrong.
+- **A tailored CV, when `tailorCv` is on** (off by default). The PDF is extracted once into a master CV,
+  cached in `data/cv/master.json` against its sha256 **and `MASTER_CACHE_VERSION`**, and every bullet must
+  appear in a verbatim extraction of the same PDF or nothing is cached. **Bump that version whenever
+  `MasterCv` gains or loses a field**: the PDF's bytes do not change when the shape does, `masterCvBlock`
+  does not read the newer fields so the prompt looks fine, and `masterText` spreads them — so a cache
+  written under the old shape is served forever and every draft falls back with
+  `m.achievements is not iterable`. A missing or mismatched version is a miss, costing two model calls
+  once. `assignIds` also strips control and format characters from every
+  extracted string, keeping tab, newline and carriage return: a PDF's text layer carries characters the eye
+  never sees — a stable `\x0E` turned up in the real CV's summary on every extraction — and `matchKey`
+  strips them before comparing while `missingBullets` only covers bullet text, so nothing else would have
+  caught one before it printed into a CV. Education, certifications, achievements, personal details,
+  languages and interests are never tailored: copied from the master verbatim and never shown to the model
+  (`masterCvBlock` lists only the summary, roles and skills). Education, certifications and languages were
+  in the schema from the start; achievements, personal details and interests joined it only after separate
+  preview runs against the real uploaded CV showed each was being silently dropped — the schema had no
+  field for it at all, not just an empty one. The drafter returns a `cv` block
+  beside the email, kept `z.unknown()` so it can never fail the email, and `tailoredCv()` in
+  `server/utils/cv-tailor.ts` checks it: the same roles in date order, each bullet once under its own role,
+  skills renamed never, no new number, no technology-shaped token the master CV does not name, nothing
+  longer than 1.5× its source plus 20 characters, no placeholder. **A bullet's numbers come from that
+  bullet; the summary's come from the master summary and the role dates only** — the whole-CV pool
+  included a date of birth and a graduation year, so any of those digits could be re-used as a
+  years-of-experience claim. Rule 5 is weaker than it sounds and the prose used to overstate it:
+  `isTech` recognises a technology **by shape** — a token carrying a digit, `.`, `#` or `+` (`C#`,
+  `.NET`, `ES6`), or one written in bare capitals (`AWS`). An ordinary capitalised name (`Kafka`,
+  `Kubernetes`, `Terraform`) is not caught at all, and the all-caps branch is defeated by any punctuation
+  `tokens()` does not split on, so bare `AWS` is rejected while `"AWS"`, `*SAP*` and `AWS-native` pass.
+  It is a net for the obvious cases, not a guarantee, and `test/cv.test.ts` pins that ceiling as a
+  **passing** test so tightening it is a visible change. **Any failure attaches the uploaded PDF** —
+  extraction, the prompt budget, the check, or rendering — and says why in the job log, with a
+  `cv: N tailored, M fell back` line per job. `contacts.cv_path` records a tailored CV sent (null for the
+  uploaded one); the follow-up reuses it. Tailored PDFs live in
+  `data/cv/tailored/<slug>-<8 hex of the address>/` under the uploaded file's own name, because
+  `createDraft` names the attachment after the file. The hash half is not decoration: `slug()` collapses
+  every non-alphanumeric run to `_`, so `first.last@`, `first-last@` and `first_last@` at one agency are
+  one folder, and the second render would overwrite the file `contacts.cv_path` recorded for the first —
+  whose follow-up then attaches a CV tailored for somebody else's job. Rendering uses a
+  fresh headless Chrome, never `./profile`. Tune the template with
+  `node --env-file-if-exists=.env scripts/preview-cv.ts`, which renders the master CV through it unchanged
+  so the result can be compared with the uploaded PDF after any CSS change — the first run against a new
+  CV costs two OpenAI calls, and later ones reuse `data/cv/master.json`. Design:
+  `docs/superpowers/specs/2026-09-17-tailored-cv-design.md`.
 - **`renderHtml` emits real anchors.** Gmail rewrites bare URLs in a plain-text body into `google.com/url?q=`
   redirects; two applications went out that way on the original.
 - **The follow-up is a reply, in the application's own thread.** Gmail adds a draft to a thread only when

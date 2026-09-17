@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import type { AppConfig } from './config'
+import { masterCvBlock, type MasterCv } from './cv-master.ts'
 
 /**
  * Procedure only — how to screen and how to write. Every fact about the candidate is injected above
@@ -90,7 +91,11 @@ const resultSchema = z.object({
 
 const responseSchema = z.object({
   results: z.array(resultSchema).min(1),
-  report: z.string().default('')
+  report: z.string().default(''),
+  // The tailored CV, deliberately untyped. Zod strips unknown keys, so without this line the block would
+  // vanish silently; typed here, a malformed CV would fail the email it arrived with. tailoredCv() in
+  // cv-tailor.ts validates it on its own, and any failure attaches the uploaded PDF.
+  cv: z.unknown().optional()
 })
 
 export type DraftResult = z.infer<typeof resultSchema>
@@ -181,9 +186,21 @@ export function candidateBlock(config: AppConfig): string {
   ].join('\n\n')
 }
 
-export function buildSystemPrompt(config: AppConfig): string {
-  return `${candidateBlock(config)}${PROMPT_SEPARATOR}${readProcedure()}`
+/**
+ * The longest system prompt allowed. It travels on the command line (`--append-system-prompt`), Windows
+ * caps a whole command line at 32,767 characters, and argument escaping inflates the prompt on the way.
+ * Measured 2026-09-17: ~17,400 characters before a master CV, ~6,500 more with one.
+ */
+export const PROMPT_BUDGET = 28_000
+
+export function buildSystemPrompt(config: AppConfig, master: MasterCv | null = null): string {
+  const cv = master ? `\n\n${masterCvBlock(master)}` : ''
+  return `${candidateBlock(config)}${cv}${PROMPT_SEPARATOR}${readProcedure()}`
 }
+
+/** False when injecting this master CV would push the prompt past PROMPT_BUDGET. */
+export const fitsPromptBudget = (config: AppConfig, master: MasterCv): boolean =>
+  buildSystemPrompt(config, master).length <= PROMPT_BUDGET
 
 /** Strips a ```json fence if the model adds one despite being told not to. */
 export function parseResponse(raw: string): DraftResponse {
@@ -207,10 +224,16 @@ export function parseResponse(raw: string): DraftResponse {
 }
 
 /**
- * An unfilled slot the model left for a human to complete. The drafter has no tools and no reviewer, so
- * whatever it returns is what the recruiter reads: one `[ADD BEFORE SENDING]` went out and the recruiter
- * replied to say the email had a blank in it. A plain-text application written properly carries no square
- * brackets, so the shape is the rule.
+ * An unfilled slot the model left for a human to complete — or a master-CV bullet id copied into prose.
+ * The drafter has no tools and no reviewer, so whatever it returns is what the recruiter reads: one
+ * `[ADD BEFORE SENDING]` went out and the recruiter replied to say the email had a blank in it. A
+ * plain-text application written properly carries no square brackets, so the shape is the rule.
+ *
+ * The id half arrived with tailoring. Ids ride in the prompt as `(r0.b3)` precisely so this regex cannot
+ * reject the email over them, which leaves the model free to write one into a sentence; inside the CV
+ * rule 5 catches it (masterText carries values, never ids), and the email had no equivalent guard. Only
+ * the dotted bullet form is matched: a bare `r0` or `s1` collides with ordinary prose ("R2", "S1"), and
+ * a false rejection here writes no row, so the post is retried and fails the same way every run.
  *
  * In code rather than in the procedure for the same reason gateOnPostType() is: the model follows a
  * written instruction most of the time, and "most of the time" is the failure. The prompt asks for a
@@ -221,7 +244,7 @@ export function parseResponse(raw: string): DraftResponse {
  * not before — a guess at the next shape costs a lead every time it is wrong, and the procedure already
  * tells the model to skip a post whose value it does not have.
  */
-export const PLACEHOLDER = /\[[^\]\n]{0,120}\]|\b(?:TBD|TODO|FIXME|XXX)\b/i
+export const PLACEHOLDER = /\[[^\]\n]{0,120}\]|\b(?:TBD|TODO|FIXME|XXX)\b|\br\d+\.b\d+\b/i
 
 /**
  * Guards the contract the database depends on: every requested post gets exactly one verdict, drafted posts
@@ -253,7 +276,7 @@ export function checkContract(req: DraftRequest, res: DraftResponse): string[] {
   for (const r of res.results) {
     for (const [field, value] of [['subject', r.subject], ['body', r.body]] as const) {
       const hit = value?.match(PLACEHOLDER)
-      if (hit) problems.push(`the ${field} for ${r.key} still carries an unfilled placeholder: ${hit[0]}`)
+      if (hit) problems.push(`the ${field} for ${r.key} still carries an unfilled placeholder or a CV id: ${hit[0]}`)
     }
   }
   return problems
@@ -263,6 +286,8 @@ export interface RunOptions {
   onLog?: (line: string) => void
   signal?: AbortSignal
   timeoutMs?: number
+  /** Injected only when tailoring is on and fitsPromptBudget() holds — jobs.ts decides. */
+  masterCv?: MasterCv | null
 }
 
 export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOptions = {}): Promise<DraftResponse> {
@@ -272,7 +297,7 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--allowed-tools', 'NoToolsPermitted',
     '--disallowed-tools', ...DENY,
-    '--append-system-prompt', buildSystemPrompt(config),
+    '--append-system-prompt', buildSystemPrompt(config, opts.masterCv ?? null),
     '--output-format', 'text'
   ]
 

@@ -190,6 +190,47 @@ that reaches this section is one where somebody is hiring — anything else was 
 posts and unnamed-client staffing reqs get a short version plus a question about the client, location,
 rate and time zone. Named companies with real job specs get the full treatment. Six to fourteen sentences.
 
+## Tailored CV
+
+Only when a **Master CV** section is injected above. With none injected, return no `cv` key and ignore
+this section.
+
+In apply mode, add one top-level `cv` key beside `results` and `report`, tailoring the injected master CV
+to the posts in this email:
+
+```jsonc
+"cv": {
+  "summary": "…",
+  "roles":  [{ "id": "r0", "bullets": [{ "id": "r0.b3", "text": "…" }] }],
+  "skills": [{ "id": "s1", "items": ["…"] }]
+}
+```
+
+- **Roles:** every role id, in the injected order. Never reorder roles.
+- **Bullets:** every bullet id of a role exactly once, under that same role, most relevant first. Reword a
+  bullet in the posts' own terms only where the fact stays exactly the same — never a number the bullet
+  does not already carry, never a technology the master CV does not name, never more than half as long
+  again.
+- **Skills:** every group id, in any order; each group's items in any order and copied exactly — never
+  renamed, added or removed.
+- **Summary:** written for these roles, stating only facts the master CV contains. **Its numbers are
+  narrower than that:** the only figures it may state are ones the master's own summary or a role's dates
+  already carry. A percentage or a headcount that appears in a bullet is a fact, but quoting it up here
+  is rejected — the digits in a date of birth and a graduation year look the same to a checker, and one
+  of those becoming a years-of-experience claim is the failure this whole contract exists to stop. Cite
+  such a figure in the bullet that owns it.
+- Education, certifications and languages are not returned; they are copied from the master CV unchanged.
+- Never copy an id such as `r0.b3` into a bullet or into the email.
+
+The structural rules above — the ids, the ordering, the sets, the lengths, and a number appearing from
+nowhere — are checked in code, and a CV that breaks one is discarded in favour of the original, whole.
+The rest are checked weakly or not at all. The technology rule catches only a token shaped like one
+(`.NET`, `AWS`); an ordinary capitalised name such as Kubernetes passes. And that the summary is fair,
+rather than merely arithmetically sourced, cannot be checked by code at all: a sentence that overstates
+without using a single digit is invisible to every rule here. Where the checks end you are the only
+guard, and the CV goes out over the owner's name. Staying inside all of them is the only way a tailored
+CV is actually sent.
+
 ## Follow-up mode
 
 `mode: "follow-up"` means one application was sent and three days have passed with no reply. Write four to six
@@ -210,3 +251,4 @@ joins the thread when the Subject header matches the original exactly.
 - The exact subject line is used where the posting specifies one.
 - Every input post has exactly one `results` entry, and drafted reasons carry the `named in ...` prefix.
 - The output is raw JSON: no code fences, no commentary before or after.
+- With a Master CV injected and in apply mode, the `cv` key is present and follows the Tailored CV rules.

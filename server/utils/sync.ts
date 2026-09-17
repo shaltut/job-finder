@@ -7,6 +7,7 @@
 // knows and a recruiter written to outside this app has no row there at all.
 import type Database from 'better-sqlite3'
 import type { AppConfig } from './config'
+import { followUpAttachment } from './cv-attach'
 import { runDrafter, type DraftPost } from './drafter'
 import { persist, signature } from './drafts'
 import { ccFrom, createDraft, gmail, renderHtml, replyHeaders } from './gmail'
@@ -213,6 +214,11 @@ async function draftFollowUp(
   // The subject, In-Reply-To and References all come from the application itself — never from the model,
   // which returns one anyway. replyHeaders() explains why Gmail insists on all three.
   const head = replyHeaders(replyTo)
+  // The CV the application carried, while tailoring is on. Switching tailoring off is the rollback lever,
+  // so it returns follow-ups to the uploaded PDF too, not only new applications.
+  const sentCv = (db.prepare('SELECT cv_path FROM contacts WHERE email = ?')
+    .get(email.toLowerCase()) as { cv_path: string | null } | undefined)?.cv_path ?? null
+  const attachPath = config.tailorCv ? followUpAttachment(sentCv, config.cv) : config.cv
   const created = await createDraft(
     {
       to: email,
@@ -223,7 +229,7 @@ async function draftFollowUp(
       text: `${carrier.body}\n\n${sig}`,
       html: renderHtml(carrier.body, sig)
     },
-    config.cv,
+    attachPath,
     head.threadId
   )
   persist(db, req, res, created.id)

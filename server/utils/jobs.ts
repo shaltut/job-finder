@@ -8,7 +8,10 @@
 // session pays 3-5 minutes of setup regardless of how many posts it handles.
 import { spawn, type ChildProcess } from 'node:child_process'
 import { readConfig, readConfigForDraft } from './config'
-import { runDrafter, type DraftPost, type DraftRequest, type DraftResponse } from './drafter'
+import { applicationAttachment } from './cv-attach'
+import { loadMasterCv, type MasterCv } from './cv-master'
+import { createCvRenderer } from './cv-render'
+import { fitsPromptBudget, runDrafter, type DraftPost, type DraftRequest, type DraftResponse } from './drafter'
 import { isClosed, persist, signature, writeDraftFile } from './drafts'
 import { ccFrom, createDraft, gmailStatus, renderHtml } from './gmail'
 import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
@@ -247,6 +250,8 @@ async function runDraftJob(
   const config = readConfigForDraft()
   const mail = gmailStatus(config.profile.email)
   const { db, close } = openWritableDb()
+  // launches nothing until the first tailored CV is rendered
+  const renderer = createCvRenderer()
   try {
     // The Posts view's Draft button, not the batch queue: pump() only ever coalesces single-post
     // requests with each other, so a `{ n }` job can never arrive carrying keys and vice versa.
@@ -313,6 +318,24 @@ async function runDraftJob(
     }
     push(`${rows.length} post(s) across ${groups.size} recruiter(s)`)
 
+    // Tailoring, when switched on. The master CV loads once per job, and a failure only means this job
+    // attaches the uploaded PDF — it must never stop a draft. The prompt budget is per job too: the master
+    // CV and the config are both fixed for its duration.
+    let master: MasterCv | null = null
+    if (config.tailorCv) {
+      try {
+        master = await loadMasterCv(config.cv)
+        if (!fitsPromptBudget(config, master)) {
+          push('cv: master CV not injected — the prompt would exceed PROMPT_BUDGET; attaching the uploaded PDF')
+          master = null
+        }
+      } catch (e) {
+        push(`cv: master CV unavailable (${(e as Error).message}); attaching the uploaded PDF`)
+      }
+    }
+    let tailoredCount = 0
+    let fellBack = 0
+
     for (const [email, posts] of groups) {
       if (signal.aborted) {
         push('stopped')
@@ -363,7 +386,7 @@ async function runDraftJob(
       // to use after filling in a setting the drafter said was missing.
       let res: DraftResponse
       try {
-        res = await runDrafter(req, config, { onLog: push, signal })
+        res = await runDrafter(req, config, { onLog: push, signal, masterCv: master })
       } catch (e) {
         push(`${email}: ${(e as Error).message} — nothing drafted, the posts stay unprocessed and retry next run`)
         continue
@@ -372,8 +395,24 @@ async function runDraftJob(
       const carrier = res.results.find(r => r.body)
       let ref: string | null = null
       let where = ''
+      let tailoredPath: string | null = null
       if (carrier?.body) {
         const sig = signature(config.profile)
+        const attachment = config.tailorCv
+          ? await applicationAttachment({
+              master, raw: res.cv, profile: config.profile, cvPath: config.cv, recruiterEmail: email, renderer
+            })
+          : null
+        if (attachment) {
+          push(`${email}: ${attachment.note}`)
+          if (attachment.tailored) {
+            tailoredCount++
+            tailoredPath = attachment.path
+          } else {
+            fellBack++
+          }
+        }
+        const attachPath = attachment?.path ?? config.cv
         // A Gmail draft when connected, a local file when not, so M1-M3 stay usable without Google Cloud.
         // Either way nothing is sent: the server has no code path that can send.
         if (gmailStatus().authorized) {
@@ -383,7 +422,7 @@ async function runDraftJob(
             subject: carrier.subject,
             text: `${carrier.body}\n\n${sig}`,
             html: renderHtml(carrier.body, sig)
-          }, config.cv)
+          }, attachPath)
           ref = created.id
           where = ` -> gmail draft ${created.id}${created.attachedBytes ? `, CV ${created.attachedBytes} bytes` : ', NO CV ATTACHED'}`
         } else {
@@ -396,6 +435,7 @@ async function runDraftJob(
             signature: sig,
             keys: res.results.filter(r => r.verdict === 'drafted').map(r => r.key),
             gaps: carrier.gaps_declared ?? [],
+            cv: attachPath,
             createdAt: new Date().toISOString()
           })
           ref = file
@@ -403,7 +443,7 @@ async function runDraftJob(
         }
       }
 
-      const { drafted, skipped } = persist(db, req, res, ref)
+      const { drafted, skipped } = persist(db, req, res, ref, tailoredPath)
       job.added += drafted
       // "skipped" would be a lie on the manual path: nothing was recorded, so the post is still live
       // and the next bulk run will see it again. Say what actually happened to it.
@@ -411,9 +451,17 @@ async function runDraftJob(
       push(`${email}: ${drafted} drafted, ${passed}${where}`)
       if (res.report) res.report.split('\n').filter(Boolean).forEach(push)
     }
+    if (config.tailorCv) push(`cv: ${tailoredCount} tailored, ${fellBack} fell back`)
     return 0
   } finally {
+    // Neither close may depend on the other surviving. Closing the browser first meant a rejected
+    // renderer.close() — a browser whose transport already died — leaked the sqlite handle, and a hung
+    // one left runDraftJob's promise unsettled, so lanes.draft.current was never cleared and the draft
+    // lane stayed wedged until a server restart: that state is on globalThis, so an HMR reload does not
+    // clear it either. Started before close() and awaited after, with its rejection already handled.
+    const closingBrowser = renderer.close().catch(() => {})
     close()
+    await closingBrowser
   }
 }
 

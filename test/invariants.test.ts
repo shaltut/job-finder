@@ -216,3 +216,37 @@ test('the draft gate asks Gmail, and still falls back to the cache without a tok
   assert.match(loop, /closedInGmail\(/, 'the per-recruiter gate must consult Gmail when a token exists')
   assert.match(loop, /isClosed\(/, 'and must fall back to the contacts cache when it does not')
 })
+
+test('CV rendering never touches the LinkedIn profile: a fresh headless browser, never a persistent one', () => {
+  // The draft lane runs alongside the scrape lane, which holds ./profile's lock for the whole scrape. A
+  // renderer that opened it would fail every tailored CV during a scrape, or break the scrape itself.
+  const src = readFileSync('server/utils/cv-render.ts', 'utf8')
+  assert.doesNotMatch(src, /launchPersistentContext|PROFILE_DIR|user-data-dir|['"`]\.\/profile/)
+  assert.match(src, /headless:\s*true/)
+})
+
+test('a draft job closes its database handle whatever the browser does', () => {
+  // Awaiting renderer.close() first made the sqlite close conditional on Playwright: a rejection leaked
+  // the handle and a hang left the draft lane wedged on globalThis until a server restart, where an HMR
+  // reload cannot reach it. The kicked-off-then-awaited shape is what keeps the two independent.
+  const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
+  const kickOff = 'const closingBrowser = renderer.close().catch('
+  const start = jobs.indexOf(kickOff)
+  assert.ok(start > 0, 'the browser close must be started, with its rejection handled, not awaited first')
+  const dbClose = jobs.indexOf('close()', start + kickOff.length)
+  const awaited = jobs.indexOf('await closingBrowser', start)
+  assert.ok(dbClose > 0 && awaited > 0 && dbClose < awaited, 'close() must run before the browser is awaited')
+})
+
+test('the drafter keeps the cv block untyped, so a malformed CV can never fail an email', () => {
+  const src = readFileSync('server/utils/drafter.ts', 'utf8')
+  assert.match(src, /cv:\s*z\.unknown\(\)\.optional\(\)/)
+})
+
+test('switching tailoring off returns follow-ups to the uploaded PDF, not only new applications', () => {
+  const sync = readFileSync('server/utils/sync.ts', 'utf8')
+  const fn = sync.slice(sync.indexOf('async function draftFollowUp'))
+  // The else branch is the half that matters: it IS the rollback lever. A regex stopping at
+  // `followUpAttachment(` would stay green if someone rewrote `: config.cv` to `: null`.
+  assert.match(fn, /config\.tailorCv\s*\?\s*followUpAttachment\([^)]*\)\s*:\s*config\.cv/)
+})

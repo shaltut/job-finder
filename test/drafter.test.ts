@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  PROMPT_SEPARATOR, buildSystemPrompt, candidateBlock, checkContract, parseResponse,
+  PROMPT_BUDGET, PROMPT_SEPARATOR, buildSystemPrompt, candidateBlock, checkContract, fitsPromptBudget, parseResponse,
   profileBlock, readProcedure, type DraftRequest
 } from '../server/utils/drafter.ts'
+import { MASTER_CV_HEADING, assignIds } from '../server/utils/cv-master.ts'
 import { emptySettings, type StoredSettings as AppConfig } from '../shared/settings.ts'
 
 // A fixture, not the stored settings. These assert what profileBlock does with a config, which must
@@ -226,9 +227,63 @@ test('checkContract passes a complete email that states a real figure', () => {
   assert.deepEqual(checkContract(req, parseResponse(JSON.stringify(filled))), [])
 })
 
+// A master CV bullet id is written "(r0.b3)" in the prompt so PLACEHOLDER's square-bracket half cannot
+// reject the email over it. Inside the CV a copied id fails rule 5, because masterText carries values and
+// never ids; the email half was prompt-only, and this repo has already delivered one prompt-only rule.
+
+test('checkContract rejects a master-CV bullet id copied into the email', () => {
+  const leaked = {
+    results: [{ ...ok.results[0], body: 'I led that migration (r0.b3) end to end. CV attached.' }, ok.results[1]],
+    report: ''
+  }
+  const problems = checkContract(req, parseResponse(JSON.stringify(leaked)))
+  assert.ok(problems.some(p => p.includes('r0.b3')), problems.join('; '))
+})
+
+test('checkContract leaves an ordinary email alone: a bare role id shape is not an id', () => {
+  // The other direction, and the reason only the dotted form is matched: a guard that also rejected "R2"
+  // or "S1" would fail the same post every run, because a contract failure writes no row.
+  const plain = {
+    results: [{ ...ok.results[0], body: 'I shipped the R2 release and ran the S1 rollout. CV attached.' }, ok.results[1]],
+    report: ''
+  }
+  assert.deepEqual(checkContract(req, parseResponse(JSON.stringify(plain))), [])
+})
+
 test('profileBlock quotes the expected salary, and says so plainly when there is none', () => {
   const withSalary = { ...config, constraints: { ...config.constraints, expectedSalary: '8,000 USD / month' } }
   assert.match(profileBlock(withSalary), /quote verbatim when a post asks for one: 8,000 USD/)
   // Empty must not read as a blank value: the model has to know it is missing so it skips the post.
   assert.match(profileBlock({ ...config, constraints: { ...config.constraints, expectedSalary: '' } }), /NOT PROVIDED/)
+})
+
+const cvContent = {
+  summary: 'Backend engineer with 9 years on .NET.',
+  roles: [{ title: 'Engineering Manager', employer: 'Example Corp', location: 'Remote', start: '2021', end: 'Present', bullets: ['Led a team of 12 engineers.'] }],
+  skills: [{ group: 'Backend', items: ['C#', '.NET'] }],
+  education: [],
+  certifications: [],
+  achievements: [],
+  personalDetails: [],
+  interests: [],
+  languages: []
+}
+
+test('a malformed cv block never fails the email it arrived with', () => {
+  const parsed = parseResponse(JSON.stringify({ ...ok, cv: { roles: 'not an array' } }))
+  assert.equal(parsed.results.length, ok.results.length)
+  assert.deepEqual(parsed.cv, { roles: 'not an array' })
+})
+
+test('the master CV is injected above the separator, and the procedure still follows byte for byte', () => {
+  const p = buildSystemPrompt(config, assignIds(cvContent))
+  assert.ok(p.includes('(r0.b0) Led a team of 12 engineers.'))
+  assert.ok(p.indexOf(MASTER_CV_HEADING) < p.indexOf(PROMPT_SEPARATOR), 'the master CV must sit ABOVE the separator')
+  assert.ok(p.endsWith(readProcedure()))
+  assert.equal(buildSystemPrompt(config).includes(MASTER_CV_HEADING), false, 'no master CV means no block')
+})
+
+test('a master CV that would push the prompt past PROMPT_BUDGET does not fit', () => {
+  assert.equal(fitsPromptBudget(config, assignIds(cvContent)), true)
+  assert.equal(fitsPromptBudget(config, assignIds({ ...cvContent, summary: 'x'.repeat(PROMPT_BUDGET) })), false)
 })
