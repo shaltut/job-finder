@@ -190,6 +190,36 @@ that reaches this section is one where somebody is hiring — anything else was 
 posts and unnamed-client staffing reqs get a short version plus a question about the client, location,
 rate and time zone. Named companies with real job specs get the full treatment. Six to fourteen sentences.
 
+## Tailored CV
+
+Only when a **Master CV** section is injected above. With none injected, return no `cv` key and ignore
+this section.
+
+In apply mode, add one top-level `cv` key beside `results` and `report`, tailoring the injected master CV
+to the posts in this email:
+
+```jsonc
+"cv": {
+  "summary": "…",
+  "roles":  [{ "id": "r0", "bullets": [{ "id": "r0.b3", "text": "…" }] }],
+  "skills": [{ "id": "s1", "items": ["…"] }]
+}
+```
+
+- **Roles:** every role id, in the injected order. Never reorder roles.
+- **Bullets:** every bullet id of a role exactly once, under that same role, most relevant first. Reword a
+  bullet in the posts' own terms only where the fact stays exactly the same — never a number the bullet
+  does not already carry, never a technology the master CV does not name, never more than half as long
+  again.
+- **Skills:** every group id, in any order; each group's items in any order and copied exactly — never
+  renamed, added or removed.
+- **Summary:** written for these roles, stating only facts the master CV contains.
+- Education, certifications and languages are not returned; they are copied from the master CV unchanged.
+- Never copy an id such as `r0.b3` into a bullet or into the email.
+
+Every rule here is checked in code, and a CV that breaks any of them is discarded in favour of the
+original. Staying inside them is the only way a tailored CV is actually sent.
+
 ## Follow-up mode
 
 `mode: "follow-up"` means one application was sent and three days have passed with no reply. Write four to six
@@ -210,3 +240,4 @@ joins the thread when the Subject header matches the original exactly.
 - The exact subject line is used where the posting specifies one.
 - Every input post has exactly one `results` entry, and drafted reasons carry the `named in ...` prefix.
 - The output is raw JSON: no code fences, no commentary before or after.
+- With a Master CV injected and in apply mode, the `cv` key is present and follows the Tailored CV rules.

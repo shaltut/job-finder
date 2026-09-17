@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { assignIds, loadMasterCv, matchKey, missingBullets, pdfSha256, toContent, type CvContent, type Extractor } from '../server/utils/cv-master.ts'
+import { assignIds, loadMasterCv, masterCvBlock, matchKey, missingBullets, pdfSha256, toContent, type CvContent, type Extractor } from '../server/utils/cv-master.ts'
 import { tailoredCv } from '../server/utils/cv-tailor.ts'
 
 /** A neutral CV — nobody's real career. */
@@ -294,4 +294,14 @@ test('an id the model merged is a malformed block, never a throw', () => {
     assert.equal(r.ok, false)
     if (!r.ok) assert.match(r.reason, /^malformed cv block/)
   }
+})
+
+test('the master CV block gives every bullet its id — in parentheses, never square brackets', () => {
+  const block = masterCvBlock(master())
+  assert.match(block, /\(r0\.b1\) Migrated the billing service/)
+  assert.match(block, /\(s0\) Backend: C# \| \.NET \| ASP\.NET Core/)
+  // PLACEHOLDER rejects square brackets, so a copied "[r0.b3]" would cost the email it landed in
+  assert.doesNotMatch(block, /\[[rs]\d/)
+  // a markdown rule would make PROMPT_SEPARATOR ambiguous
+  assert.equal(block.includes('\n\n---\n\n'), false)
 })

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  PROMPT_SEPARATOR, buildSystemPrompt, candidateBlock, checkContract, parseResponse,
+  PROMPT_BUDGET, PROMPT_SEPARATOR, buildSystemPrompt, candidateBlock, checkContract, fitsPromptBudget, parseResponse,
   profileBlock, readProcedure, type DraftRequest
 } from '../server/utils/drafter.ts'
+import { MASTER_CV_HEADING, assignIds } from '../server/utils/cv-master.ts'
 import { emptySettings, type StoredSettings as AppConfig } from '../shared/settings.ts'
 
 // A fixture, not the stored settings. These assert what profileBlock does with a config, which must
@@ -231,4 +232,32 @@ test('profileBlock quotes the expected salary, and says so plainly when there is
   assert.match(profileBlock(withSalary), /quote verbatim when a post asks for one: 8,000 USD/)
   // Empty must not read as a blank value: the model has to know it is missing so it skips the post.
   assert.match(profileBlock({ ...config, constraints: { ...config.constraints, expectedSalary: '' } }), /NOT PROVIDED/)
+})
+
+const cvContent = {
+  summary: 'Backend engineer with 9 years on .NET.',
+  roles: [{ title: 'Engineering Manager', employer: 'Example Corp', location: 'Remote', start: '2021', end: 'Present', bullets: ['Led a team of 12 engineers.'] }],
+  skills: [{ group: 'Backend', items: ['C#', '.NET'] }],
+  education: [],
+  certifications: [],
+  languages: []
+}
+
+test('a malformed cv block never fails the email it arrived with', () => {
+  const parsed = parseResponse(JSON.stringify({ ...ok, cv: { roles: 'not an array' } }))
+  assert.equal(parsed.results.length, ok.results.length)
+  assert.deepEqual(parsed.cv, { roles: 'not an array' })
+})
+
+test('the master CV is injected above the separator, and the procedure still follows byte for byte', () => {
+  const p = buildSystemPrompt(config, assignIds(cvContent))
+  assert.ok(p.includes('(r0.b0) Led a team of 12 engineers.'))
+  assert.ok(p.indexOf(MASTER_CV_HEADING) < p.indexOf(PROMPT_SEPARATOR), 'the master CV must sit ABOVE the separator')
+  assert.ok(p.endsWith(readProcedure()))
+  assert.equal(buildSystemPrompt(config).includes(MASTER_CV_HEADING), false, 'no master CV means no block')
+})
+
+test('a master CV that would push the prompt past PROMPT_BUDGET does not fit', () => {
+  assert.equal(fitsPromptBudget(config, assignIds(cvContent)), true)
+  assert.equal(fitsPromptBudget(config, assignIds({ ...cvContent, summary: 'x'.repeat(PROMPT_BUDGET) })), false)
 })

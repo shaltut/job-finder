@@ -225,3 +225,25 @@ export async function loadMasterCv(
   writeFileSync(cachePath, `${JSON.stringify(record, null, 2)}\n`)
   return master
 }
+
+export const MASTER_CV_HEADING = '# Master CV — tailor from this, and only this'
+
+/**
+ * The master CV as the drafter sees it, every line carrying the id a tailored bullet must return.
+ * Ids go in parentheses: PLACEHOLDER rejects square brackets, so a copied "[r0.b3]" would cost the email.
+ * Plain lines and never a markdown rule, because PROMPT_SEPARATOR is itself one.
+ */
+export function masterCvBlock(master: MasterCv): string {
+  return [
+    MASTER_CV_HEADING,
+    '',
+    `Summary: ${master.summary}`,
+    '',
+    ...master.roles.flatMap(r => [
+      `(${r.id}) ${r.title} — ${r.employer}, ${r.location} (${r.start} – ${r.end})`,
+      ...r.bullets.map(b => `  (${b.id}) ${b.text}`)
+    ]),
+    '',
+    ...master.skills.map(s => `(${s.id}) ${s.group}: ${s.items.join(' | ')}`)
+  ].join('\n')
+}
