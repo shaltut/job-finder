@@ -533,7 +533,8 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   `MasterCv` gains or loses a field**: the PDF's bytes do not change when the shape does, `masterCvBlock`
   does not read the newer fields so the prompt looks fine, and `masterText` spreads them — so a cache
   written under the old shape is served forever and every draft falls back with
-  `m.achievements is not iterable`. A missing or mismatched version is a miss, costing two model calls once. `assignIds` also strips control and format characters from every
+  `m.achievements is not iterable`. A missing or mismatched version is a miss, costing two model calls
+  once. `assignIds` also strips control and format characters from every
   extracted string, keeping tab, newline and carriage return: a PDF's text layer carries characters the eye
   never sees — a stable `\x0E` turned up in the real CV's summary on every extraction — and `matchKey`
   strips them before comparing while `missingBullets` only covers bullet text, so nothing else would have

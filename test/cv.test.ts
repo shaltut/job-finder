@@ -322,6 +322,19 @@ test('the summary may only re-use numbers from the summary and the role dates, n
   if (!r.ok) assert.match(r.reason, /^rule 4 at summary: "11"/)
 })
 
+test('a master with no summary section does not reject every tailored CV', () => {
+  // Rule 6's limit is 1.5x the master summary plus 20, so an absent summary gave a limit of 20 and
+  // nothing could pass it. That failure is the invisible kind: every rejection falls back to the
+  // uploaded PDF, so tailoring would have switched itself off and said nothing. No numbers here, to
+  // leave rule 6 as the only rule that could reject it.
+  const cv = content()
+  cv.summary = ''
+  const t = tailored()
+  t.summary = 'Backend engineer building payment systems on .NET and PostgreSQL.'
+  const r = tailoredCv(t, assignIds(cv))
+  assert.equal(r.ok, true, r.ok ? '' : r.reason)
+})
+
 test('rule 6 covers the summary too, not bullets alone', () => {
   // Master vocabulary only, so rules 4 and 5 — which run first — have nothing to catch: length is the
   // only thing left to reject it. Without a limit the summary could run to any length the model liked.

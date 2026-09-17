@@ -213,16 +213,23 @@ to the posts in this email:
   again.
 - **Skills:** every group id, in any order; each group's items in any order and copied exactly — never
   renamed, added or removed.
-- **Summary:** written for these roles, stating only facts the master CV contains.
+- **Summary:** written for these roles, stating only facts the master CV contains. **Its numbers are
+  narrower than that:** the only figures it may state are ones the master's own summary or a role's dates
+  already carry. A percentage or a headcount that appears in a bullet is a fact, but quoting it up here
+  is rejected — the digits in a date of birth and a graduation year look the same to a checker, and one
+  of those becoming a years-of-experience claim is the failure this whole contract exists to stop. Cite
+  such a figure in the bullet that owns it.
 - Education, certifications and languages are not returned; they are copied from the master CV unchanged.
 - Never copy an id such as `r0.b3` into a bullet or into the email.
 
-The structural rules above — the ids, the ordering, the sets, the lengths, a number or a technology
-appearing from nowhere — are checked in code, and a CV that breaks one is discarded in favour of the
-original. The rule that the summary states only facts the master CV contains is **not fully checked and
-cannot be**: code can see a digit that came from nowhere, not a sentence that is unfair. Where the checks
-end you are the only guard, and the CV goes out over the owner's name. Staying inside all of them is the
-only way a tailored CV is actually sent.
+The structural rules above — the ids, the ordering, the sets, the lengths, and a number appearing from
+nowhere — are checked in code, and a CV that breaks one is discarded in favour of the original, whole.
+The rest are checked weakly or not at all. The technology rule catches only a token shaped like one
+(`.NET`, `AWS`); an ordinary capitalised name such as Kubernetes passes. And that the summary is fair,
+rather than merely arithmetically sourced, cannot be checked by code at all: a sentence that overstates
+without using a single digit is invisible to every rule here. Where the checks end you are the only
+guard, and the CV goes out over the owner's name. Staying inside all of them is the only way a tailored
+CV is actually sent.
 
 ## Follow-up mode
 

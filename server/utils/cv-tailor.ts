@@ -123,8 +123,13 @@ export function tailoredCv(raw: unknown, master: MasterCv): TailorResult {
   // a years-of-experience claim. A number the summary may assert is one the summary or the role dates
   // already carry. Rule 6 applies here for the same reason it applies to a bullet — an unbounded summary
   // is room to argue, and the summary is the first thing a recruiter reads.
+  // The limit has a floor because a master with no summary section gives one of 20, which rejects every
+  // tailored CV — and that failure is invisible: each rejection falls back to the uploaded PDF, so the
+  // feature just silently never fires. An absent summary is measured as if it were 200 characters; a
+  // master that has one is unaffected.
   const summaryNumbers = numbersIn([master.summary, ...master.roles.flatMap(r => [r.start, r.end])].join('\n'))
-  const summaryProblem = contentProblem('summary', t.summary, summaryNumbers, vocab, Math.floor(master.summary.length * 1.5) + 20)
+  const summaryLimit = Math.floor((master.summary.length || 200) * 1.5) + 20
+  const summaryProblem = contentProblem('summary', t.summary, summaryNumbers, vocab, summaryLimit)
   if (summaryProblem) return fail(summaryProblem)
 
   return {
