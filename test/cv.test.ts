@@ -276,3 +276,22 @@ test('the summary is held to rules 4, 5 and 7, against the whole master CV', () 
     t.summary = 'Backend engineer with 9 years on [STACK].'
   }, /^rule 7 at summary/)
 })
+
+test('an id the model merged is a malformed block, never a throw', () => {
+  // Ids are compared as joined strings, so an id carrying the separator could pass a structure rule and
+  // then throw on the lookup that follows. Every id must have the shape code assigns.
+  const mergedBullet = tailored()
+  mergedBullet.roles[0]!.bullets = [
+    { id: 'r0.b0,r0.b1', text: 'Managed a team of 12 engineers and moved billing to PostgreSQL.' },
+    { id: 'r0.b2', text: 'Reduced invoice generation latency by 40% by tuning query plans.' }
+  ]
+  const mergedSkills = tailored()
+  mergedSkills.skills = [{ id: 's0,s1', items: ['C#', '.NET', 'ASP.NET Core', 'PostgreSQL', 'Redis'] }]
+  const mergedRoles = tailored()
+  mergedRoles.roles = [{ id: 'r0,r1', bullets: mergedRoles.roles[0]!.bullets }]
+  for (const raw of [mergedBullet, mergedSkills, mergedRoles]) {
+    const r = tailoredCv(raw, master())
+    assert.equal(r.ok, false)
+    if (!r.ok) assert.match(r.reason, /^malformed cv block/)
+  }
+})

@@ -9,13 +9,16 @@ import { z } from 'zod'
 import type { CvContent, MasterCv } from './cv-master.ts'
 import { PLACEHOLDER } from './drafter.ts'
 
+// Every id must have the shape code assigns. The structure rules compare ids as joined strings, so an id
+// that carried the separator — a model merging two bullets as "r0.b0,r0.b1" — could pass them and then
+// throw on the lookup that follows. Constraining the shape makes that a malformed block instead.
 const cvBlock = z.object({
   summary: z.string().min(1),
   roles: z.array(z.object({
-    id: z.string(),
-    bullets: z.array(z.object({ id: z.string(), text: z.string().min(1) }))
+    id: z.string().regex(/^r\d+$/),
+    bullets: z.array(z.object({ id: z.string().regex(/^r\d+\.b\d+$/), text: z.string().min(1) }))
   })),
-  skills: z.array(z.object({ id: z.string(), items: z.array(z.string()) }))
+  skills: z.array(z.object({ id: z.string().regex(/^s\d+$/), items: z.array(z.string()) }))
 })
 
 export type TailorResult = { ok: true, cv: CvContent } | { ok: false, reason: string }
