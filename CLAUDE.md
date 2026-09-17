@@ -274,6 +274,12 @@ drafts keep arguing from a stale CV.
   two cases separate cleanly: the one genuine apply link sits 163 characters after its cue, that false
   positive 779, and the other nine links have no cue before them at all. Re-measure with
   `npm run dry` before touching `APPLY_CUE` or `CUE_WINDOW`.
+- **`PHONE_CUED` wants a noun for a phone; `PHONE_SENDCV` covers "send your CV to \<number\>".** Every cue in
+  the first is a word naming a phone (whatsapp/mobile/tel/call/contact), so a post reading *"send your
+  resume to \<number\>"* extracted nothing and was dropped for carrying no contact route at all — measured
+  live on a score-7 post, and proven with a control on the same digits. The second cue needs a connector
+  (`to|on|via|at|through`) immediately before the digits: without it, "share your cv, salary 15000 - 20000
+  EGP" reads as a ten-digit number, because a salary range has exactly a phone number's shape.
 - **A phone number needs proof.** Years, salaries and "5-7 years" are all digit runs, so `extractPhones`
   takes an international number on its leading `+` and a local one only where a contact word precedes it.
   `\b` is ASCII-only in a JS regex, so it is on the Latin cues (or `tel` fires inside `hotel`) and off the
@@ -306,6 +312,28 @@ drafts keep arguing from a stale CV.
 - **Rate-limit posture:** 9 terms, 40 cards, randomized pauses, headed Chrome, `--enable-automation` off. A
   LinkedIn checkpoint page is treated as a lost login (**exit 2**, `login expired`). Fix with `npm run login`.
   Avoid many manual scrapes in one day.
+- **A throttled search looks exactly like an empty one, and used to be silent.** After enough scraping
+  LinkedIn serves `/search/results/content/` as a normal 200 reading *"Our systems have detected unusual
+  search traffic coming from your account"* and returns nothing. The URL never changes, so the
+  `login|authwall|checkpoint` guard cannot see it. Measured 2026-09-17: six configured terms each logged
+  `0 cards` in one afternoon after returning 15-20 posts each that morning — and the run walked on to the
+  next term every time, asking a throttled account for more. `isThrottled()` in `scraper/lib.ts` now reads
+  the page text and aborts the whole run with **exit 3**; the Run view says to leave it until tomorrow. It
+  clears on its own — there is nothing to fix and scraping again only extends it.
+  **The match is on the English wording**, and LinkedIn serves this account Arabic often enough that a
+  paused search can still arrive as a plain zero. That is why a zero-card term now logs the path of the
+  screenshot it already saved: `logs/zero-<term>.png` is the evidence, and nobody was looking at it.
+- **The scroll loop's patience is wall clock** (`SCROLL_STALL_MS`, `keepScrolling()`), not a count of
+  iterations. Counting rounds was time-blind: four rounds of a 2-5s sleep is as little as **eight seconds**,
+  and LinkedIn's lazy-load routinely takes longer. Measured: one feed run stopped at 28 cards and reported
+  that as the whole feed, while the next minutes later found 58. The longer wait is paid only by a term
+  that genuinely has fewer posts than `max`; a term that fills its quota exits immediately (verified: 10
+  cards in 10s).
+- **A term that resolves half its permalinks looks identical to one that resolves all of them**, so the
+  per-term log now prints both counts. Measured on `senior .net developer`: **29/50**, against the 26/26
+  this file used to claim. The bottleneck is harvesting, not the pairing rule — only 35 URNs were collected
+  for 50 cards, so at least 15 could never resolve. `collect` swallows body-read failures silently; that is
+  the place to look, and it has not been investigated yet.
 - **Scoring failures are not stored**: the post is retried next run rather than sitting with a NULL score.
 
 ### The headless drafter (`claude -p`)
@@ -335,7 +363,10 @@ drafts keep arguing from a stale CV.
   into.** The procedure tells the model to skip a post whose required value was not injected, which is the
   intended path and writes a `skipped` row — and the batch queue is `WHERE a.key IS NULL`, so that post
   never returns to it; after filling the missing setting it is re-drafted per post from the Posts view,
-  whose single-key query carries no such filter. A guard rejection writes no row at all, so those posts stay
+  whose single-key query carries no such filter. **That re-draft now depends on the recruiter**: if an
+  application to them has already gone out, the Gmail gate closes at row 5 and pressing Draft skips the
+  post again rather than sending a second application. It is not lost — a skipped reason does not start
+  with `named in `, so the follow-up picks the role up and names it there. A guard rejection writes no row at all, so those posts stay
   unprocessed and the next run picks them up, the same posture as a failed score. `jobs.ts` catches per
   recruiter, so either way one recruiter fails and the other eight still get their emails.
 
@@ -397,6 +428,16 @@ drafts keep arguing from a stale CV.
   contradicted the injected settings. Keep the global file consistent with Settings, or find a flag that
   skips user memory.
 
+- **`npm run typecheck` does not cover `scraper/`.** Verified by injecting `let x: string = Date.now()` into
+  `scraper/run.ts`: exit 0. That is also why `c.postUrl` type-checks against a `Card[]` that has no such
+  field. The scraper is the part that runs against a hostile DOM, and it is the part with no static
+  checking — so a change there is only as verified as the `scraper/lib.ts` unit tests plus an actual
+  `npm run dry`. Run one.
+- **The stored corpus cannot measure an admission rule.** `posts` holds 0 rows with no email out of 676,
+  because the gate has always required one — so "run the rule over the stored posts first" (right for
+  excludes and `seeking-work`) is circular for anything deciding what gets *admitted*: the misses were
+  filtered out before they could be stored. A phone-cue miss measured 0/676 in the database and 1-in-50 on
+  a live dry run. Only `npm run dry` samples the population an admission rule acts on.
 - **PostgreSQL is not installed and Docker owns port 5432** (`onebench-postgres`, another project). That is
   why this branch moved to SQLite rather than following the original `SETUP.md`.
 - **npm, not pnpm.** The Nuxt UI dashboard template ships `packageManager: pnpm@12.3.4`, `pnpm-lock.yaml` and
@@ -452,6 +493,20 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   live application stops dead. Silence is 72 hours from the last outgoing message.
 - **Gmail is the truth about what was sent; `contacts` only caches the stage.** A draft is not a contact
   until you send it. Run a sweep after sending.
+- **The draft gate asks Gmail, not that cache.** Before a recruiter is drafted, `closedInGmail()` in
+  `server/utils/sync.ts` runs `decideStage()` over their real mail and `closedBy()` in `stages.ts` opens the
+  door on **row 8 alone** — the one row meaning nothing has ever been written to that address. This covers
+  the two ways the cache misleads: a recruiter who replied still reads `contacted` until a sweep, and a
+  recruiter written to outside this app has **no row at all**, which the sweep structurally cannot fix
+  because it only iterates addresses `contacts` already knows. Measured 2026-09-17 over the live rows: a
+  `contacted` address the cache would have sent a second application to is row 5 in Gmail, and a `drafted`
+  one had actually been sent. So **a second application is never drafted** — a new role from a recruiter
+  already written to rides in the follow-up, which the procedure already provides for. `closedBy` returns
+  `note` and never `postsReason`: row 6's `postsReason` is `named in follow-up`, and writing that prefix
+  onto a *skipped* row would tell the follow-up query its own posts were already covered.
+  With no token there is no truth to ask, so `isClosed()` (the cache) is used unchanged and the local-file
+  draft path still works. A Gmail error writes no row and leaves the posts for the next run, the same
+  posture as a drafter rejection — a `skipped` verdict is permanent as far as the batch queue is concerned.
 - **`drafts` are not returned by `messages.list`, even with `in:draft`** — pending drafts are found with the
   `drafts` endpoint. Trusting the search once nearly produced a duplicate.
 - **The connected account is discovered, not hardcoded.** The sweep matches sent mail by sender, so the wrong

@@ -16,7 +16,7 @@ import OpenAI from 'openai'
 import { chromium } from 'playwright-core'
 import {
   admits, ageOf, applyCueFor, channelsOf, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, gateOnPostType, normalize,
-  postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl, sleep, systemPrompt, urnMap
+  isThrottled, keepScrolling, postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
 import { emptySettings, readSettingsFrom } from '../shared/settings.ts'
@@ -182,18 +182,31 @@ async function scrapeTerm(page: import('playwright-core').Page, term: string): P
     await page.goto(term === 'feed' ? 'https://www.linkedin.com/feed/' : searchUrl(term, SINCE), { waitUntil: 'domcontentloaded' })
     await sleep(rand(3000, 5000))
     if (/\/(login|authwall|checkpoint)/.test(page.url())) throw Object.assign(new Error('login expired'), { code: 2 })
+    // A throttled search is a normal 200 on the normal URL, so only the page text gives it away. Aborting
+    // the whole run is the point: every further term is another request against an account already asked
+    // to stop, and each one comes back empty anyway.
+    if (isThrottled(await page.locator('main').innerText({ timeout: 5000 }).catch(() => ''))) {
+      throw Object.assign(
+        new Error('LinkedIn has paused search on this account (unusual traffic) — stop scraping today, it clears on its own'),
+        { code: 3 }
+      )
+    }
     await page.waitForSelector('main a[href*="/in/"], main a[href*="/company/"]', { timeout: 20_000 }).catch(() => {})
     await page.mouse.move(500, 400) // over the results column; <main> is the scroll container
     let last = -1
-    let stable = 0
+    // Wall clock, not an iteration count: see SCROLL_STALL_MS. Counting rounds gave up after as little as
+    // eight seconds and silently reported a partial page as the whole of it.
+    let lastGrowthAt = Date.now()
     let cards: Card[] = []
-    while (stable < 4 && cards.length < MAX_CARDS) {
+    while (keepScrolling(cards.length, MAX_CARDS, Date.now() - lastGrowthAt)) {
       checkStop()
       await page.mouse.wheel(0, 4000)
       await sleep(rand(2000, 5000))
       cards = await page.evaluate(readCards) as Card[]
-      stable = cards.length === last ? stable + 1 : 0
-      last = cards.length
+      if (cards.length !== last) {
+        last = cards.length
+        lastGrowthAt = Date.now()
+      }
     }
     // reverse order: each click removes a button, so a forward loop over index locators skips every other one
     const more = await page.locator('main button', { hasText: /…\s*more$/ }).all()
@@ -202,7 +215,11 @@ async function scrapeTerm(page: import('playwright-core').Page, term: string): P
     cards = (await page.evaluate(readCards) as Card[]).slice(0, MAX_CARDS)
     if (!cards.length) {
       fs.mkdirSync('logs', { recursive: true })
-      await page.screenshot({ path: `logs/zero-${term.replace(/\W+/g, '-')}.png` }).catch(() => {}) // what did LinkedIn show?
+      const shot = `logs/zero-${term.replace(/\W+/g, '-')}.png`
+      await page.screenshot({ path: shot }).catch(() => {}) // what did LinkedIn show?
+      // Saying so matters: isThrottled() only reads the English wording, and LinkedIn serves this account
+      // Arabic often enough that a paused search can still arrive here looking like an empty term.
+      log(`  [zero] no cards for "${term}" — see ${shot}; if it says search was paused, stop for today`)
     }
     const urls = resolveUrls(cards.map(c => c.token), urns)
     return cards.map((c, i) => ({ ...c, postUrl: urls[i] ?? null }))
@@ -275,11 +292,13 @@ async function run({ dry }: { dry: boolean }) {
         cards = await scrapeTerm(page, term)
       } catch (e) {
         const err = e as Error & { code?: number }
-        if (err.code === 2 || stopping || /has been closed/.test(err.message)) throw err
+        if (err.code === 2 || err.code === 3 || stopping || /has been closed/.test(err.message)) throw err
         log(`[${term}] failed: ${err.message}`)
         continue
       }
-      log(`[${term}] ${cards.length} cards`)
+      // The permalink count is here because it was invisible: a search that resolves half its cards looks
+      // exactly like one that resolves all of them. Measured 29/50 on a real term. 'feed' is always 0.
+      log(`[${term}] ${cards.length} cards, ${cards.filter(c => c.postUrl).length} permalinks`)
       for (const c of cards) {
         checkStop()
         const text = normalize(c.text) // Arabic-rendered cards, before the age regex and the key see them

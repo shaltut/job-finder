@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   admits, ageOf, applyCueFor, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds,
-  excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, normalize, postedAt, postUrlFrom, prescreen,
-  resolveUrls, SCORE_SCHEMA, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
+  excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, isThrottled, normalize, postedAt, postUrlFrom, prescreen,
+  keepScrolling, resolveUrls, SCORE_SCHEMA, SCROLL_STALL_MS, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
 import { emptySettings } from '../shared/settings.ts'
@@ -499,4 +499,46 @@ test('applyCueFor names the cue that admitted a link, for tuning against real ca
   const link = 'https://acme.example/x'
   assert.equal(applyCueFor(`How to Apply: details here. ${link}`, link), 'to Apply')
   assert.equal(applyCueFor(`Read our blog post. ${link}`, link), null)
+})
+
+test('extractPhones: "send your CV to <number>" is a contact cue, with no word for a phone anywhere', () => {
+  // Measured live 2026-09-17 on the "senior .net developer" search: a score-7 Xceed post read "send your
+  // resume to <number>" and extracted nothing, so the post carried no contact route at all and was
+  // dropped. PHONE_CUED wanted a NOUN for a phone (whatsapp/mobile/tel/call/contact); recruiters in Egypt
+  // routinely post a WhatsApp number with this phrasing instead. Proven with a control on one number:
+  // "contact <n>" extracted it, "send your resume to <n>" did not.
+  assert.deepEqual(extractPhones('send your resume to 01000000000 and mention the role'), ['01000000000'])
+  assert.deepEqual(extractPhones('Share your CV on 01000000000'), ['01000000000'])
+  assert.deepEqual(extractPhones('drop your cv via 01000000000'), ['01000000000'])
+})
+
+test('extractPhones: the send-CV cue still refuses salaries, year ranges and dates', () => {
+  // This cue is looser than the phone nouns, so the guard that keeps digit runs out has to hold with it.
+  // A connector (to/on/via/at) must sit immediately before the number: without that, "share your cv,
+  // salary 15000 - 20000 EGP" reads as a ten-digit phone number.
+  assert.deepEqual(extractPhones('share your cv, salary 15000 - 20000 EGP'), [])
+  assert.deepEqual(extractPhones('send your CV to careers@acme.com and note 5-7 years of experience'), [])
+  assert.deepEqual(extractPhones('send your resume before 15 January 2026'), [])
+})
+
+test('keepScrolling: patience is wall clock, not a count of iterations', () => {
+  // The old rule gave up after 4 iterations of a 2-5s sleep — as little as 8 seconds of no growth. One
+  // measured feed run stopped at 28 cards; the next, minutes later, found 58 on the same feed.
+  assert.equal(keepScrolling(10, 50, 0), true, 'below the cap, just grew')
+  assert.equal(keepScrolling(10, 50, 9_000), true, 'a nine-second lull is lazy-loading, not the end')
+  assert.equal(keepScrolling(10, 50, SCROLL_STALL_MS), false, 'a sustained stall is the end')
+  assert.equal(keepScrolling(50, 50, 0), false, 'the card cap always wins')
+})
+
+test('isThrottled: LinkedIn pausing search is not an empty result', () => {
+  // Measured 2026-09-17: six configured terms returned zero cards in one afternoon, each leaving a
+  // logs/zero-*.png reading "Our systems have detected unusual search traffic coming from your account".
+  // The same terms had returned 15-20 posts each that morning. The URL stays on /search/results/content/,
+  // so the /checkpoint/ guard never fires: the run logged "0 cards", moved to the next term and kept
+  // hammering an account that had already been asked to stop.
+  assert.equal(isThrottled('Our systems have detected unusual search traffic coming from your account'), true)
+  assert.equal(isThrottled('search activity on your account has been paused. Try again later.'), true)
+  // a genuinely empty result, and an ordinary post, must not read as a throttle
+  assert.equal(isThrottled('No results found'), false)
+  assert.equal(isThrottled('Senior .NET Developer — we are hiring, send your CV'), false)
 })

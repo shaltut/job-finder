@@ -55,6 +55,18 @@ const PHONE_INTL = /\+[\s(]*\d[\d\s().-]{6,18}\d/g
 const PHONE_CUED = /(?:\b(?:whatsapp|whats\s?app|telegram|telephone|tel|mobile|phone|call|contact)|واتساب|واتس|اتصل|تليفون|جوال|موبايل|رقم)[^\d\n]{0,20}(\d[\d\s().-]{7,18}\d)/gi
 const WA_LINK = /(?:wa\.me|api\.whatsapp\.com\/send\?phone=)\/?(\d{9,15})/i
 
+/**
+ * "send your CV to <number>" — a contact route with no word for a phone in it anywhere, which is how
+ * recruiters in Egypt routinely post a WhatsApp number. PHONE_CUED cannot see it: every cue there is a
+ * NOUN for a phone. Measured live on a search: a score-7 post read "send your resume to <number>",
+ * extracted nothing, and was dropped for carrying no contact route at all.
+ *
+ * The connector (to/on/via/at/through) immediately before the digits is not decoration. Without it this
+ * cue is loose enough to read "share your cv, salary 15000 - 20000 EGP" as a ten-digit number, because a
+ * salary range has exactly the digits-and-separators shape of a phone number. Pinned by a test.
+ */
+const PHONE_SENDCV = /\b(?:send|share|drop|forward)\b[^\n]{0,30}?\b(?:cv|resume|profile)\b[^\d\n]{0,20}?\b(?:to|on|via|at|through)\b[^\d\n]{0,8}(\d[\d\s().-]{7,18}\d)/gi
+
 /** Digits only, keeping a leading '+', or null when the run is too short or too long to be a number. */
 function normalizePhone(raw: string): string | null {
   const plus = raw.trim().startsWith('+')
@@ -75,6 +87,7 @@ export function extractPhones(text: string, hrefs: string[] = []): string[] {
   }
   for (const m of text.match(PHONE_INTL) || []) add(m)
   for (const m of text.matchAll(PHONE_CUED)) add(m[1]!)
+  for (const m of text.matchAll(PHONE_SENDCV)) add(m[1]!)
   for (const h of hrefs) {
     const m = WA_LINK.exec(h)
     if (m) add(`+${m[1]}`)
@@ -261,6 +274,34 @@ export const postedAt = (age: string | null | undefined, at: Date = new Date()):
   const m = /^(\d+)\s?(mo|m|h|d|w)$/.exec((age || '').trim())
   return m ? new Date(at.getTime() - Number(m[1]) * AGE_MS[m[2]!]!) : null
 }
+
+/**
+ * How long the scroll loop waits for the card count to grow before deciding the results have run out.
+ *
+ * It used to give up after four iterations with no growth, which is time-blind: each iteration sleeps
+ * 2-5s, so four of them is as little as EIGHT seconds of patience, and LinkedIn's lazy-load routinely
+ * takes longer. Measured: one feed run stopped at 28 cards and reported that as the whole feed, while the
+ * next run minutes later found 58 on the same feed. The longer wait is paid only by a term that genuinely
+ * has fewer posts than `max`; a term that fills its quota never waits at all.
+ */
+/**
+ * LinkedIn's soft block: the search page renders "Our systems have detected unusual search traffic coming
+ * from your account" and returns no results at all.
+ *
+ * This is NOT a checkpoint, so the /login|authwall|checkpoint/ URL guard cannot see it — the URL stays on
+ * /search/results/content/ and the page is a normal 200. Measured 2026-09-17: six configured terms each
+ * logged "0 cards" in one afternoon after returning 15-20 posts each that morning, and the run walked on
+ * to the next term every time, asking an account that had just been throttled for more. Treated like a
+ * lost login (abort the whole run) rather than an empty term, because continuing is what does the damage.
+ */
+export const isThrottled = (text: string): boolean =>
+  /unusual\s+(?:search\s+)?traffic|search activity on your account has been paused/i.test(text)
+
+export const SCROLL_STALL_MS = 30_000
+
+/** Keep scrolling while there is room for more cards and the count has grown recently enough. */
+export const keepScrolling = (cards: number, max: number, msSinceGrowth: number): boolean =>
+  cards < max && msSinceGrowth < SCROLL_STALL_MS
 
 export const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 export const rand = (a: number, b: number) => a + Math.random() * (b - a)
