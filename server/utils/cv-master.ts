@@ -43,25 +43,36 @@ export interface MasterCv {
   languages: string[]
 }
 
+/**
+ * Extraction reads a PDF's text layer, which carries control and format characters the eye never sees —
+ * a stray \x0E, a backspace run, a zero-width space. They survive every existing guard (matchKey strips
+ * them before comparing, missingBullets only covers bullet text) and would print into a CV a recruiter
+ * opens. Stripped here, at the one point where raw extraction becomes the master, so the prompt, the
+ * checks and the render all see the same text. Tab, newline and carriage return are kept.
+ */
+const clean = (s: string): string =>
+  // eslint-disable-next-line no-control-regex -- the point of this regex is to match control characters
+  s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\uFEFF]/g, '')
+
 export function assignIds(cv: CvContent): MasterCv {
   return {
-    summary: cv.summary,
+    summary: clean(cv.summary),
     roles: cv.roles.map((r, i) => ({
       id: `r${i}`,
-      title: r.title,
-      employer: r.employer,
-      location: r.location,
-      start: r.start,
-      end: r.end,
-      bullets: r.bullets.map((text, j) => ({ id: `r${i}.b${j}`, text }))
+      title: clean(r.title),
+      employer: clean(r.employer),
+      location: clean(r.location),
+      start: clean(r.start),
+      end: clean(r.end),
+      bullets: r.bullets.map((text, j) => ({ id: `r${i}.b${j}`, text: clean(text) }))
     })),
-    skills: cv.skills.map((s, i) => ({ id: `s${i}`, group: s.group, items: [...s.items] })),
-    education: [...cv.education],
-    certifications: [...cv.certifications],
-    achievements: [...cv.achievements],
-    personalDetails: [...cv.personalDetails],
-    interests: [...cv.interests],
-    languages: [...cv.languages]
+    skills: cv.skills.map((s, i) => ({ id: `s${i}`, group: clean(s.group), items: s.items.map(clean) })),
+    education: cv.education.map(clean),
+    certifications: cv.certifications.map(clean),
+    achievements: cv.achievements.map(clean),
+    personalDetails: cv.personalDetails.map(clean),
+    interests: cv.interests.map(clean),
+    languages: cv.languages.map(clean)
   }
 }
 

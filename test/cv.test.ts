@@ -371,3 +371,17 @@ test('a role with no employer renders no stray separator', () => {
   assert.equal(html.includes('Engineering Manager — <'), false)
   assert.match(html, /<span>Engineering Manager<\/span>/)
 })
+
+test('a control character in the extraction never reaches the master CV', () => {
+  // Extraction reads a PDF's text layer, which carries stray control characters — a stable \x0E showed up
+  // in the summary on every attempt against the real CV. matchKey strips them before comparing and
+  // missingBullets only covers bullet text, so nothing else would catch one before it reached the PDF.
+  const cv = content()
+  cv.summary = 'Backend engineer\u000E with 9 years on .NET.'
+  cv.roles[0]!.bullets[0] = 'Led a team of 12\u200B engineers across backend and DevOps.'
+  cv.interests = ['Reading\u0008']
+  const m = assignIds(cv)
+  assert.equal(m.summary, 'Backend engineer with 9 years on .NET.')
+  assert.equal(m.roles[0]!.bullets[0]!.text, 'Led a team of 12 engineers across backend and DevOps.')
+  assert.deepEqual(m.interests, ['Reading'])
+})
