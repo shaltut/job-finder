@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assignIds, loadMasterCv, matchKey, missingBullets, pdfSha256, toContent, type CvContent, type Extractor } from '../server/utils/cv-master.ts'
+import { tailoredCv } from '../server/utils/cv-tailor.ts'
 
 /** A neutral CV — nobody's real career. */
 const content = (): CvContent => ({
@@ -161,4 +162,117 @@ test('an extraction with no roles is refused — the empty table a weak model re
   } finally {
     s.done()
   }
+})
+
+const master = () => assignIds(content())
+
+/** Reordered and reworded strictly within the rules: the case that must pass. */
+const tailored = () => ({
+  summary: 'Backend engineer with 9 years delivering payment systems on .NET and PostgreSQL.',
+  roles: [
+    {
+      id: 'r0',
+      bullets: [
+        { id: 'r0.b2', text: 'Reduced invoice generation latency by 40% by tuning query plans.' },
+        { id: 'r0.b0', text: 'Managed a team of 12 engineers spanning backend and DevOps.' },
+        { id: 'r0.b1', text: 'Moved the billing service from MySQL to PostgreSQL with zero downtime.' }
+      ]
+    },
+    {
+      id: 'r1',
+      bullets: [{ id: 'r1.b0', text: 'Delivered REST APIs in C# and ASP.NET Core for a payments integration.' }]
+    }
+  ],
+  skills: [
+    { id: 's1', items: ['Redis', 'PostgreSQL'] },
+    { id: 's0', items: ['ASP.NET Core', 'C#', '.NET'] }
+  ]
+})
+
+const rejects = (mutate: (t: ReturnType<typeof tailored>) => void, reason: RegExp) => {
+  const t = tailored()
+  mutate(t)
+  const r = tailoredCv(t, master())
+  assert.equal(r.ok, false, 'expected a rejection')
+  if (!r.ok) assert.match(r.reason, reason)
+}
+
+test('a CV reordered and reworded within the rules passes, roles still in date order', () => {
+  // As important as every rejection below: without it, a check that rejected everything would pass
+  // the whole suite while tailoring silently never happened.
+  const r = tailoredCv(tailored(), master())
+  assert.ok(r.ok, r.ok ? '' : r.reason)
+  assert.deepEqual(r.cv.roles.map(x => x.title), ['Engineering Manager', 'Senior Software Engineer'])
+  assert.equal(r.cv.roles[0]!.bullets[0], 'Reduced invoice generation latency by 40% by tuning query plans.')
+  assert.deepEqual(r.cv.skills.map(s => s.group), ['Data', 'Backend'])
+  assert.deepEqual(r.cv.education, content().education)
+})
+
+test('a malformed cv block is a rejection, never a throw', () => {
+  const r = tailoredCv({ summary: 'no roles at all' }, master())
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.reason, /^malformed cv block/)
+})
+
+test('rule 1: roles out of date order are rejected', () => {
+  rejects(t => t.roles.reverse(), /^rule 1/)
+})
+
+test('rule 2: a dropped bullet is rejected', () => {
+  rejects(t => t.roles[0]!.bullets.pop(), /^rule 2 at r0/)
+})
+
+test('rule 2: a bullet moved to another role is rejected', () => {
+  rejects((t) => {
+    t.roles[1]!.bullets.push(t.roles[0]!.bullets.pop()!)
+  }, /^rule 2 at r0/)
+})
+
+test('rule 3: a renamed skill is rejected', () => {
+  rejects((t) => {
+    t.skills[0]!.items[0] = 'Redis Cache'
+  }, /^rule 3 at s1/)
+})
+
+test('rule 4: a number its source bullet never carried is rejected', () => {
+  rejects((t) => {
+    t.roles[0]!.bullets[0]!.text = 'Reduced invoice generation latency by 60% by tuning query plans.'
+  }, /^rule 4 at r0\.b2: "60"/)
+})
+
+test('rule 5: a technology the master CV never names is rejected, even when a post asked for it', () => {
+  rejects((t) => {
+    t.roles[1]!.bullets[0]!.text = 'Delivered REST APIs in C# and ASP.NET Core on AWS for a payments integration.'
+  }, /^rule 5 at r1\.b0: "AWS"/)
+})
+
+test('rule 5 ceiling, recorded in the spec: an invented technology in mixed case is not caught', () => {
+  // Pins today's behaviour so tightening the heuristic is a deliberate, visible change to this test.
+  const t = tailored()
+  t.roles[1]!.bullets[0]!.text = 'Delivered REST APIs in C# and ASP.NET Core on Kubernetes for payments.'
+  assert.equal(tailoredCv(t, master()).ok, true)
+})
+
+test('rule 6: a bullet stuffed past 1.5x its source plus 20 characters is rejected', () => {
+  rejects((t) => {
+    t.roles[0]!.bullets[1]!.text = 'Managed a team of 12 engineers spanning backend and DevOps, '.repeat(3)
+  }, /^rule 6 at r0\.b0/)
+})
+
+test('rule 7: an unfilled placeholder in a bullet is rejected', () => {
+  rejects((t) => {
+    t.roles[0]!.bullets[2]!.text = 'Moved the billing service to [DATABASE] with zero downtime.'
+  }, /^rule 7 at r0\.b1/)
+})
+
+test('the summary is held to rules 4, 5 and 7, against the whole master CV', () => {
+  rejects((t) => {
+    t.summary = 'Backend engineer with 15 years on .NET and PostgreSQL.'
+  }, /^rule 4 at summary: "15"/)
+  rejects((t) => {
+    t.summary = 'Backend engineer with 9 years on .NET and GCP.'
+  }, /^rule 5 at summary: "GCP"/)
+  rejects((t) => {
+    t.summary = 'Backend engineer with 9 years on [STACK].'
+  }, /^rule 7 at summary/)
 })
