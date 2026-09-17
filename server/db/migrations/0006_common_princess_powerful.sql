@@ -1,0 +1,1 @@
+ALTER TABLE `contacts` ADD `cv_path` text;

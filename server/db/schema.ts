@@ -117,6 +117,12 @@ export const contacts = sqliteTable('contacts', {
   threadId: text('thread_id'),
   lastSentAt: integer('last_sent_at', { mode: 'timestamp' }),
   note: text('note'),
+  /**
+   * The CV this recruiter was sent when it was a tailored one; null means the uploaded PDF went out.
+   * Recorded rather than derived from the recruiter: a later re-draft that falls back would otherwise
+   * leave the old tailored file on disk, looking like what was sent. The follow-up reuses it.
+   */
+  cvPath: text('cv_path'),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`)
 }, t => [
   // Addresses are lower-cased before any query or insert; the database refuses anything else.
