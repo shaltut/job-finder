@@ -9,7 +9,7 @@ import { assignIds, loadMasterCv, masterCvBlock, matchKey, missingBullets, pdfSh
 import { tailoredCv } from '../server/utils/cv-tailor.ts'
 import { emptySettings } from '../shared/settings.ts'
 import { createCvRenderer, renderCvHtml, tailoredCvPath } from '../server/utils/cv-render.ts'
-import { applicationAttachment } from '../server/utils/cv-attach.ts'
+import { applicationAttachment, followUpAttachment } from '../server/utils/cv-attach.ts'
 
 /** A neutral CV — nobody's real career. */
 const content = (): CvContent => ({
@@ -451,4 +451,10 @@ test('a throw anywhere in the CV step attaches the uploaded PDF instead of endin
     assert.equal(a.path, 'data/cv/My-CV.pdf')
     assert.match(a.note, /cv step failed: boom/)
   })
+})
+
+test('a follow-up reuses the tailored CV its application carried, while that file still exists', () => {
+  assert.equal(followUpAttachment('data/cv/tailored/x/cv.pdf', 'data/cv/cv.pdf', () => true), 'data/cv/tailored/x/cv.pdf')
+  assert.equal(followUpAttachment('data/cv/tailored/x/cv.pdf', 'data/cv/cv.pdf', () => false), 'data/cv/cv.pdf')
+  assert.equal(followUpAttachment(null, 'data/cv/cv.pdf', () => true), 'data/cv/cv.pdf')
 })

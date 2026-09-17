@@ -1,6 +1,7 @@
 // Which PDF an email carries, and the one log line that says why. Anything short of a checked, rendered
 // tailored CV attaches the uploaded PDF: tailoring may cost quality, never an email.
 // See docs/superpowers/specs/2026-09-17-tailored-cv-design.md, section 5.
+import { existsSync } from 'node:fs'
 import type { Profile } from '../../shared/settings.ts'
 import type { MasterCv } from './cv-master.ts'
 import { renderCvHtml, tailoredCvPath, type CvRenderer } from './cv-render.ts'
@@ -37,4 +38,16 @@ export async function applicationAttachment(input: {
     // drafter, so an escaping throw would end the whole batch, not just this recruiter's CV.
     return original(`cv step failed: ${(e as Error).message}`)
   }
+}
+
+/**
+ * The CV a follow-up carries: the one its application carried, while that file still exists, and the
+ * uploaded PDF otherwise. The follow-up says "CV attached again" — a different CV would contradict it.
+ */
+export function followUpAttachment(
+  stored: string | null,
+  cvPath: string,
+  exists: (path: string) => boolean = existsSync
+): string {
+  return stored && exists(stored) ? stored : cvPath
 }
