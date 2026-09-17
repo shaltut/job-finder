@@ -274,7 +274,7 @@ test('rule 7: an unfilled placeholder in a bullet is rejected', () => {
   }, /^rule 7 at r0\.b1/)
 })
 
-test('the summary is held to rules 4, 5 and 7, against the whole master CV', () => {
+test('the summary is held to rules 4, 5, 6 and 7 — rule 5 against the whole master CV', () => {
   rejects((t) => {
     t.summary = 'Backend engineer with 15 years on .NET and PostgreSQL.'
   }, /^rule 4 at summary: "15"/)
@@ -284,6 +284,30 @@ test('the summary is held to rules 4, 5 and 7, against the whole master CV', () 
   rejects((t) => {
     t.summary = 'Backend engineer with 9 years on [STACK].'
   }, /^rule 7 at summary/)
+})
+
+test('the summary may only re-use numbers from the summary and the role dates, never a date of birth', () => {
+  // The summary is the most claim-dense field and the first thing a recruiter reads. Drawing its allowed
+  // numbers from the whole master CV let a digit sitting in a date of birth, a graduation year or an
+  // achievement travel out of that field and into a years-of-experience claim, which is the one lie the
+  // seven rules exist to stop. "11" appears nowhere in this CV but the date of birth.
+  const cv = content()
+  cv.personalDetails = ['Date of Birth: 11 May 1985']
+  const t = tailored()
+  t.summary = 'Backend engineer with 11 years building payment systems on .NET and PostgreSQL.'
+  const r = tailoredCv(t, assignIds(cv))
+  assert.equal(r.ok, false, 'expected a rejection')
+  if (!r.ok) assert.match(r.reason, /^rule 4 at summary: "11"/)
+})
+
+test('rule 6 covers the summary too, not bullets alone', () => {
+  // Master vocabulary only, so rules 4 and 5 — which run first — have nothing to catch: length is the
+  // only thing left to reject it. Without a limit the summary could run to any length the model liked.
+  const t = tailored()
+  t.summary = 'Backend engineer with 9 years delivering payment systems on .NET and PostgreSQL. '.repeat(3)
+  const r = tailoredCv(t, master())
+  assert.equal(r.ok, false, 'expected a rejection')
+  if (!r.ok) assert.match(r.reason, /^rule 6 at summary/)
 })
 
 test('an id the model merged is a malformed block, never a throw', () => {

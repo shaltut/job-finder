@@ -108,8 +108,14 @@ export function tailoredCv(raw: unknown, master: MasterCv): TailorResult {
     }
   }
 
-  // rules 4, 5 and 7 — the summary, against the whole master CV
-  const summaryProblem = contentProblem('summary', t.summary, numbersIn(masterText(master)), vocab)
+  // rules 4-7 — the summary. Rule 5's vocabulary is the whole master CV, because a technology named
+  // anywhere in it is one the owner can claim. Rule 4's numbers are NOT: the whole-CV pool included a
+  // date of birth, a graduation year and an employment year, so any of those digits could be re-used as
+  // a years-of-experience claim. A number the summary may assert is one the summary or the role dates
+  // already carry. Rule 6 applies here for the same reason it applies to a bullet — an unbounded summary
+  // is room to argue, and the summary is the first thing a recruiter reads.
+  const summaryNumbers = numbersIn([master.summary, ...master.roles.flatMap(r => [r.start, r.end])].join('\n'))
+  const summaryProblem = contentProblem('summary', t.summary, summaryNumbers, vocab, Math.floor(master.summary.length * 1.5) + 20)
   if (summaryProblem) return fail(summaryProblem)
 
   return {
