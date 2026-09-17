@@ -18,6 +18,8 @@ export interface StoredDraft {
   signature: string
   keys: string[]
   gaps: string[]
+  /** The CV this draft would attach. Absent on drafts written before tailoring existed. */
+  cv?: string
   createdAt: string
 }
 

@@ -9,6 +9,7 @@ import { assignIds, loadMasterCv, masterCvBlock, matchKey, missingBullets, pdfSh
 import { tailoredCv } from '../server/utils/cv-tailor.ts'
 import { emptySettings } from '../shared/settings.ts'
 import { createCvRenderer, renderCvHtml, tailoredCvPath } from '../server/utils/cv-render.ts'
+import { applicationAttachment } from '../server/utils/cv-attach.ts'
 
 /** A neutral CV — nobody's real career. */
 const content = (): CvContent => ({
@@ -384,4 +385,70 @@ test('a control character in the extraction never reaches the master CV', () => 
   assert.equal(m.summary, 'Backend engineer with 9 years on .NET.')
   assert.equal(m.roles[0]!.bullets[0]!.text, 'Led a team of 12 engineers across backend and DevOps.')
   assert.deepEqual(m.interests, ['Reading'])
+})
+
+const fakeRenderer = (failWith?: string) => {
+  const written: string[] = []
+  return {
+    written,
+    renderer: {
+      render: async (_html: string, outPath: string) => {
+        if (failWith) throw new Error(failWith)
+        written.push(outPath)
+        return 1234
+      },
+      close: async () => {}
+    }
+  }
+}
+
+const attach = (over: Partial<Parameters<typeof applicationAttachment>[0]>) =>
+  applicationAttachment({
+    master: master(),
+    raw: tailored(),
+    profile,
+    cvPath: 'data/cv/My-CV.pdf',
+    recruiterEmail: 'hr@acme.sa',
+    renderer: fakeRenderer().renderer,
+    ...over
+  })
+
+test('a CV that passes every rule is rendered and attached under the uploaded filename', async () => {
+  const { renderer, written } = fakeRenderer()
+  const a = await attach({ renderer })
+  assert.equal(a.tailored, true)
+  assert.equal(a.path, join('data', 'cv', 'tailored', 'hr_acme_sa', 'My-CV.pdf'))
+  assert.deepEqual(written, [a.path])
+  assert.match(a.note, /^cv: tailored/)
+})
+
+test('every failure attaches the uploaded PDF, and says why', async () => {
+  const outOfOrder = tailored()
+  outOfOrder.roles.reverse()
+  const cases: [Awaited<ReturnType<typeof applicationAttachment>>, RegExp][] = [
+    [await attach({ master: null }), /no master CV/],
+    [await attach({ raw: undefined }), /no cv block/],
+    [await attach({ raw: outOfOrder }), /rule 1/],
+    [await attach({ renderer: fakeRenderer('chrome is gone').renderer }), /cv step failed: chrome is gone/]
+  ]
+  for (const [a, why] of cases) {
+    assert.equal(a.path, 'data/cv/My-CV.pdf')
+    assert.equal(a.tailored, false)
+    assert.match(a.note, why)
+  }
+})
+
+test('a throw anywhere in the CV step attaches the uploaded PDF instead of ending the batch', () => {
+  // jobs.ts calls applicationAttachment outside the try that guards the drafter, so an escaping throw
+  // would cost every remaining recruiter their email, not just this one's tailored CV.
+  const exploding = {
+    get summary() {
+      throw new Error('boom')
+    }
+  }
+  return attach({ raw: exploding }).then((a) => {
+    assert.equal(a.tailored, false)
+    assert.equal(a.path, 'data/cv/My-CV.pdf')
+    assert.match(a.note, /cv step failed: boom/)
+  })
 })
