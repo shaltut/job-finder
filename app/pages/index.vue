@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { findFinishedMatch, stalePastes, type FinishedPasteJob } from '#shared/paste-poll'
 import type { TableColumn } from '@nuxt/ui'
 import type { PostRow } from '~/types'
 
@@ -31,6 +32,148 @@ async function draft(key: string) {
     toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
   }
 }
+
+// ---------------- paste ----------------
+
+interface PasteEntry {
+  at: number
+  state: 'queued' | 'stored' | 'refused' | 'failed' | 'unknown'
+  detail: string
+  text: string
+}
+
+interface PasteRefusal {
+  error?: string
+  found?: { emails: number, links: number, phones: number }
+  enabled?: string[]
+}
+
+const pasteText = ref('')
+const pasting = ref(false)
+const pastes = ref<PasteEntry[]>([])
+
+const pasteReady = computed(() => pasteText.value.trim().length >= 40 && !pasting.value)
+
+function describeRefusal(d: PasteRefusal | undefined): string {
+  // `d` is undefined when $fetch never got a response at all (network down, dev server unreachable) —
+  // distinct from a 5xx that did respond but without our endpoint's `{ error }` shape (an uncaught
+  // exception, surfaced through Nitro's own generic error body instead). Neither is a real refusal —
+  // the post was never even looked at — so neither may read as the bare word 'refused', which is what
+  // pasteGate's actual "no contact route" answer looks like.
+  if (d === undefined) return 'could not reach the server — check your connection and try again'
+  if (!d.error) return 'the server returned an unexpected error — try again'
+  if (!d.found) return d.error
+  const { emails, links, phones } = d.found
+  return `no contact route — ${emails} emails, ${links} links, ${phones} phones; you accept: ${(d.enabled || []).join(', ')}`
+}
+
+async function submitPaste() {
+  const text = pasteText.value.trim()
+  if (!text) return
+  pasting.value = true
+  try {
+    const r = await $fetch<{ queued?: boolean, duplicate?: boolean, note?: string }>('/api/posts/paste', {
+      method: 'POST',
+      body: { text }
+    })
+    if (r.duplicate) {
+      pastes.value.unshift({ at: Date.now(), state: 'refused', detail: 'you already have this post', text })
+    } else if (r.queued === false) {
+      // Identical text is already queued or running under another entry — a job the server coalesced
+      // rather than a new one. A second 'queued' row for it would never resolve: pollPasteLane matches
+      // by text, and one background job can only settle one row.
+      const alreadyTracked = pastes.value.some(p => p.state === 'queued' && p.text === text)
+      if (!alreadyTracked) {
+        pastes.value.unshift({ at: Date.now(), state: 'queued', detail: r.note || 'already queued or running', text })
+        startPastePolling()
+      }
+    } else {
+      pastes.value.unshift({ at: Date.now(), state: 'queued', detail: 'queued for scoring', text })
+      startPastePolling()
+    }
+    pasteText.value = '' // accepted, duplicate, or already in flight: nothing left to recover
+  } catch (e) {
+    // $fetch throws on a non-2xx and puts the parsed body on `.data`; there is no `.data.missing` —
+    // the endpoint only ever returns `error` (plus `found`/`enabled` for the no-contact-route case).
+    // `.data` left undefined (not defaulted to `{}`) so describeRefusal can tell "no response at all"
+    // apart from "a response with no `error` field".
+    const d = (e as { data?: PasteRefusal }).data
+    pastes.value.unshift({ at: Date.now(), state: 'refused', detail: describeRefusal(d), text })
+    // deliberately NOT cleared: a refused paste must not be lost
+  } finally {
+    pasting.value = false
+  }
+}
+
+function pasteAgain(entry: PasteEntry) {
+  pasteText.value = entry.text
+}
+
+function pasteBadgeColor(state: PasteEntry['state']): 'success' | 'neutral' | 'warning' | 'error' {
+  if (state === 'stored') return 'success'
+  if (state === 'queued') return 'neutral'
+  if (state === 'unknown') return 'warning'
+  return 'error'
+}
+
+let pasteTimer: ReturnType<typeof setInterval> | null = null
+
+function stopPastePolling() {
+  if (pasteTimer) {
+    clearInterval(pasteTimer)
+    pasteTimer = null
+  }
+}
+
+function startPastePolling() {
+  if (pasteTimer) return
+  pasteTimer = setInterval(pollPasteLane, 2000)
+}
+
+/**
+ * Poll only while something local is outstanding, and stop as soon as nothing is. Matching against the
+ * lane's `last` finished job is `findFinishedMatch` (shared/paste-poll.ts, tested there directly) —
+ * this function's own job is just the two effects a match or a stale entry has: refreshing the posts
+ * list, and giving up on an entry that has waited past all reason so the interval can actually stop.
+ */
+async function pollPasteLane() {
+  const queued = pastes.value.filter(p => p.state === 'queued')
+  if (!queued.length) return stopPastePolling()
+
+  // The staleness sweep and the stop-check run in `finally`, not after a straight-line return, so a
+  // `$fetch` that keeps rejecting (the lane's own endpoint down, a network blip) cannot leak the
+  // interval the same way an unmatched job once did — this function must reach the bottom either way.
+  // Not caught here: an uncaught rejection from an interval callback is how the rest of this file polls
+  // (see refreshJob() in run.vue/pipeline.vue), so this does not swallow the error, only reorders around it.
+  try {
+    const s = await $fetch<{ lanes: { paste?: { last: FinishedPasteJob | null } } }>('/api/job')
+    const last = s.lanes.paste?.last ?? null
+    const match = findFinishedMatch(queued, last)
+    if (match && last) {
+      const line = last.log.at(-1) || ''
+      if (line.startsWith('stored:') || line.startsWith('already stored:')) {
+        match.state = 'stored'
+        match.detail = line
+        await Promise.all([refresh(), refreshNuxtData('stats')])
+      } else if (line) {
+        match.state = 'failed'
+        match.detail = line
+      }
+    }
+  } finally {
+    // A stuck entry (the lane's `last` slot was overwritten by a second job before a poll ever saw
+    // this one finish) would otherwise hold `queued.length` at 1 forever, and the guard above would
+    // never fire — the exact always-on interval Step 3 exists to prevent. Giving up after
+    // PASTE_STALE_MS is what lets the interval stop even when the real outcome is unrecoverable.
+    stalePastes(pastes.value.filter(p => p.state === 'queued'), Date.now()).forEach((p) => {
+      p.state = 'unknown'
+      p.detail = 'no result after several minutes — check the Posts list'
+    })
+    if (!pastes.value.some(p => p.state === 'queued')) stopPastePolling()
+  }
+}
+
+onUnmounted(stopPastePolling)
 
 const q = ref('')
 const flags = ref<'all' | 'clean' | 'flagged'>('clean')
@@ -430,6 +573,60 @@ const columns: TableColumn<PostRow>[] = [
 
     <template #body>
       <StatsStrip />
+
+      <UCard class="shrink-0 mb-4">
+        <template #header>
+          <span class="font-medium">Paste a post</span>
+          <span class="text-xs text-muted ml-2">arrived by email or WhatsApp</span>
+        </template>
+
+        <UTextarea
+          v-model="pasteText"
+          :rows="6"
+          placeholder="Paste the whole job post, including however it says to apply."
+          class="w-full"
+        />
+
+        <template #footer>
+          <div class="flex items-center gap-3">
+            <UButton
+              :disabled="!pasteReady"
+              :loading="pasting"
+              @click="submitPaste"
+            >
+              Add post
+            </UButton>
+            <span class="text-xs text-muted">Scored in the background — you can paste another straight away.</span>
+          </div>
+
+          <ul
+            v-if="pastes.length"
+            class="mt-3 space-y-1"
+          >
+            <li
+              v-for="p in pastes"
+              :key="p.at"
+              class="flex items-center gap-2 text-sm"
+            >
+              <UBadge
+                :color="pasteBadgeColor(p.state)"
+                variant="subtle"
+              >
+                {{ p.state }}
+              </UBadge>
+              <span class="truncate">{{ p.detail }}</span>
+              <UButton
+                v-if="p.state === 'refused' || p.state === 'failed' || p.state === 'unknown'"
+                size="xs"
+                variant="ghost"
+                @click="pasteAgain(p)"
+              >
+                Paste again
+              </UButton>
+            </li>
+          </ul>
+        </template>
+      </UCard>
 
       <div class="flex flex-wrap items-center gap-1.5">
         <UInput

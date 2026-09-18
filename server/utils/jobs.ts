@@ -1,9 +1,11 @@
-// Job runner: two lanes, each sequential, fed by one queue.
+// Job runner: three lanes, each sequential, fed by one queue.
 //
 //   scrape lane — Chrome holds a lock on ./profile, so one scrape at a time.
 //   draft  lane — `claude -p` sessions (drafts, syncs), one at a time.
+//   paste  lane — one OpenAI score call at a time; separate from the other two so a pasted post never
+//                 waits behind a scrape or a draft, and never makes one wait behind it.
 //
-// The two lanes run concurrently; everything else queues, so POST /api/run/* returns 202 and never 409.
+// The three lanes run concurrently; everything else queues, so POST /api/run/* returns 202 and never 409.
 // Single-post draft requests waiting in the queue are batched into one claude session, because every
 // session pays 3-5 minutes of setup regardless of how many posts it handles.
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -16,9 +18,10 @@ import { isClosed, persist, signature, writeDraftFile } from './drafts'
 import { ccFrom, createDraft, gmailStatus, renderHtml } from './gmail'
 import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 import { closedInGmail, sweep } from './sync'
+import { runPasteJob } from './paste-job'
 
-export type Lane = 'scrape' | 'draft'
-export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync'
+export type Lane = 'scrape' | 'draft' | 'paste'
+export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste'
 
 export interface JobArgs {
   terms?: string
@@ -30,6 +33,8 @@ export interface JobArgs {
   n?: number
   /** set on jobs started by the daily tick, so they notify when they finish */
   auto?: boolean
+  /** paste lane: the pasted post's text */
+  text?: string
 }
 
 interface Job {
@@ -61,20 +66,33 @@ interface RunnerState {
 // mid-scrape is normal use, so the state has to outlive the module.
 const g = globalThis as typeof globalThis & { __jobfinderRunner?: RunnerState }
 const state: RunnerState = g.__jobfinderRunner ??= {
-  lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null } },
+  lanes: {
+    scrape: { current: null, last: null },
+    draft: { current: null, last: null },
+    paste: { current: null, last: null }
+  },
   queue: [],
   seq: 0
 }
+// A dev server that was already running holds a state object from before this lane existed.
+state.lanes.paste ??= { current: null, last: null }
 const { lanes, queue } = state
 
-const laneOf = (kind: Kind): Lane => (kind === 'scrape' || kind === 'rescore' || kind === 'reflag' || kind === 'reextract' ? 'scrape' : 'draft')
-export const busy = () => !!(lanes.scrape.current || lanes.draft.current)
+const laneOf = (kind: Kind): Lane =>
+  kind === 'paste'
+    ? 'paste'
+    : (kind === 'scrape' || kind === 'rescore' || kind === 'reflag' || kind === 'reextract' ? 'scrape' : 'draft')
+
+export const busy = () => !!(lanes.scrape.current || lanes.draft.current || lanes.paste.current)
 
 export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   // the same post queued twice, or a second sync, is a no-op rather than a duplicate session
   if (kind === 'draft' && args.key
     && (queue.some(q => q.args.key === args.key) || lanes.draft.current?.args?.keys?.includes(args.key))) return null
   if (kind === 'sync' && (queue.some(q => q.kind === 'sync') || lanes.draft.current?.kind === 'sync')) return null
+  // the same pasted text queued twice, or pasted again while its own score is still running, is a no-op
+  if (kind === 'paste' && args.text
+    && (queue.some(q => q.args.text === args.text) || lanes.paste.current?.args?.text === args.text)) return null
 
   const item: QueueItem = { id: ++state.seq, lane: laneOf(kind), kind, args, queuedAt: new Date().toISOString() }
   queue.push(item)
@@ -135,6 +153,16 @@ function runJob(lane: Lane, item: QueueItem) {
     lanes[lane].last = job
     if (args.auto) notify(job.log.at(-1) || `${kind} finished, exit ${code}`)
     pump()
+  }
+
+  if (lane === 'paste') {
+    runPasteJob(args.text ?? '', push)
+      .then(code => finish(code))
+      .catch((e) => {
+        push(`failed: ${(e as Error).message}`)
+        finish(1)
+      })
+    return
   }
 
   if (lane === 'draft') {
@@ -224,7 +252,8 @@ const jobView = (j: Job | null) => j && {
 export const stateView = () => ({
   lanes: {
     scrape: { current: jobView(lanes.scrape.current), last: jobView(lanes.scrape.last) },
-    draft: { current: jobView(lanes.draft.current), last: jobView(lanes.draft.last) }
+    draft: { current: jobView(lanes.draft.current), last: jobView(lanes.draft.last) },
+    paste: { current: jobView(lanes.paste.current), last: jobView(lanes.paste.last) }
   },
   queue,
   busy: busy()

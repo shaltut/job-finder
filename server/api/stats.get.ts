@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { db } from '../utils/db'
+import { PASTED_TERM } from '../utils/paste'
 
 /** The KPI strip. One round trip, four numbers that answer "is this pipeline working?". */
 export default defineEventHandler(async () => {
@@ -12,8 +13,8 @@ export default defineEventHandler(async () => {
     scrapedAt: number | null
   }>(sql`
     SELECT
-      -- total and last24h count what the scraper brought in, dismissals included: they measure the
-      -- scrape, not the triage. Only the two actionable numbers below drop a dismissed post.
+      -- total counts every row regardless of origin, dismissals included: it measures the whole table,
+      -- not the triage. Only the two actionable numbers below drop a dismissed post.
       (SELECT count(*) FROM posts) AS total,
       -- 'usable' is the funnel that matters: someone is actually hiring, it scores well, no pre-screen
       -- flag, and somewhere the owner can work. Both triage columns drop out of it: this number is what
@@ -27,9 +28,13 @@ export default defineEventHandler(async () => {
         WHERE a.key IS NULL AND coalesce(p.post_type, 'hiring') = 'hiring'
           AND json_array_length(p.flags) = 0 AND p.dismissed_at IS NULL
           AND p.applied_at IS NULL) AS unprocessed,
-      (SELECT count(*) FROM posts WHERE scraped_at >= unixepoch() - 86400) AS last24h,
+      -- Both figures below measure the scraper, so a pasted row (search_term = 'pasted') is excluded from
+      -- each; coalesce guards the comparison because search_term is nullable in the schema, so a bare
+      -- <> comparison would silently drop any row that happens to carry NULL there.
+      (SELECT count(*) FROM posts WHERE scraped_at >= unixepoch() - 86400
+        AND coalesce(search_term, '') <> ${PASTED_TERM}) AS last24h,
       (SELECT count(*) FROM applications WHERE verdict = 'drafted') AS drafted,
-      (SELECT max(scraped_at) FROM posts) AS scrapedAt
+      (SELECT max(scraped_at) FROM posts WHERE coalesce(search_term, '') <> ${PASTED_TERM}) AS scrapedAt
   `)
 
   return {

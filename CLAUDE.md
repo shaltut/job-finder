@@ -19,18 +19,19 @@ build if the owner's own name, email, phone or handles appear in any tracked fil
 addresses (gmail etc.) are treated like company addresses: much real recruiting, in many markets, runs on
 them.
 
-**This branch (`nuxt-rewrite`) is a rewrite.** `main` holds the original Node + Postgres + vanilla-JS version,
-written for a different person. The design record, including what changed during implementation and the
-known gaps, is `docs/superpowers/specs/2026-09-10-nuxt-rewrite-design.md`; the two `2026-09-06-*` specs
-beside it describe the pre-rewrite system.
+**`main` carries the Nuxt rewrite** — not the original Node + Postgres + vanilla-JS version; feature
+branches, this one included, branch from and merge back into `main`. The design record, including what
+changed during implementation and the known gaps, is `docs/superpowers/specs/2026-09-10-nuxt-rewrite-design.md`;
+the two `2026-09-06-*` specs beside it describe the pre-rewrite system.
 
 **The rewrite is complete (M1-M5), and Gmail is connected** — `google-oauth.json` and `gmail-token.json`
 both exist and `/api/gmail/status` reports the account authorised. On a machine without them, drafts fall
 back to `data/drafts/*.json` and everything else works unchanged.
 
 The pre-rewrite implementation (`jobfinder.js`, `ui.js`, `ui.html`, `scrape.js`, `schema.sql`,
-`com.jobfinder.plist`) is **deleted here but preserved in git** — read one with `git show main:ui.js`. Source
-comments that mention those files are historical attribution, not live references.
+`com.jobfinder.plist`) is **deleted here but preserved in git** — read one with `git show e2ab7c1:ui.js`, the
+M4 commit just before M5 deleted them (`main` no longer carries them, so `main:ui.js` no longer resolves).
+Source comments that mention those files are historical attribution, not live references.
 
 ## The pipeline, end to end
 
@@ -65,6 +66,33 @@ npm run dev ──► http://127.0.0.1:3939
    the posts, groups them by recruiter, and runs one `claude -p` session per recruiter with **no tools at
    all**. The skill returns JSON only. The server validates it, writes the email, and records the verdicts.
 4. **UI** `app/`: Nuxt UI v4 dashboard — Posts, Pipeline, Run, Settings.
+5. **Paste intake** `server/api/posts/paste.post.ts` + `server/utils/paste.ts` / `paste-job.ts`: a post that
+   arrived by email or WhatsApp, pasted into the Posts view (`app/pages/index.vue`). The endpoint runs the
+   same extraction and contact-route gate a scrape runs — pure regex, so a refusal is immediate — and queues
+   only the OpenAI score, onto a **third job lane**. An incomplete config refuses the same way `readConfig()`
+   always has: 422 with `{ error }` carrying its own message (`Settings are incomplete —
+   constraints.workingHours: not set`), not a per-field `missing` array. The row it writes is an ordinary
+   one: `search_term = 'pasted'`, `author` / `author_url` / `post_url` null, and **no exemption anywhere
+   downstream that decides who receives an email** — a pasted post that scores 4 does not draft, exactly
+   like a scraped one. The KPI strip's two scrape figures (`last24h`, `lastScrapeAt` in
+   `server/api/stats.get.ts`) are the one consumer that reads origin, because they measure the scraper
+   rather than the inbox, and exclude `search_term = 'pasted'` for exactly that reason. The orchestration
+   (`pasteOnce`) takes the CV system prompt, the score call and the store as injected dependencies rather
+   than living in `server/utils/jobs.ts`, which no test in this repo can import (it pulls in the drafter,
+   Gmail, sync and the CV modules); three successive source-text assertions over the old inline version each
+   passed the previous one's regex under a new idiom for swallowing a failed score before this shape replaced
+   them, and three source-text assertions over `paste-job.ts` still remain in `test/paste.test.ts`, each
+   guarding an edge a runtime test on `pasteOnce` alone cannot see: one pins that `runPasteJob` actually
+   delegates to `pasteOnce` (`/return pasteOnce\(/`) rather than reimplementing it inline — solid, no known
+   false pass or false alarm; one pins that `scorePost` is injected bare (`/score: scorePost,/`) rather than
+   wrapped in something that could absorb its own failure — real, but it false-positives on a semantically
+   identical reorder of the same object literal that drops the trailing comma, so a failure here is as
+   likely to be a harmless edit as a regression; one pins that `runPasteJob`'s body calls neither `catch`
+   nor `.then(` at all (`/\bcatch\b|\.then\(/` over the slice from its export to end of file) — anchored on
+   the function's own export and on that export staying the file's last one, both checked before slicing,
+   so renaming the export or appending a later one fails an anchor assertion instead of the vacuous pass an
+   earlier version of this pin had, where an unchecked `indexOf` returning -1 made the slice run over the
+   file's last byte only.
 
 ## Commands
 
@@ -107,6 +135,8 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   another developer advertising themselves and `other` is not a job post at all. NULL means the row was
   scored before the column existed, so every consumer reads `coalesce(post_type, 'hiring')` — without that
   the migration empties the UI until a rescore finishes. `--rescore` is the only path that fills it.
+- **`posts.search_term`** — `'pasted'` marks a post that entered through the paste box rather than a search.
+  It is its own bucket in the per-term yield table, so pasting never inflates a real search term's numbers.
 - **`posts.flags`** — pre-screen hints mirroring the skill's hard skips, produced by `prescreen()` in
   `scraper/lib.ts`. Three static regex rules in `FLAG_RULES` (`residency-gate`, `night-shift`,
   `seeking-work`), plus everything `flagRules(config)` derives from the settings row — `junior` above a
@@ -465,11 +495,29 @@ drafts keep arguing from a stale CV.
   instead of scrolling.
 - **The Claude-in-Chrome extension cannot open localhost.** Verify the UI with `node scripts/screenshot.mjs`,
   which drives headless Chrome through `playwright-core`.
-- **Two job lanes and a queue** in `server/utils/jobs.ts`: the scrape lane (one at a time, Chrome profile lock)
-  and the draft lane run concurrently; everything else queues, so `POST /api/run/*` returns 202 and never 409.
-  Single-post draft requests waiting in the queue are batched into one `claude` session. Stop sends SIGTERM;
-  Playwright's own handler only closes Chrome, so the scraper keeps a `stopping` flag and throws at the next
-  loop check (exit 1).
+- **Three job lanes and a queue** in `server/utils/jobs.ts`: `scrape` (one at a time, Chrome profile lock),
+  `draft` and `paste` all run concurrently; everything else queues, so `POST /api/run/*` returns 202 and
+  never 409. Single-post draft requests waiting in the queue are batched into one `claude` session. Stop
+  sends SIGTERM; Playwright's own handler only closes Chrome, so the scraper keeps a `stopping` flag and
+  throws at the next loop check (exit 1). `pump()` iterates `Object.keys(lanes)`, so it needed no change
+  when `paste` was added, but the `Lane` union, the `Kind` union, the state initialiser, `laneOf()`,
+  `busy()`, `runJob`'s own `if (lane === 'paste')` dispatch branch and `stateView()` all name every lane
+  explicitly, so a fourth lane touches seven places in this file alone — plus its mirrors outside it:
+  `Lane` and `JobKind` in `app/types/index.d.ts`, and the `lanes` object `run.vue` and `pipeline.vue` each
+  seed their polling state with, or the UI never compiles or never shows the new lane running.
+  **`state.lanes.paste ??=` right after the initialiser is load-bearing**: `__jobfinderRunner` lives on
+  `globalThis` to survive Nitro's dev HMR (see above), so a dev server already running from before the
+  paste lane existed holds a state object missing that key, and `??=` on the whole object will not add a
+  key to an object that is already there.
+- **`shared/paste-poll.ts`** matches the paste card's poll response to the local entry it belongs to, kept
+  out of `app/pages/index.vue` and Vue entirely so `test/paste-poll.test.ts` can exercise it under
+  `node --test` (there is no Vue test setup here). The paste lane's `/api/job` view exposes only the one
+  most recently finished job, never a history, and carries no per-job id — so matching "the oldest queued
+  entry" by position was tried first and was wrong on two ordinary flows: pasting a second post before the
+  first resolves, and pressing "Paste again" after a refusal, which resubmits the identical text as a new
+  local entry. `findFinishedMatch()` instead matches on the pasted text (the server's own dedupe key for an
+  in-flight paste) plus the finished job's `endedAt` landing after the local entry's own timestamp, which is
+  what tells a genuine completion from a stale one apart.
 
 ### Environment
 
@@ -489,11 +537,17 @@ drafts keep arguing from a stale CV.
   contradicted the injected settings. Keep the global file consistent with Settings, or find a flag that
   skips user memory.
 
-- **`npm run typecheck` does not cover `scraper/`.** Verified by injecting `let x: string = Date.now()` into
-  `scraper/run.ts`: exit 0. That is also why `c.postUrl` type-checks against a `Card[]` that has no such
-  field. The scraper is the part that runs against a hostile DOM, and it is the part with no static
-  checking — so a change there is only as verified as the `scraper/lib.ts` unit tests plus an actual
-  `npm run dry`. Run one.
+- **`npm run typecheck`'s coverage boundary is reachability from a typechecked entry point, not a
+  directory — and it moves silently as imports are added.** `scraper/run.ts` is still uncovered, verified
+  by injecting `let x: string = Date.now()` into it: exit 0. That is also why `c.postUrl` type-checks
+  against a `Card[]` that has no such field — nothing under `server/` imports `run.ts`, so nothing pulls it
+  into the Nuxt/tsc graph. But `server/utils/paste.ts` was the first file under `server/` to import
+  `scraper/lib.ts` (which pulls in `scraper/score.ts` via a type import too), and that one new import edge
+  surfaced a real pre-existing bug the moment it landed: `scraper/lib.ts` re-exported a `Constraints` type
+  it never imported, invisible for as long as nothing typechecked reached it, and `nuxt typecheck` failed
+  immediately with `TS2304: Cannot find name 'Constraints'` once it did. So a change confined to `run.ts`
+  is only as verified as the `scraper/lib.ts` unit tests plus an actual `npm run dry` — run one — while a
+  change to `lib.ts` or `score.ts` now gets a real typecheck, on the strength of one import in `paste.ts`.
 - **The stored corpus cannot measure an admission rule.** `posts` holds 0 rows with no email out of 676,
   because the gate has always required one — so "run the rule over the stored posts first" (right for
   excludes and `seeking-work`) is circular for anything deciding what gets *admitted*: the misses were

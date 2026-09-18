@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto'
 import { homeCountryOf, nameFormsFor, resolveCountry, tldsFor, withAliases } from '../shared/countries.ts'
 import { emptySettings } from '../shared/settings.ts'
-import type { ContactChannel, Profile, Scope, StoredSettings } from '../shared/settings.ts'
+import type { ContactChannel, Constraints, Profile, Scope, StoredSettings } from '../shared/settings.ts'
 
 // These used to be declared here as a third copy of the same shape, kept in sync by hand with the
 // server's Zod schema and the browser's types. One definition now, in shared/settings.ts.

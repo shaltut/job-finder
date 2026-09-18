@@ -9,16 +9,15 @@
 //   node scraper/run.ts | node scraper/ingest.ts
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
-import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
 import Database from 'better-sqlite3'
-import OpenAI from 'openai'
 import { chromium } from 'playwright-core'
 import {
-  admits, ageOf, applyCueFor, channelsOf, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, gateOnPostType, normalize,
-  isThrottled, keepScrolling, postedAt, prescreen, rand, resolveUrls, SCORE_SCHEMA, searchUrl, sleep, systemPrompt, urnMap
+  admits, ageOf, applyCueFor, channelsOf, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, normalize,
+  isThrottled, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
+import { loadCv, scorePost, type Score } from './score.ts'
 import { emptySettings, readSettingsFrom } from '../shared/settings.ts'
 
 const { values: opts } = parseArgs({
@@ -36,7 +35,6 @@ const { values: opts } = parseArgs({
   }
 })
 
-const MODEL = process.env.JOBFINDER_MODEL || 'gpt-5-nano'
 const DB_PATH = process.env.JOBFINDER_DB || 'data/jobfinder.db'
 const PROFILE_DIR = process.env.PROFILE_DIR || 'profile'
 
@@ -234,44 +232,7 @@ async function scrapeTerm(page: import('playwright-core').Page, term: string): P
 }
 
 // ---------------- scoring ----------------
-let openai: OpenAI | undefined
 let system: string
-
-async function loadCv(path: string) { // the model reads the PDF itself, one call per run; no local PDF parser
-  openai ??= new OpenAI()
-  const r = await openai.responses.create({
-    model: MODEL,
-    reasoning: { effort: 'low' },
-    input: [{ role: 'user', content: [
-      { type: 'input_file', filename: basename(path), file_data: `data:application/pdf;base64,${fs.readFileSync(path).toString('base64')}` },
-      { type: 'input_text', text: 'Return the complete plain text of this document verbatim, with no commentary.' }
-    ] }]
-  } as never) as { output_text: string }
-  log(`cv: ${path} (${r.output_text.length} chars)`)
-  return r.output_text
-}
-
-interface Score {
-  post_type: 'hiring' | 'seeking' | 'other'
-  title: string
-  company: string
-  location: string
-  is_remote: boolean
-  is_in_scope: boolean
-  score: number
-  reason: string
-}
-
-async function scorePost(text: string): Promise<Score> {
-  openai ??= new OpenAI()
-  const r = await openai.responses.create({
-    model: MODEL,
-    reasoning: { effort: 'low' },
-    input: [{ role: 'system', content: system }, { role: 'user', content: text }],
-    text: { format: { type: 'json_schema', name: 'job_post', strict: true, schema: SCORE_SCHEMA } }
-  } as never) as { output_text: string }
-  return gateOnPostType(JSON.parse(r.output_text) as Score)
-}
 
 // ---------------- main ----------------
 async function run({ dry }: { dry: boolean }) {
@@ -283,7 +244,7 @@ async function run({ dry }: { dry: boolean }) {
   if (!SEARCH_TERMS.length) throw new Error('no search terms configured — open Settings and add at least one')
   if (!dry && !CV_PATH) throw new Error('no CV configured — upload one in Settings')
   const seen = dry ? new Set<string>() : knownKeys()
-  if (!dry) system = systemPrompt(await loadCv(CV_PATH), CONFIG) // before the browser: a bad CV path fails fast
+  if (!dry) system = systemPrompt(await loadCv(CV_PATH, log), CONFIG) // before the browser: a bad CV path fails fast
   const ctx = await openBrowser()
   const page = ctx.pages()[0] || await ctx.newPage()
   let added = 0
@@ -337,7 +298,7 @@ async function run({ dry }: { dry: boolean }) {
         seen.add(key)
         let s: Score
         try {
-          s = await scorePost(text)
+          s = await scorePost(text, system)
         } catch (e) {
           // not stored, so the post is retried next run instead of sitting with a NULL score
           log(`score failed for ${c.author}: ${(e as Error).message}; not stored, retried next run`)
@@ -430,7 +391,7 @@ function reextract() {
 /** Rescore every stored post against the current CV and prompt. */
 async function rescore() {
   if (!CV_PATH) throw new Error('no CV configured — upload one in Settings')
-  system = systemPrompt(await loadCv(CV_PATH), CONFIG)
+  system = systemPrompt(await loadCv(CV_PATH, log), CONFIG)
   const db = new Database(DB_PATH, { readonly: true, fileMustExist: true })
   const rows = db.prepare('SELECT key, author, text FROM posts ORDER BY scraped_at').all() as
     { key: string, author: string, text: string }[]
@@ -439,7 +400,7 @@ async function rescore() {
   for (const r of rows) {
     checkStop()
     try {
-      const s = await scorePost(r.text)
+      const s = await scorePost(r.text, system)
       emit({
         op: 'update', key: r.key, postType: s.post_type,
         title: s.title, company: s.company, location: s.location,
