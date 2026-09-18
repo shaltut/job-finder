@@ -9,7 +9,12 @@ import { check, index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-cor
  */
 
 export const posts = sqliteTable('posts', {
-  /** sha1(author_url + first 160 chars of text, drifting header markers stripped). */
+  /**
+   * sha1(author_url + the first 160 chars of the post BODY, drifting header markers stripped) — the
+   * body being whatever follows the card's Follow marker, or the whole text when a card carries none.
+   * Rows written before 2026-09-18 hash the header too; `legacyKey` in scraper/lib.ts still recognises
+   * them, which is why changing this needed no migration.
+   */
   key: text('key').primaryKey(),
   scrapedAt: integer('scraped_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   searchTerm: text('search_term'),

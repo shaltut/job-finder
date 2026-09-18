@@ -13,7 +13,7 @@ import { parseArgs } from 'node:util'
 import Database from 'better-sqlite3'
 import { chromium } from 'playwright-core'
 import {
-  admits, ageOf, applyCueFor, channelsOf, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, normalize,
+  admits, ageOf, applyCueFor, channelsOf, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, normalize, storedKey,
   isThrottled, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
@@ -289,10 +289,14 @@ async function run({ dry }: { dry: boolean }) {
           continue
         }
         if (!admits(channels, CONFIG.contactChannels)) continue
-        if (seen.has(key)) {
+        // Checks the pre-2026-09-18 key too, so rows written before keyText stopped hashing the card
+        // header are recognised rather than stored a second time under the new key.
+        const known = storedKey(seen, c.authorUrl, text)
+        if (known) {
           // Already stored, so it is deliberately not scored again — but a row from before permalinks
           // existed, or from the feed, may still have no URL. This is the only moment the URL is in hand.
-          if (c.postUrl) emit({ op: 'posturl', key, postUrl: c.postUrl })
+          // The row's OWN key, which is the legacy one when that is what matched.
+          if (c.postUrl) emit({ op: 'posturl', key: known, postUrl: c.postUrl })
           continue
         }
         seen.add(key)

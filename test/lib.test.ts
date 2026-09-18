@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  admits, ageOf, applyCueFor, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds,
+  admits, ageOf, applyCueFor, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, legacyKey, storedKey,
   excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, isThrottled, normalize, postedAt, postUrlFrom, prescreen,
   keepScrolling, resolveUrls, SCORE_SCHEMA, SCROLL_STALL_MS, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
@@ -57,6 +57,33 @@ test('dedupeKey: survives the drifting header (the bug that stored one row per h
   assert.equal(dedupeKey('u', hdr('21h')), dedupeKey('u', hdr('21h').replace('Follow', 'Following').replace('2nd', '1st')))
   // but a genuinely different post must still key differently
   assert.notEqual(dedupeKey('u', hdr('21h')), dedupeKey('u', hdr('21h').replace('Vue lead', 'Java lead')))
+})
+
+// Measured 2026-09-18 over the 655 stored posts that carry a Follow marker: the header alone fills
+// p50=87, p90=195, max=1605 chars of the 160-char window, and 119 of them leave ZERO body characters
+// in the key. Every post by such an author hashes identically, so the second one is dropped as a
+// duplicate it never was. Found live: two different posts by one author both keyed to one hash.
+test('dedupeKey: a long headline must not swallow the window, or one author keys as one post', () => {
+  // 176 chars once stripped, so under the old rule not one body character reached the hash
+  const header = 'Feed post\nA Consultant, MBA, PMP\n • 3rd+\n'
+    + 'Leading complex digital transformations by turning data, AI, cloud and ERP strategies into measurable business outcomes for enterprise clients\n'
+    + '1h • \nFollow\n'
+  const a = dedupeKey('u', header + 'Hiring a .NET lead in Cairo. Apply: https://lnkd.in/aaa')
+  const b = dedupeKey('u', header + 'Hiring a data engineer in Dubai. Apply: https://lnkd.in/bbb')
+  assert.notEqual(a, b)
+})
+
+// Changing keyText re-keys every stored row, so without this a re-scrape would store a second copy of
+// every post still inside `since`. Re-keying the rows instead is not the cheaper option: applications.key
+// references posts.key ON UPDATE NO ACTION.
+test('storedKey: a post already held under the pre-change key is recognised, not stored again', () => {
+  const text = 'Feed post\nHeba Zaki\n • 2nd\nTalent Acquisition\n21h • \nFollow\nWe are hiring a Vue lead. Send CV to hr@x.com'
+  const old = legacyKey('u', text)
+  assert.notEqual(old, dedupeKey('u', text)) // the change really did move the key
+  // the row on disk carries the old key, so that is the key the caller must reuse
+  assert.equal(storedKey(new Set([old]), 'u', text), old)
+  assert.equal(storedKey(new Set([dedupeKey('u', text)]), 'u', text), dedupeKey('u', text))
+  assert.equal(storedKey(new Set(), 'u', text), null)
 })
 
 test('normalize: folds an Arabic-rendered age back to its English form', () => {

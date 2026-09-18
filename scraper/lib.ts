@@ -237,14 +237,62 @@ export const postUrlFrom = (urn: string | null | undefined): string | null =>
 
 // Card text starts with a header that drifts between runs ("5h" -> "1d", Follow -> Following, Edited),
 // so strip those markers and collapse whitespace before hashing.
-const keyText = (t: string) => t
+const squash = (t: string) => t
   .replace(/\b\d+\s?(mo|m|h|d|w)\b|\bEdited\b|\bFollow(ing)?\b|• (1st|2nd|3rd\+)/g, '')
   .replace(/\s+/g, ' ')
   .slice(0, 160)
 
-// ponytail: the 160 chars still include the author's headline, so a headline edit re-keys their posts.
+/**
+ * Where the card header stops and the post begins. LinkedIn ends the header with the Follow button,
+ * which is the one stable landmark on a card whose class names are hashed.
+ *
+ * Measured 2026-09-18 over the 655 stored posts that carry the marker: the header alone fills p50=87,
+ * p90=195, max=1605 characters of the window, and 119 of them leave ZERO body characters in it. Those
+ * authors hashed every post they wrote to one key, and the second post was dropped as a duplicate it
+ * never was — found live, two different posts both keying f50b298c. `\b` is ASCII-only in a JS regex,
+ * so it is on the Latin spelling and off the Arabic one, where it would never match.
+ *
+ * The window now starts at the body, so on a very short post it reaches the reaction counts at the end
+ * of the card, which drift between runs. Measured: 1 of 698 stored posts has a body under 160 chars
+ * (p01=252) — the same exposure the old window had for a post shorter than 160 characters in total.
+ */
+const HEADER_END = /\bFollow(?:ing)?\b|متابعة/
+
+const keyText = (t: string) => {
+  const m = HEADER_END.exec(t)
+  return squash(m ? t.slice(m.index + m[0].length) : t)
+}
+
 export const dedupeKey = (authorUrl: string, text: string): string =>
   createHash('sha1').update(authorUrl + keyText(text)).digest('hex')
+
+/**
+ * The key as it was hashed before 2026-09-18, over the header as well as the body. Every row stored
+ * until then carries one, so a re-scrape checks it alongside the current key and recognises a post it
+ * already holds instead of writing a second copy. Without it, changing `keyText` would re-store every
+ * post still inside `since` — and `applications.key` references `posts.key` ON UPDATE NO ACTION, so
+ * re-keying the stored rows instead would mean FK surgery on 55 application rows.
+ *
+ * ponytail: keep it. The obvious cleanup trigger — "once every old row has aged past `since`" — is
+ * wrong, because the `feed` term carries no datePosted filter at all and re-serves posts of any age
+ * (a 2w card turned up in the dry run that verified this change). So an old-key row can resurface
+ * indefinitely. One extra sha1 per card is free; the only things that retire this are a wipe of
+ * `posts` or a deliberate re-key migration.
+ */
+export const legacyKey = (authorUrl: string, text: string): string =>
+  createHash('sha1').update(authorUrl + squash(text)).digest('hex')
+
+/**
+ * The key this post is already stored under, or null when it is new. Current key first, the legacy one
+ * second — the caller needs the key the ROW carries, not the one it would be written with today, or the
+ * `posturl` backfill would name a row that does not exist.
+ */
+export const storedKey = (seen: ReadonlySet<string>, authorUrl: string, text: string): string | null => {
+  const current = dedupeKey(authorUrl, text)
+  if (seen.has(current)) return current
+  const legacy = legacyKey(authorUrl, text)
+  return seen.has(legacy) ? legacy : null
+}
 
 // ---------------- locale ----------------
 

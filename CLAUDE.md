@@ -126,8 +126,9 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
 | `timestamptz` | `integer({ mode: 'timestamp' })` — epoch **seconds** |
 | lower-case email constraint | `CHECK (email = lower(email))` |
 
-- **`posts`** — one row per scraped post. `key` = sha1(author_url + first 160 chars of text with drifting
-  header markers stripped). `post_url` is the permalink, null when the run could not resolve one — see the
+- **`posts`** — one row per scraped post. `key` = sha1(author_url + first 160 chars of the post **body**
+  with drifting header markers stripped) — the body being whatever follows the card's Follow marker, or
+  the whole text when a card carries none. `post_url` is the permalink, null when the run could not resolve one — see the
   URN gotcha below. `score` 0-10 and `reason` are model output against the CV: **ordering hints only,
   and `reason` overclaims** — never copy it into an email. `emails`, `links`, `phones` and `ref_ids` all come
   from deterministic regexes, never from the model. `in_scope` (was `mena`) means Egypt/Saudi/UAE/Qatar or genuinely location-free remote.
@@ -366,6 +367,19 @@ drafts keep arguing from a stale CV.
   menu), a resharer twice.
 - **The drifting-header dedupe bug:** the first key included "21h", so the same post came back as "22h".
   Anything added to the key must be stable across runs. Covered by tests.
+- **The header used to eat the whole key window, and that lost posts.** Until 2026-09-18 the key hashed
+  the first 160 characters of the *whole* card, header included. Measured over the 655 stored posts
+  carrying a Follow marker: the header alone fills p50=87, p90=195, max=1605 of those characters, and
+  **119 leave zero body characters in the key** — so an author with a long headline hashed every post
+  they wrote to one key and all but the first were dropped as duplicates they never were. Found live on
+  the feed: two different posts, different ages, different links, one key. `keyText()` now starts at the
+  Follow marker (`متابعة` too — `\b` is ASCII-only, so it is on the Latin spelling and off the Arabic).
+  **Changing the key re-keys every stored row**, which is why `legacyKey()` exists: `storedKey()` checks
+  the old hash too, so a re-scrape recognises a row instead of storing a second copy. Do not delete it
+  as dead code — `applications.key` references `posts.key` ON UPDATE NO ACTION, so the alternative was
+  FK surgery, and the `feed` term has no date filter, so an old-key row can resurface indefinitely.
+  Verify a change here the way this one was: `npm run dry -- --terms feed --max 50` and count duplicate
+  keys in the output (1 before, 0 after).
 - **Rate-limit posture:** 9 terms, 40 cards, randomized pauses, headed Chrome, `--enable-automation` off. A
   LinkedIn checkpoint page is treated as a lost login (**exit 2**, `login expired`). Fix with `npm run login`.
   Avoid many manual scrapes in one day.
