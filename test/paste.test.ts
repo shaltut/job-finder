@@ -147,3 +147,22 @@ test('a paste whose scoring fails stores nothing', async () => {
     'the wiring must absorb nothing: every failure belongs to runJob, which logs it and leaves the post to be pasted again'
   )
 })
+
+test('the paste endpoint refuses before it queues, and never leaks the whole post back', () => {
+  const src = readFileSync('server/api/posts/paste.post.ts', 'utf8')
+  // Anchored to the assignment itself, not a bare substring: the file's own docstring says
+  // "The strict readConfig() is deliberate", so a bare /readConfig\(\)/ would match that prose even
+  // if the functional call underneath it were swapped for a non-throwing read (measured: both lines
+  // contain the literal text "readConfig()").
+  assert.match(src, /config = readConfig\(\)/, 'the endpoint must call the throwing readConfig() to build config')
+  // Both indices checked for -1 before comparing: an unchecked `indexOf(a) < indexOf(b)` passes
+  // vacuously the moment pasteGate(...) is removed from the file, since -1 < n for any real position.
+  const gateIdx = src.indexOf('pasteGate(')
+  const enqueueIdx = src.indexOf('enqueue(')
+  assert.ok(gateIdx > -1, 'pasteGate(...) must be called in the endpoint')
+  assert.ok(enqueueIdx > -1, 'enqueue(...) must be called in the endpoint')
+  assert.ok(gateIdx < enqueueIdx, 'the gate must run before the enqueue')
+  // Counts, not addresses: the refusal is rendered in a browser and the address is a third party's.
+  assert.match(src, /emails: gate\.found\.emails\.length/, 'the refusal must report counts')
+  assert.doesNotMatch(src, /found: gate\.found\s*[,}]/, 'never hand the extracted values back')
+})
