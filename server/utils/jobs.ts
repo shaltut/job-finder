@@ -88,6 +88,9 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   if (kind === 'draft' && args.key
     && (queue.some(q => q.args.key === args.key) || lanes.draft.current?.args?.keys?.includes(args.key))) return null
   if (kind === 'sync' && (queue.some(q => q.kind === 'sync') || lanes.draft.current?.kind === 'sync')) return null
+  // the same pasted text queued twice, or pasted again while its own score is still running, is a no-op
+  if (kind === 'paste' && args.text
+    && (queue.some(q => q.args.text === args.text) || lanes.paste.current?.args?.text === args.text)) return null
 
   const item: QueueItem = { id: ++state.seq, lane: laneOf(kind), kind, args, queuedAt: new Date().toISOString() }
   queue.push(item)

@@ -42,5 +42,6 @@ export default defineEventHandler(async (event) => {
 
   const item = enqueue('paste', { text: a.text })
   setResponseStatus(event, item ? 202 : 200)
-  return { queued: !!item, key: gate.key }
+  // a repeat paste of the same text already queued, or still being scored, is a no-op, not a second job
+  return { queued: !!item, key: gate.key, note: item ? undefined : 'already queued or running' }
 })

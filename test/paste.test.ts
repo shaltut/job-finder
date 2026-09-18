@@ -166,3 +166,24 @@ test('the paste endpoint refuses before it queues, and never leaks the whole pos
   assert.match(src, /emails: gate\.found\.emails\.length/, 'the refusal must report counts')
   assert.doesNotMatch(src, /found: gate\.found\s*[,}]/, 'never hand the extracted values back')
 })
+
+// jobs.ts cannot be imported here either (see the lane-wiring test above), so this is source-text
+// too. The endpoint's duplicate check only covers a post already scored and stored — a second paste
+// of the same text while the first is still queued or being scored would otherwise burn a second
+// OpenAI call before ON CONFLICT DO NOTHING throws it away, since enqueue() had no arm for 'paste'
+// the way it already did for 'draft' and 'sync'.
+test('enqueue() suppresses a duplicate paste, not just a duplicate draft or sync', () => {
+  const src = readFileSync('server/utils/jobs.ts', 'utf8')
+  const start = src.indexOf('export function enqueue')
+  // Anchor checked before the slice, and the slice bounded at both ends: an unbounded or
+  // silently-empty slice would let the assertion below match nothing and still report a "pass".
+  assert.ok(start > -1, 'enqueue must still be exported from jobs.ts')
+  const end = src.indexOf('\nfunction pump', start)
+  assert.ok(end > start, 'enqueue must still be immediately followed by pump(), or this slice is unbounded')
+  const body = src.slice(start, end)
+  assert.match(
+    body,
+    /if \(kind === 'paste' && args\.text\s*\n\s*&& \(queue\.some\(q => q\.args\.text === args\.text\) \|\| lanes\.paste\.current\?\.args\?\.text === args\.text\)\) return null/,
+    'a pasted text already queued, or the text of the paste currently running, must be a no-op'
+  )
+})
