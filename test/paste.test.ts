@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { loadCv, scorePost } from '../scraper/score.ts'
 import { emptySettings } from '../shared/settings.ts'
@@ -83,4 +84,34 @@ test('pasteRecord carries the owner\'s exclude flags', () => {
     is_remote: false, is_in_scope: false, score: 6, reason: 'r'
   })
   assert.ok(rec.flags.includes('excluded'), 'an exclude needle in pasted text must flag the row')
+})
+
+// jobs.ts cannot be imported by a test — it pulls in the drafter, Gmail and Nitro's auto-imports — so
+// the lane wiring is checked over the source, the way every other jobs.ts guard in this suite is.
+test('a paste runs on its own lane, never behind a scrape or a draft', () => {
+  const src = readFileSync('server/utils/jobs.ts', 'utf8')
+  assert.match(src, /export type Lane = 'scrape' \| 'draft' \| 'paste'/)
+  assert.match(src, /kind === 'paste'\s*\n?\s*\?\s*'paste'/, 'laneOf must map paste to its own lane')
+  assert.match(src, /paste: \{ current: null, last: null \}/, 'the lanes initialiser must carry paste')
+  assert.match(src, /state\.lanes\.paste \?\?=/, 'a dev server holding pre-paste state must be upgraded')
+  assert.match(src, /paste: \{ current: jobView\(lanes\.paste\.current\)/, 'stateView must expose the lane')
+  // Anchored to the busy() definition itself: a bare /lanes\.paste\.current/ is also satisfied by
+  // stateView()'s unrelated jobView(lanes.paste.current) and would stay green through this exact bug.
+  assert.match(
+    src,
+    /busy = \(\) => !!\(lanes\.scrape\.current \|\| lanes\.draft\.current \|\| lanes\.paste\.current\)/,
+    'busy() must count the paste lane'
+  )
+})
+
+test('the paste job never writes a row it could not score', () => {
+  // scorePost throwing must propagate to runJob's catch, not fall through to applyRecord with a
+  // half-built record — the same posture as a scraped post whose score fails.
+  const src = readFileSync('server/utils/paste-job.ts', 'utf8')
+  const body = src.slice(src.indexOf('export async function runPasteJob'))
+  assert.ok(
+    body.indexOf('await scorePost(') < body.indexOf('applyRecord('),
+    'the score must be awaited before the insert'
+  )
+  assert.doesNotMatch(body, /catch\s*\{[^}]*applyRecord/s, 'a failed score must not still insert')
 })

@@ -16,9 +16,10 @@ import { isClosed, persist, signature, writeDraftFile } from './drafts'
 import { ccFrom, createDraft, gmailStatus, renderHtml } from './gmail'
 import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 import { closedInGmail, sweep } from './sync'
+import { runPasteJob } from './paste-job'
 
-export type Lane = 'scrape' | 'draft'
-export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync'
+export type Lane = 'scrape' | 'draft' | 'paste'
+export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste'
 
 export interface JobArgs {
   terms?: string
@@ -30,6 +31,8 @@ export interface JobArgs {
   n?: number
   /** set on jobs started by the daily tick, so they notify when they finish */
   auto?: boolean
+  /** paste lane: the pasted post's text */
+  text?: string
 }
 
 interface Job {
@@ -61,14 +64,24 @@ interface RunnerState {
 // mid-scrape is normal use, so the state has to outlive the module.
 const g = globalThis as typeof globalThis & { __jobfinderRunner?: RunnerState }
 const state: RunnerState = g.__jobfinderRunner ??= {
-  lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null } },
+  lanes: {
+    scrape: { current: null, last: null },
+    draft: { current: null, last: null },
+    paste: { current: null, last: null }
+  },
   queue: [],
   seq: 0
 }
+// A dev server that was already running holds a state object from before this lane existed.
+state.lanes.paste ??= { current: null, last: null }
 const { lanes, queue } = state
 
-const laneOf = (kind: Kind): Lane => (kind === 'scrape' || kind === 'rescore' || kind === 'reflag' || kind === 'reextract' ? 'scrape' : 'draft')
-export const busy = () => !!(lanes.scrape.current || lanes.draft.current)
+const laneOf = (kind: Kind): Lane =>
+  kind === 'paste'
+    ? 'paste'
+    : (kind === 'scrape' || kind === 'rescore' || kind === 'reflag' || kind === 'reextract' ? 'scrape' : 'draft')
+
+export const busy = () => !!(lanes.scrape.current || lanes.draft.current || lanes.paste.current)
 
 export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   // the same post queued twice, or a second sync, is a no-op rather than a duplicate session
@@ -135,6 +148,16 @@ function runJob(lane: Lane, item: QueueItem) {
     lanes[lane].last = job
     if (args.auto) notify(job.log.at(-1) || `${kind} finished, exit ${code}`)
     pump()
+  }
+
+  if (lane === 'paste') {
+    runPasteJob(args.text ?? '', push)
+      .then(code => finish(code))
+      .catch((e) => {
+        push(`failed: ${(e as Error).message}`)
+        finish(1)
+      })
+    return
   }
 
   if (lane === 'draft') {
@@ -224,7 +247,8 @@ const jobView = (j: Job | null) => j && {
 export const stateView = () => ({
   lanes: {
     scrape: { current: jobView(lanes.scrape.current), last: jobView(lanes.scrape.last) },
-    draft: { current: jobView(lanes.draft.current), last: jobView(lanes.draft.last) }
+    draft: { current: jobView(lanes.draft.current), last: jobView(lanes.draft.last) },
+    paste: { current: jobView(lanes.paste.current), last: jobView(lanes.paste.last) }
   },
   queue,
   busy: busy()
