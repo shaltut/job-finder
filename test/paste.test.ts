@@ -121,16 +121,29 @@ test('a paste whose scoring fails stores nothing', async () => {
     /openai exploded/
   )
   assert.equal(stored, 0, 'a failed score must never reach the insert')
-  // Two edges a runtime test on pasteOnce alone cannot see, both about the wiring in paste-job.ts
-  // rather than pasteOnce itself: that runPasteJob actually delegates instead of reimplementing the
-  // same logic inline (where the property just proven would no longer hold for the code that runs),
-  // and that the seam it delegates through isn't quietly closed again one file over — scorePost
-  // injected bare, not wrapped in something that absorbs a failure before pasteOnce ever sees it.
+  // Edges a runtime test on pasteOnce alone cannot see, all about the wiring in paste-job.ts rather
+  // than pasteOnce itself: that runPasteJob actually delegates instead of reimplementing the same
+  // logic inline (where the property just proven would no longer hold for the code that runs), that
+  // scorePost is injected bare rather than wrapped in something that absorbs its own failure, and —
+  // generalising that last one rather than adding a third per-binding pin for whichever dependency
+  // grows a wrapper next — that runPasteJob's whole body absorbs nothing at all. `catch` and `.then(`
+  // are the two ways a promise failure gets swallowed; a bare `score: myWrapper` would slip past
+  // both of those but still gets caught by the scorePost-must-be-bare pin above, and a `.then(` on
+  // some other dependency would slip past that pin but not this one — neither assertion subsumes
+  // the other, so both stay.
   const wiring = readFileSync('server/utils/paste-job.ts', 'utf8')
   assert.match(wiring, /return pasteOnce\(/, 'runPasteJob must delegate to pasteOnce, or the test above guards nothing that runs')
   assert.match(
     wiring,
     /score: scorePost,/,
     'scorePost must be injected bare — wrapping it here absorbs a failure before pasteOnce can see it'
+  )
+  // Scoped to runPasteJob's body, not the whole file: cvSystem above it may legitimately contain
+  // neither token, and a whole-file search would mean nothing here either.
+  const body = wiring.slice(wiring.indexOf('export async function runPasteJob'))
+  assert.doesNotMatch(
+    body,
+    /\bcatch\b|\.then\(/,
+    'the wiring must absorb nothing: every failure belongs to runJob, which logs it and leaves the post to be pasted again'
   )
 })
