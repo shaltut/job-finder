@@ -54,8 +54,15 @@ const pastes = ref<PasteEntry[]>([])
 
 const pasteReady = computed(() => pasteText.value.trim().length >= 40 && !pasting.value)
 
-function describeRefusal(d: PasteRefusal): string {
-  if (!d.found) return d.error || 'refused'
+function describeRefusal(d: PasteRefusal | undefined): string {
+  // `d` is undefined when $fetch never got a response at all (network down, dev server unreachable) —
+  // distinct from a 5xx that did respond but without our endpoint's `{ error }` shape (an uncaught
+  // exception, surfaced through Nitro's own generic error body instead). Neither is a real refusal —
+  // the post was never even looked at — so neither may read as the bare word 'refused', which is what
+  // pasteGate's actual "no contact route" answer looks like.
+  if (d === undefined) return 'could not reach the server — check your connection and try again'
+  if (!d.error) return 'the server returned an unexpected error — try again'
+  if (!d.found) return d.error
   const { emails, links, phones } = d.found
   return `no contact route — ${emails} emails, ${links} links, ${phones} phones; you accept: ${(d.enabled || []).join(', ')}`
 }
@@ -88,7 +95,9 @@ async function submitPaste() {
   } catch (e) {
     // $fetch throws on a non-2xx and puts the parsed body on `.data`; there is no `.data.missing` —
     // the endpoint only ever returns `error` (plus `found`/`enabled` for the no-contact-route case).
-    const d = (e as { data?: PasteRefusal }).data || {}
+    // `.data` left undefined (not defaulted to `{}`) so describeRefusal can tell "no response at all"
+    // apart from "a response with no `error` field".
+    const d = (e as { data?: PasteRefusal }).data
     pastes.value.unshift({ at: Date.now(), state: 'refused', detail: describeRefusal(d), text })
     // deliberately NOT cleared: a refused paste must not be lost
   } finally {

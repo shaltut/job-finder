@@ -139,8 +139,19 @@ test('a paste whose scoring fails stores nothing', async () => {
     'scorePost must be injected bare — wrapping it here absorbs a failure before pasteOnce can see it'
   )
   // Scoped to runPasteJob's body, not the whole file: cvSystem above it may legitimately contain
-  // neither token, and a whole-file search would mean nothing here either.
-  const body = wiring.slice(wiring.indexOf('export async function runPasteJob'))
+  // neither token, and a whole-file search would mean nothing here either. Anchor checked before the
+  // slice, and the "no export after this one" check below bounds the other end explicitly rather than
+  // assuming runPasteJob stays last — the same shape as the enqueue() assertion further down. Without
+  // the anchor check, an unchecked indexOf would make slice(-1) grab the file's last byte and this
+  // assertion would then pass vacuously over that one character the moment the anchor stopped matching.
+  const runPasteJobStart = wiring.indexOf('export async function runPasteJob')
+  assert.ok(runPasteJobStart > -1, 'runPasteJob must still be exported from paste-job.ts')
+  assert.equal(
+    wiring.indexOf('\nexport ', runPasteJobStart + 1),
+    -1,
+    'runPasteJob must stay the last export in paste-job.ts, or this slice needs an end bound'
+  )
+  const body = wiring.slice(runPasteJobStart, wiring.length)
   assert.doesNotMatch(
     body,
     /\bcatch\b|\.then\(/,

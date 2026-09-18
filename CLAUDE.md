@@ -73,13 +73,26 @@ npm run dev ──► http://127.0.0.1:3939
    always has: 422 with `{ error }` carrying its own message (`Settings are incomplete —
    constraints.workingHours: not set`), not a per-field `missing` array. The row it writes is an ordinary
    one: `search_term = 'pasted'`, `author` / `author_url` / `post_url` null, and **no exemption anywhere
-   downstream**. A pasted post that scores 4 does not draft, exactly like a scraped one. The orchestration
+   downstream that decides who receives an email** — a pasted post that scores 4 does not draft, exactly
+   like a scraped one. The KPI strip's two scrape figures (`last24h`, `lastScrapeAt` in
+   `server/api/stats.get.ts`) are the one consumer that reads origin, because they measure the scraper
+   rather than the inbox, and exclude `search_term = 'pasted'` for exactly that reason. The orchestration
    (`pasteOnce`) takes the CV system prompt, the score call and the store as injected dependencies rather
    than living in `server/utils/jobs.ts`, which no test in this repo can import (it pulls in the drafter,
    Gmail, sync and the CV modules); three successive source-text assertions over the old inline version each
    passed the previous one's regex under a new idiom for swallowing a failed score before this shape replaced
-   them, and one source-text assertion still remains — that `paste-job.ts`'s `runPasteJob` actually delegates
-   to `pasteOnce` rather than reimplementing it inline, which a test importing `pasteOnce` alone cannot see.
+   them, and three source-text assertions over `paste-job.ts` still remain in `test/paste.test.ts`, each
+   guarding an edge a runtime test on `pasteOnce` alone cannot see: one pins that `runPasteJob` actually
+   delegates to `pasteOnce` (`/return pasteOnce\(/`) rather than reimplementing it inline — solid, no known
+   false pass or false alarm; one pins that `scorePost` is injected bare (`/score: scorePost,/`) rather than
+   wrapped in something that could absorb its own failure — real, but it false-positives on a semantically
+   identical reorder of the same object literal that drops the trailing comma, so a failure here is as
+   likely to be a harmless edit as a regression; one pins that `runPasteJob`'s body calls neither `catch`
+   nor `.then(` at all (`/\bcatch\b|\.then\(/` over the slice from its export to end of file) — anchored on
+   the function's own export and on that export staying the file's last one, both checked before slicing,
+   so renaming the export or appending a later one fails an anchor assertion instead of the vacuous pass an
+   earlier version of this pin had, where an unchecked `indexOf` returning -1 made the slice run over the
+   file's last byte only.
 
 ## Commands
 
@@ -487,8 +500,11 @@ drafts keep arguing from a stale CV.
   never 409. Single-post draft requests waiting in the queue are batched into one `claude` session. Stop
   sends SIGTERM; Playwright's own handler only closes Chrome, so the scraper keeps a `stopping` flag and
   throws at the next loop check (exit 1). `pump()` iterates `Object.keys(lanes)`, so it needed no change
-  when `paste` was added, but the `Lane` union, the state initialiser, `laneOf()`, `busy()` and
-  `stateView()` all name every lane explicitly, so a fourth lane touches five places, not one.
+  when `paste` was added, but the `Lane` union, the `Kind` union, the state initialiser, `laneOf()`,
+  `busy()`, `runJob`'s own `if (lane === 'paste')` dispatch branch and `stateView()` all name every lane
+  explicitly, so a fourth lane touches seven places in this file alone — plus its mirrors outside it:
+  `Lane` and `JobKind` in `app/types/index.d.ts`, and the `lanes` object `run.vue` and `pipeline.vue` each
+  seed their polling state with, or the UI never compiles or never shows the new lane running.
   **`state.lanes.paste ??=` right after the initialiser is load-bearing**: `__jobfinderRunner` lives on
   `globalThis` to survive Nitro's dev HMR (see above), so a dev server already running from before the
   paste lane existed holds a state object missing that key, and `??=` on the whole object will not add a

@@ -1,9 +1,11 @@
-// Job runner: two lanes, each sequential, fed by one queue.
+// Job runner: three lanes, each sequential, fed by one queue.
 //
 //   scrape lane — Chrome holds a lock on ./profile, so one scrape at a time.
 //   draft  lane — `claude -p` sessions (drafts, syncs), one at a time.
+//   paste  lane — one OpenAI score call at a time; separate from the other two so a pasted post never
+//                 waits behind a scrape or a draft, and never makes one wait behind it.
 //
-// The two lanes run concurrently; everything else queues, so POST /api/run/* returns 202 and never 409.
+// The three lanes run concurrently; everything else queues, so POST /api/run/* returns 202 and never 409.
 // Single-post draft requests waiting in the queue are batched into one claude session, because every
 // session pays 3-5 minutes of setup regardless of how many posts it handles.
 import { spawn, type ChildProcess } from 'node:child_process'
