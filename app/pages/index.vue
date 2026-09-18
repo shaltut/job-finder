@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { findFinishedMatch, stalePastes, type FinishedPasteJob } from '#shared/paste-poll'
 import type { TableColumn } from '@nuxt/ui'
 import type { PostRow } from '~/types'
 
@@ -36,7 +37,7 @@ async function draft(key: string) {
 
 interface PasteEntry {
   at: number
-  state: 'queued' | 'stored' | 'refused' | 'failed'
+  state: 'queued' | 'stored' | 'refused' | 'failed' | 'unknown'
   detail: string
   text: string
 }
@@ -99,6 +100,13 @@ function pasteAgain(entry: PasteEntry) {
   pasteText.value = entry.text
 }
 
+function pasteBadgeColor(state: PasteEntry['state']): 'success' | 'neutral' | 'warning' | 'error' {
+  if (state === 'stored') return 'success'
+  if (state === 'queued') return 'neutral'
+  if (state === 'unknown') return 'warning'
+  return 'error'
+}
+
 let pasteTimer: ReturnType<typeof setInterval> | null = null
 
 function stopPastePolling() {
@@ -113,39 +121,40 @@ function startPastePolling() {
   pasteTimer = setInterval(pollPasteLane, 2000)
 }
 
-interface PastedJob { log: string[], endedAt: string | null, args?: { text?: string } }
-
 /**
- * Poll only while something local is outstanding, and stop as soon as nothing is. Identity comes from
- * `args.text` (the server stores it verbatim — both sides trim the same way) *and* `endedAt`, never
- * from position: the footer explicitly invites pasting another post while the first is still scoring,
- * so two entries are routinely 'queued' at once, and `last` only ever holds the single most recently
- * finished job — matching "the oldest queued" would attribute a second post's outcome to the first one
- * still waiting. Text alone is not enough either: "Paste again" after a failure resubmits the same
- * text, and a stale `last` from the failed attempt would otherwise re-stamp the retry before its own
- * job has finished. `endedAt` after the entry's own `at` is what tells the two apart.
+ * Poll only while something local is outstanding, and stop as soon as nothing is. Matching against the
+ * lane's `last` finished job is `findFinishedMatch` (shared/paste-poll.ts, tested there directly) —
+ * this function's own job is just the two effects a match or a stale entry has: refreshing the posts
+ * list, and giving up on an entry that has waited past all reason so the interval can actually stop.
  */
 async function pollPasteLane() {
   const queued = pastes.value.filter(p => p.state === 'queued')
   if (!queued.length) return stopPastePolling()
 
-  const s = await $fetch<{ lanes: { paste?: { last: PastedJob | null } } }>('/api/job')
-  const last = s.lanes.paste?.last
-  if (!last || !last.endedAt) return
-
-  const endedAt = Date.parse(last.endedAt)
-  const match = queued.find(p => p.text === last.args?.text && p.at < endedAt)
-  if (!match) return
-
-  const line = last.log.at(-1) || ''
-  if (line.startsWith('stored:') || line.startsWith('already stored:')) {
-    match.state = 'stored'
-    match.detail = line
-    await Promise.all([refresh(), refreshNuxtData('stats')])
-  } else if (line) {
-    match.state = 'failed'
-    match.detail = line
+  const s = await $fetch<{ lanes: { paste?: { last: FinishedPasteJob | null } } }>('/api/job')
+  const last = s.lanes.paste?.last ?? null
+  const match = findFinishedMatch(queued, last)
+  if (match && last) {
+    const line = last.log.at(-1) || ''
+    if (line.startsWith('stored:') || line.startsWith('already stored:')) {
+      match.state = 'stored'
+      match.detail = line
+      await Promise.all([refresh(), refreshNuxtData('stats')])
+    } else if (line) {
+      match.state = 'failed'
+      match.detail = line
+    }
   }
+
+  // A stuck entry (the lane's `last` slot was overwritten by a second job before a poll ever saw this
+  // one finish) would otherwise hold `queued.length` at 1 forever, and the guard above would never fire
+  // — the exact always-on interval Step 3 exists to prevent. Giving up after PASTE_STALE_MS is what
+  // lets the interval stop even when the real outcome is unrecoverable from this tab.
+  stalePastes(pastes.value.filter(p => p.state === 'queued'), Date.now()).forEach((p) => {
+    p.state = 'unknown'
+    p.detail = 'no result after several minutes — check the Posts list'
+  })
+
   if (!pastes.value.some(p => p.state === 'queued')) stopPastePolling()
 }
 
@@ -585,14 +594,14 @@ const columns: TableColumn<PostRow>[] = [
               class="flex items-center gap-2 text-sm"
             >
               <UBadge
-                :color="p.state === 'stored' ? 'success' : p.state === 'queued' ? 'neutral' : 'error'"
+                :color="pasteBadgeColor(p.state)"
                 variant="subtle"
               >
                 {{ p.state }}
               </UBadge>
               <span class="truncate">{{ p.detail }}</span>
               <UButton
-                v-if="p.state === 'refused' || p.state === 'failed'"
+                v-if="p.state === 'refused' || p.state === 'failed' || p.state === 'unknown'"
                 size="xs"
                 variant="ghost"
                 @click="pasteAgain(p)"
