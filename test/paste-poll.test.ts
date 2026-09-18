@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { findFinishedMatch, PASTE_STALE_MS, stalePastes } from '../shared/paste-poll.ts'
+import { findFinishedMatch, PASTE_STALE_MS, stalePastes, type FinishedPasteJob } from '../shared/paste-poll.ts'
 
 // Four sequences a reviewer traced by hand against jobs.ts's pump()/finish() before this shipped.
 // findFinishedMatch is the one line standing between the paste card and two misattribution bugs, so
@@ -109,4 +109,34 @@ test('stalePastes: the staleness bound is exclusive, not inclusive', () => {
   assert.deepEqual(stalePastes([p], p.at + PASTE_STALE_MS), [])
   // ...one more millisecond is.
   assert.deepEqual(stalePastes([p], p.at + PASTE_STALE_MS + 1), [p])
+})
+
+// Round 2 closed one specific missing-field gap (`last: null`) with a mutation caught by the test
+// above. A second mutation-testing pass (round 3) found a sibling gap the same way: `last.args.text`
+// (dropping the `?.`) also throws, and no test supplied a `last` whose `args` is missing — even though
+// `FinishedPasteJob.args` is typed optional, so the type itself says that shape is expected. Rather than
+// adding one test per optional field forever, this asserts the property directly: `findFinishedMatch`
+// is total over every malformed `last` — it returns null and never throws, no matter which optional
+// piece is missing. Each fixture is cast past the type system on purpose, because the point is a
+// runtime guarantee against shapes the compiler would otherwise never let through.
+test('findFinishedMatch is total: null and never a throw, for every malformed last', () => {
+  const queued = [{ text: 'post A text', at: 1000 }]
+  const validEndedAt = new Date(2000).toISOString()
+
+  const cases: { label: string, last: unknown }[] = [
+    { label: 'last: null', last: null },
+    { label: 'last: undefined', last: undefined },
+    { label: 'last: {} (no endedAt, no args)', last: {} },
+    { label: 'last: { endedAt: null }', last: { endedAt: null } },
+    { label: 'last: { endedAt, args: undefined }', last: { endedAt: validEndedAt, args: undefined } },
+    { label: 'last: { endedAt, args: {} } (no text)', last: { endedAt: validEndedAt, args: {} } }
+  ]
+
+  for (const c of cases) {
+    let result: unknown
+    assert.doesNotThrow(() => {
+      result = findFinishedMatch(queued, c.last as FinishedPasteJob | null)
+    }, c.label)
+    assert.equal(result, null, c.label)
+  }
 })
