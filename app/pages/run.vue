@@ -14,7 +14,11 @@ const since = ref<string>(config.since)
 
 const { data: job, refresh: refreshJob } = await useFetch<JobState>('/api/job', {
   lazy: true,
-  default: () => ({ lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null } }, queue: [], busy: false })
+  default: () => ({
+    lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null }, paste: { current: null, last: null } },
+    queue: [],
+    busy: false
+  })
 })
 const { data: yields, refresh: refreshYield } = await useFetch<YieldRow[]>('/api/yield', { lazy: true, default: () => [] })
 
