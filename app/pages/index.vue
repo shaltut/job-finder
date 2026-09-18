@@ -131,31 +131,37 @@ async function pollPasteLane() {
   const queued = pastes.value.filter(p => p.state === 'queued')
   if (!queued.length) return stopPastePolling()
 
-  const s = await $fetch<{ lanes: { paste?: { last: FinishedPasteJob | null } } }>('/api/job')
-  const last = s.lanes.paste?.last ?? null
-  const match = findFinishedMatch(queued, last)
-  if (match && last) {
-    const line = last.log.at(-1) || ''
-    if (line.startsWith('stored:') || line.startsWith('already stored:')) {
-      match.state = 'stored'
-      match.detail = line
-      await Promise.all([refresh(), refreshNuxtData('stats')])
-    } else if (line) {
-      match.state = 'failed'
-      match.detail = line
+  // The staleness sweep and the stop-check run in `finally`, not after a straight-line return, so a
+  // `$fetch` that keeps rejecting (the lane's own endpoint down, a network blip) cannot leak the
+  // interval the same way an unmatched job once did — this function must reach the bottom either way.
+  // Not caught here: an uncaught rejection from an interval callback is how the rest of this file polls
+  // (see refreshJob() in run.vue/pipeline.vue), so this does not swallow the error, only reorders around it.
+  try {
+    const s = await $fetch<{ lanes: { paste?: { last: FinishedPasteJob | null } } }>('/api/job')
+    const last = s.lanes.paste?.last ?? null
+    const match = findFinishedMatch(queued, last)
+    if (match && last) {
+      const line = last.log.at(-1) || ''
+      if (line.startsWith('stored:') || line.startsWith('already stored:')) {
+        match.state = 'stored'
+        match.detail = line
+        await Promise.all([refresh(), refreshNuxtData('stats')])
+      } else if (line) {
+        match.state = 'failed'
+        match.detail = line
+      }
     }
+  } finally {
+    // A stuck entry (the lane's `last` slot was overwritten by a second job before a poll ever saw
+    // this one finish) would otherwise hold `queued.length` at 1 forever, and the guard above would
+    // never fire — the exact always-on interval Step 3 exists to prevent. Giving up after
+    // PASTE_STALE_MS is what lets the interval stop even when the real outcome is unrecoverable.
+    stalePastes(pastes.value.filter(p => p.state === 'queued'), Date.now()).forEach((p) => {
+      p.state = 'unknown'
+      p.detail = 'no result after several minutes — check the Posts list'
+    })
+    if (!pastes.value.some(p => p.state === 'queued')) stopPastePolling()
   }
-
-  // A stuck entry (the lane's `last` slot was overwritten by a second job before a poll ever saw this
-  // one finish) would otherwise hold `queued.length` at 1 forever, and the guard above would never fire
-  // — the exact always-on interval Step 3 exists to prevent. Giving up after PASTE_STALE_MS is what
-  // lets the interval stop even when the real outcome is unrecoverable from this tab.
-  stalePastes(pastes.value.filter(p => p.state === 'queued'), Date.now()).forEach((p) => {
-    p.state = 'unknown'
-    p.detail = 'no result after several minutes — check the Posts list'
-  })
-
-  if (!pastes.value.some(p => p.state === 'queued')) stopPastePolling()
 }
 
 onUnmounted(stopPastePolling)

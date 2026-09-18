@@ -78,3 +78,35 @@ test('the two properties compose: a finish-collision victim is left queued until
 test('PASTE_STALE_MS covers ten sequential paste jobs at a generous 30s each', () => {
   assert.ok(10 * 30_000 <= PASTE_STALE_MS, 'ten queued pastes must never trip the staleness cap')
 })
+
+// Mutation-testing gaps found in review round 2: three mutants of this file's own logic survived the
+// tests above. Each of the three below was confirmed to catch its mutant (and only its mutant) before
+// being added — see task-5-report.md, "Fix round 2".
+
+test('findFinishedMatch returns null for an absent or unfinished last job, and never throws', () => {
+  const queued = [{ text: 'post A text', at: 1000 }]
+
+  // Fresh page load: `lanes.paste.last` is null until some paste job has ever finished.
+  assert.equal(findFinishedMatch(queued, null), null)
+
+  // A job that has started running but not yet finished carries no endedAt.
+  const running = { log: [], endedAt: null, args: { text: 'post A text' } }
+  assert.equal(findFinishedMatch(queued, running), null)
+})
+
+test('findFinishedMatch: endedAt is an exclusive bound, not inclusive', () => {
+  const p = { text: 'post A text', at: 1000 }
+  // The job "ends" at the exact millisecond the entry was created — not after it, so it must not match.
+  const last = { log: ['stored: Role A'], endedAt: new Date(p.at).toISOString(), args: { text: p.text } }
+
+  assert.equal(findFinishedMatch([p], last), null)
+})
+
+test('stalePastes: the staleness bound is exclusive, not inclusive', () => {
+  const p = { text: 'post A text', at: 1000 }
+
+  // Exactly PASTE_STALE_MS elapsed is not yet stale...
+  assert.deepEqual(stalePastes([p], p.at + PASTE_STALE_MS), [])
+  // ...one more millisecond is.
+  assert.deepEqual(stalePastes([p], p.at + PASTE_STALE_MS + 1), [p])
+})
