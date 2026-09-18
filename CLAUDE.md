@@ -357,10 +357,18 @@ drafts keep arguing from a stale CV.
   that genuinely has fewer posts than `max`; a term that fills its quota exits immediately (verified: 10
   cards in 10s).
 - **A term that resolves half its permalinks looks identical to one that resolves all of them**, so the
-  per-term log now prints both counts. Measured on `senior .net developer`: **29/50**, against the 26/26
-  this file used to claim. The bottleneck is harvesting, not the pairing rule — only 35 URNs were collected
-  for 50 cards, so at least 15 could never resolve. `collect` swallows body-read failures silently; that is
-  the place to look, and it has not been investigated yet.
+  per-term log prints both counts. Measured over a full 13-term run (75 cards a term): **769/866 = 88.8%**,
+  per term between 63% and 96% — not the 26/26 this file used to claim, and not the 29/50 measured before
+  the scroll fix, which was low because less scrolling means fewer pagination payloads.
+  **The cause is responses whose body cannot be read**, and nothing else. `await res.text()` throws for
+  ~14 responses a term, and the correlation between that count and the cards left unresolved is
+  **r = 0.921 over 12 terms**, at 0.54 cards per lost body. Everything downstream is provably clean:
+  `urnMap` paired **339 of 339** tokens present in the captured payloads, `droppedByDuplicateGuard` was
+  **0 on every term**, and `tokenFoundInMap` equalled `resolved` every time. So the search-path pairing
+  rule is sound and is not the thing to change. Closing the last ~11% means logging the URL and status of
+  the responses that lose their body, to learn whether they are redirects (which carry no URN anyway) or
+  real payloads — deliberately not done, because a permalink is secondary to the address that makes a post
+  actionable.
 - **Scoring failures are not stored**: the post is retried next run rather than sitting with a NULL score.
 
 ### The headless drafter (`claude -p`)

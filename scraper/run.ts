@@ -174,7 +174,12 @@ async function scrapeTerm(page: import('playwright-core').Page, term: string): P
     if (!/linkedin\.com/.test(res.url()) || /\.(js|css|png|jpe?g|svg|gif|woff2?)(\?|$)/.test(res.url())) return
     try {
       for (const [tok, urn] of urnMap(await res.text())) if (!urns.has(tok)) urns.set(tok, urn)
-    } catch { /* body already discarded: the next scroll response carries the same cards */ }
+    } catch {
+      // NOT free, despite how this used to read. Measured over a full 13-term run: ~14 responses per term
+      // fail here, and each one costs about half a card its permalink — r=0.92 between this count and the
+      // cards left unresolved. It is the whole of the ~11% permalink gap; the pairing below is provably
+      // clean. Chasing it means logging the URL and status here to see WHICH responses lose their body.
+    }
   }
   if (term !== 'feed') page.on('response', collect)
   try {
