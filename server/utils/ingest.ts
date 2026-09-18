@@ -20,8 +20,8 @@ export type PostType = 'hiring' | 'seeking' | 'other'
 export interface PostRecord {
   key: string
   searchTerm: string
-  author: string
-  authorUrl: string
+  author: string | null
+  authorUrl: string | null
   postUrl: string | null
   postedAge: string | null
   postedAt: string | null
