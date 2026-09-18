@@ -14,7 +14,20 @@ const { data } = await useFetch<AppConfig>('/api/config')
 // edit a copy: a failed save must leave the form as the user left it, not snap back
 const form = ref<AppConfig>(structuredClone(toRaw(data.value!)))
 const saving = ref(false)
-const dirty = computed(() => JSON.stringify(form.value) !== JSON.stringify(data.value))
+/**
+ * The editor serialises its markdown with a trailing blank line the stored value does not carry, so a
+ * form nobody has touched compares unequal and the page loads permanently dirty — Discard showing and
+ * Save enabled before a single edit. Measured 2026-09-18: across all 12 settings keys the only
+ * difference was `background.evidence`, 2901 chars stored against 2905 in the form, and the whole of
+ * it was a trailing "\n\n".
+ *
+ * Normalised on both sides rather than fixed in the editor: the trailing newline is the serialiser's,
+ * and a settings page cannot be the place that argues with it. `save()` trims the same field on the
+ * way out, the way it already trims terms and titles, so the stored value never grows one.
+ */
+const settled = (c: AppConfig) =>
+  JSON.stringify({ ...c, background: { ...c.background, evidence: c.background.evidence.trimEnd() } })
+const dirty = computed(() => settled(form.value) !== settled(data.value!))
 
 /**
  * Three switches over one array, rebuilt in CONTACT_CHANNELS order every time.
@@ -59,6 +72,8 @@ async function save() {
     form.value.terms = form.value.terms.map(s => s.trim()).filter(Boolean)
     form.value.titles = form.value.titles.map(s => s.trim()).filter(Boolean)
     form.value.excludes = form.value.excludes.map(s => s.trim()).filter(Boolean)
+    // the editor's trailing blank line, for the same reason — see `settled` above
+    form.value.background.evidence = form.value.background.evidence.trimEnd()
     rulesChanged = JSON.stringify(form.value.excludes) !== JSON.stringify(data.value?.excludes ?? [])
     const saved = await $fetch<AppConfig>('/api/config', { method: 'PUT', body: form.value })
     adopt(saved)
