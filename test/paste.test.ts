@@ -107,6 +107,12 @@ test('a paste runs on its own lane, never behind a scrape or a draft', () => {
 test('the paste job never writes a row it could not score', () => {
   // scorePost throwing must propagate to runJob's catch, not fall through to applyRecord with a
   // half-built record — the same posture as a scraped post whose score fails.
+  //
+  // These are source-text assertions over a file no test can import (see the comment at the top of
+  // this suite), so they cannot prove the absence of every possible fallback. They catch the shapes
+  // this regression realistically takes — an insert nested textually inside a catch, or the score
+  // call itself wrapped in a try that swallows and substitutes — not every way a determined rewrite
+  // could route a fabricated score into applyRecord.
   const src = readFileSync('server/utils/paste-job.ts', 'utf8')
   const body = src.slice(src.indexOf('export async function runPasteJob'))
   const iScore = body.indexOf('await scorePost(')
@@ -115,4 +121,9 @@ test('the paste job never writes a row it could not score', () => {
   assert.ok(iApply > 0, 'runPasteJob must call applyRecord')
   assert.ok(iScore < iApply, 'the score must be awaited before the insert')
   assert.doesNotMatch(body, /catch\s*\{[^}]*applyRecord/s, 'a failed score must not still insert')
+  assert.doesNotMatch(
+    body,
+    /try\s*\{[^}]*await scorePost/s,
+    'scorePost must not be wrapped in a try — a failed score has to propagate, not fall through to a fabricated one'
+  )
 })
