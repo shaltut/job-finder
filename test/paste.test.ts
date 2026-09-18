@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { loadCv, scorePost } from '../scraper/score.ts'
 import { emptySettings } from '../shared/settings.ts'
-import { PASTED_TERM, pasteGate, pasteRecord } from '../server/utils/paste.ts'
+import { PASTED_TERM, pasteGate, pasteOnce, pasteRecord } from '../server/utils/paste.ts'
 
 // scraper/ has no typecheck coverage, so a broken lift there fails at run time and nowhere else.
 // This is cheap and catches a syntax error, a bad import path and a changed arity.
@@ -104,26 +104,29 @@ test('a paste runs on its own lane, never behind a scrape or a draft', () => {
   )
 })
 
-test('the paste job never writes a row it could not score', () => {
-  // scorePost throwing must propagate to runJob's catch, not fall through to applyRecord with a
-  // half-built record — the same posture as a scraped post whose score fails.
-  //
-  // These are source-text assertions over a file no test can import (see the comment at the top of
-  // this suite), so they cannot prove the absence of every possible fallback. They catch the shapes
-  // this regression realistically takes — an insert nested textually inside a catch, or the score
-  // call itself wrapped in a try that swallows and substitutes — not every way a determined rewrite
-  // could route a fabricated score into applyRecord.
-  const src = readFileSync('server/utils/paste-job.ts', 'utf8')
-  const body = src.slice(src.indexOf('export async function runPasteJob'))
-  const iScore = body.indexOf('await scorePost(')
-  const iApply = body.indexOf('applyRecord(')
-  assert.ok(iScore > 0, 'runPasteJob must call scorePost')
-  assert.ok(iApply > 0, 'runPasteJob must call applyRecord')
-  assert.ok(iScore < iApply, 'the score must be awaited before the insert')
-  assert.doesNotMatch(body, /catch\s*\{[^}]*applyRecord/s, 'a failed score must not still insert')
-  assert.doesNotMatch(
-    body,
-    /try\s*\{[^}]*await scorePost/s,
-    'scorePost must not be wrapped in a try — a failed score has to propagate, not fall through to a fabricated one'
+test('a paste whose scoring fails stores nothing', async () => {
+  // Behavioural, not textual: this held against a try/catch fallback and then against a .catch()
+  // fallback, each of which passed the previous round's source-text regex over paste-job.ts in turn.
+  // Injecting the dependencies instead means the property survives whatever spelling comes next.
+  let stored = 0
+  await assert.rejects(
+    () => pasteOnce(POST, cfg(), {
+      system: async () => 'a system prompt',
+      score: async () => { throw new Error('openai exploded') },
+      store: () => {
+        stored++
+        return true
+      }
+    }, () => {}),
+    /openai exploded/
+  )
+  assert.equal(stored, 0, 'a failed score must never reach the insert')
+  // The one edge a runtime test on pasteOnce cannot see: that runPasteJob actually delegates to it
+  // rather than reimplementing the same logic inline, where the property just proven would no
+  // longer hold for the code that actually runs.
+  assert.match(
+    readFileSync('server/utils/paste-job.ts', 'utf8'),
+    /return pasteOnce\(/,
+    'runPasteJob must delegate to pasteOnce, or the test above guards nothing that runs'
   )
 })

@@ -1,11 +1,13 @@
-// The impure half of the paste intake: the CV system prompt, the scoring call and the insert.
+// The impure half of the paste intake: the CV system prompt and the real effects that pasteOnce
+// (server/utils/paste.ts) takes as arguments — the orchestration itself lives there now, so it can
+// be tested with injected dependencies instead of assertions over this file's source text.
 import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { systemPrompt, type Config } from '../../scraper/lib.ts'
 import { loadCv, scorePost } from '../../scraper/score.ts'
 import { readConfig } from './config'
 import { applyRecord, openWritableDb } from './ingest'
-import { pasteGate, pasteRecord } from './paste'
+import { pasteOnce } from './paste'
 
 // The CV text costs one OpenAI call to obtain and never changes while the file does not, so without a
 // cache every paste pays for it. On globalThis for the reason __jobfinderRunner is: Nitro's dev HMR
@@ -26,23 +28,16 @@ async function cvSystem(config: Config, push: (line: string) => void): Promise<s
 
 export async function runPasteJob(text: string, push: (line: string) => void): Promise<number> {
   const config = readConfig()
-  const gate = pasteGate(text, config)
-  if (!gate.ok) {
-    // The endpoint refuses these synchronously; reaching here means the settings changed while queued.
-    push(`refused: no enabled contact route (found ${gate.channels.join(', ') || 'none'})`)
-    return 1
-  }
-  const system = await cvSystem(config, push)
-  const score = await scorePost(text, system)
-  const rec = pasteRecord(text, config, gate, score)
-  const { db, close } = openWritableDb()
-  try {
-    const applied = applyRecord(db, { op: 'post', ...rec })
-    push(applied
-      ? `stored: ${rec.title || 'untitled'} — score ${rec.score}, ${rec.postType}${rec.flags.length ? `, flags: ${rec.flags.join(' ')}` : ''}`
-      : 'already stored: this post is already in the database')
-  } finally {
-    close()
-  }
-  return 0
+  return pasteOnce(text, config, {
+    system: () => cvSystem(config, push),
+    score: scorePost,
+    store: (rec) => {
+      const { db, close } = openWritableDb()
+      try {
+        return !!applyRecord(db, { op: 'post', ...rec })
+      } finally {
+        close()
+      }
+    }
+  }, push)
 }
