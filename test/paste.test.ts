@@ -109,9 +109,10 @@ test('the paste job never writes a row it could not score', () => {
   // half-built record — the same posture as a scraped post whose score fails.
   const src = readFileSync('server/utils/paste-job.ts', 'utf8')
   const body = src.slice(src.indexOf('export async function runPasteJob'))
-  assert.ok(
-    body.indexOf('await scorePost(') < body.indexOf('applyRecord('),
-    'the score must be awaited before the insert'
-  )
+  const iScore = body.indexOf('await scorePost(')
+  const iApply = body.indexOf('applyRecord(')
+  assert.ok(iScore > 0, 'runPasteJob must call scorePost')
+  assert.ok(iApply > 0, 'runPasteJob must call applyRecord')
+  assert.ok(iScore < iApply, 'the score must be awaited before the insert')
   assert.doesNotMatch(body, /catch\s*\{[^}]*applyRecord/s, 'a failed score must not still insert')
 })
