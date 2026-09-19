@@ -558,3 +558,30 @@ test('a follow-up reuses the tailored CV its application carried, while that fil
   assert.equal(followUpAttachment('data/cv/tailored/x/cv.pdf', 'data/cv/cv.pdf', () => false), 'data/cv/cv.pdf')
   assert.equal(followUpAttachment(null, 'data/cv/cv.pdf', () => true), 'data/cv/cv.pdf')
 })
+
+// Measured on the real master CV: the extractor returned each skills LINE as a single item —
+// ".NET / .NET Core · C# · Python · Microservices · …" — so all six groups held exactly one blob.
+// Rule 3 lets a group's items be reordered and nothing else, and one item has nothing to reorder, so
+// every tailored CV split the blob and was rejected as "items were renamed, added or removed".
+// Measured 2026-09-19: 4 of 4 drafts fell back to the original PDF, all of them at s1.
+test('assignIds splits a separator-joined skills line into one item per skill', () => {
+  const cv = content()
+  cv.skills = [{ group: 'Architecture & Backend', items: ['.NET / .NET Core · C# · Python · gRPC'] }]
+  // the slash inside ".NET / .NET Core" is part of a skill's name, not a separator
+  assert.deepEqual(assignIds(cv).skills[0]!.items, ['.NET / .NET Core', 'C#', 'Python', 'gRPC'])
+})
+
+test('assignIds leaves an already-split skills list alone', () => {
+  const cv = content()
+  cv.skills = [{ group: 'Data', items: ['PostgreSQL (tuning)', 'Redis'] }]
+  assert.deepEqual(assignIds(cv).skills[0]!.items, ['PostgreSQL (tuning)', 'Redis'])
+})
+
+// A PDF wraps a long skill across two lines and the extractor keeps the break, so the master carried
+// "Vendor evaluation\n& buy-vs-build". Rule 3 compares items exactly, and a model echoing that item
+// back will single-space it — the same "renamed" rejection one layer down from the split above.
+test('assignIds collapses a line break inside a skill into a single space', () => {
+  const cv = content()
+  cv.skills = [{ group: 'Leadership', items: ['Technical roadmaps · Vendor evaluation\n& buy-vs-build'] }]
+  assert.deepEqual(assignIds(cv).skills[0]!.items, ['Technical roadmaps', 'Vendor evaluation & buy-vs-build'])
+})

@@ -57,6 +57,31 @@ export const clean = (s: string): string =>
   // eslint-disable-next-line no-control-regex -- the point of this regex is to match control characters
   s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\uFEFF]/g, '')
 
+/**
+ * One skill per item, however the extractor handed the line over.
+ *
+ * A CV renders its skills as one separated line per group, and the extractor returns that line intact
+ * far more often than it splits it — measured on the real master CV, all six groups came back holding
+ * exactly one item, the whole line. That is not cosmetic: rule 3 in cv-tailor.ts allows a group's items
+ * to be REORDERED and nothing else, and a single item has no order to change, so every tailored CV that
+ * split the line to lead with what a job asked for was rejected as "items were renamed, added or
+ * removed". Measured 2026-09-19: 4 of 4 drafts fell back to the original PDF, every one of them at s1.
+ *
+ * Split in code rather than by asking the extraction prompt more firmly, for the reason gateOnPostType()
+ * and PLACEHOLDER are in code: the model obeys a written instruction most of the time, and most of the
+ * time is the failure. Only unambiguous separators — a slash is part of ".NET / .NET Core" and a comma
+ * is part of "PostgreSQL (tuning), tested at scale", so neither can be one.
+ *
+ * Inner whitespace is collapsed for the same reason the split exists. A PDF wraps a long skill across
+ * two lines and the extractor keeps the break, so the master held "Vendor evaluation\n& buy-vs-build";
+ * rule 3 compares items exactly, and a model echoing that back single-spaces it, which is the identical
+ * "renamed" rejection one layer down. Rule 3 itself is untouched — the master is normalised so that
+ * matching it needs no leniency.
+ */
+const SKILL_SEPARATOR = /\s*[·•|]\s*/
+const splitSkills = (item: string): string[] =>
+  clean(item).split(SKILL_SEPARATOR).map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean)
+
 export function assignIds(cv: CvContent): MasterCv {
   return {
     summary: clean(cv.summary),
@@ -69,7 +94,7 @@ export function assignIds(cv: CvContent): MasterCv {
       end: clean(r.end),
       bullets: r.bullets.map((text, j) => ({ id: `r${i}.b${j}`, text: clean(text) }))
     })),
-    skills: cv.skills.map((s, i) => ({ id: `s${i}`, group: clean(s.group), items: s.items.map(clean) })),
+    skills: cv.skills.map((s, i) => ({ id: `s${i}`, group: clean(s.group), items: s.items.flatMap(splitSkills) })),
     education: cv.education.map(clean),
     certifications: cv.certifications.map(clean),
     achievements: cv.achievements.map(clean),
@@ -135,7 +160,7 @@ export const MASTER_CACHE = 'data/cv/master.json'
  * session once already. A cache with no version, or the wrong one, is a miss: re-extraction is two model
  * calls, once.
  */
-export const MASTER_CACHE_VERSION = 1
+export const MASTER_CACHE_VERSION = 2 // 2: skills split one per item (assignIds), which re-extracts every cached master
 
 export interface CachedMaster { version: number, pdfSha256: string, extractedAt: string, model: string, cv: MasterCv }
 
