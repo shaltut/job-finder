@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   admits, ageOf, applyCueFor, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, legacyKey, storedKey,
-  excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, isThrottled, normalize, postedAt, postUrlFrom, prescreen, throttleEvidence,
+  excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, isThrottled, normalize, postedAt, postUrlFrom, prescreen, rotateTerms, throttleEvidence,
   keepScrolling, resolveUrls, SCORE_SCHEMA, SCROLL_STALL_MS, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
@@ -568,6 +568,43 @@ test('isThrottled: LinkedIn pausing search is not an empty result', () => {
   // a genuinely empty result, and an ordinary post, must not read as a throttle
   assert.equal(isThrottled('No results found'), false)
   assert.equal(isThrottled('Senior .NET Developer — we are hiring, send your CV'), false)
+})
+
+test('rotateTerms: the tail of the list must not starve forever', () => {
+  // Measured 2026-09-19: two runs both aborted at term 4 of 17 when LinkedIn paused search, and terms
+  // 5-17 had never run at all — not once, because the list is scanned top-down and the budget is spent
+  // before it reaches them. A fixed order does not lose a random share of coverage, it loses the SAME
+  // bottom share every day.
+  const terms = ['feed', 'a', 'b', 'c', 'd']
+  assert.deepEqual(rotateTerms(terms, 0), ['feed', 'a', 'b', 'c', 'd'])
+  assert.deepEqual(rotateTerms(terms, 1), ['feed', 'b', 'c', 'd', 'a'])
+  assert.deepEqual(rotateTerms(terms, 3), ['feed', 'd', 'a', 'b', 'c'])
+  // wraps, and a day count far from zero is still in range
+  assert.deepEqual(rotateTerms(terms, 4), rotateTerms(terms, 0))
+  assert.deepEqual(rotateTerms(terms, 20_000), rotateTerms(terms, 20_000 % 4))
+})
+
+test('rotateTerms: feed stays first, because it is not a search', () => {
+  // The pause counts SEARCH activity — the evidence page says so in as many words — and `feed` reads
+  // linkedin.com/feed/, not /search/results/content/. Rotating it into the tail would forfeit the
+  // highest-volume source to a budget it never spent.
+  for (const day of [0, 1, 2, 3, 7, 100]) {
+    assert.equal(rotateTerms(['feed', 'a', 'b', 'c'], day)[0], 'feed', `day ${day} moved feed`)
+  }
+})
+
+test('rotateTerms: every term reaches the front within one cycle', () => {
+  // The whole point. If some term can never be first, rotation has not fixed the starvation.
+  const terms = ['feed', 'a', 'b', 'c', 'd', 'e']
+  const firstSearch = new Set(Array.from({ length: 5 }, (_, d) => rotateTerms(terms, d)[1]))
+  assert.deepEqual([...firstSearch].sort(), ['a', 'b', 'c', 'd', 'e'])
+})
+
+test('rotateTerms: degenerate lists do not throw', () => {
+  assert.deepEqual(rotateTerms([], 3), [])
+  assert.deepEqual(rotateTerms(['feed'], 3), ['feed'])
+  assert.deepEqual(rotateTerms(['a'], 3), ['a'])
+  assert.deepEqual(rotateTerms(['a', 'b'], -1), ['b', 'a'], 'a negative day must not produce a hole')
 })
 
 test('throttleEvidence: an abort has to leave something a human can check', () => {

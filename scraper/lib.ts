@@ -342,6 +342,29 @@ export const postedAt = (age: string | null | undefined, at: Date = new Date()):
  * to the next term every time, asking an account that had just been throttled for more. Treated like a
  * lost login (abort the whole run) rather than an empty term, because continuing is what does the damage.
  */
+/**
+ * The scrape order for one day: `feed` first, then the search terms rotated by `day`.
+ *
+ * The list is scanned top-down and LinkedIn pauses search partway through, so a fixed order does not
+ * lose a random share of the terms — it loses the SAME tail every single day. Measured 2026-09-19: two
+ * runs both aborted at term 4 of 17, and terms 5-17 had never run once, ever. Rotating the start spreads
+ * that loss across the list instead of concentrating it on whatever happens to be at the bottom.
+ *
+ * `feed` is pinned first because it is not a search: it reads linkedin.com/feed/, while the pause counts
+ * search activity — the evidence page says so in as many words. Rotating it into the tail would forfeit
+ * the highest-volume source to a budget it never spends.
+ */
+export function rotateTerms(terms: readonly string[], day: number): string[] {
+  const feed = terms.filter(t => t === 'feed')
+  const rest = terms.filter(t => t !== 'feed')
+  if (!rest.length) return [...feed]
+  const at = ((day % rest.length) + rest.length) % rest.length // a negative day must not cut a hole
+  return [...feed, ...rest.slice(at), ...rest.slice(0, at)]
+}
+
+/** Whole days since the epoch — the rotation advances once a day, with no state to persist or corrupt. */
+export const dayIndex = (now: Date = new Date()): number => Math.floor(now.getTime() / 86_400_000)
+
 // One definition with two readers: the predicate that aborts, and the extractor that records why. Two
 // copies of this rule would drift, and a drift here either kills a healthy run or misses a real pause.
 const THROTTLE = /unusual\s+(?:search\s+)?traffic|search activity on your account has been paused/i

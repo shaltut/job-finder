@@ -14,7 +14,7 @@ import Database from 'better-sqlite3'
 import { chromium } from 'playwright-core'
 import {
   admits, ageOf, applyCueFor, channelsOf, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, normalize, storedKey,
-  throttleEvidence, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
+  throttleEvidence, rotateTerms, dayIndex, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
 import { loadCv, scorePost, type Score } from './score.ts'
@@ -60,7 +60,11 @@ function loadConfig(): Config {
 
 const CONFIG = loadConfig()
 // argv still wins over the stored settings, and the hardcoded fallbacks stay as the last resort
-const SEARCH_TERMS = opts.terms ? opts.terms.split(',').map(t => t.trim()).filter(Boolean) : CONFIG.terms
+// Rotated only when the list comes from Settings: an explicit --terms is the caller naming exactly
+// what to scrape, and reordering that would make a dry run unreproducible.
+const SEARCH_TERMS = opts.terms
+  ? opts.terms.split(',').map(t => t.trim()).filter(Boolean)
+  : rotateTerms(CONFIG.terms, dayIndex())
 const MAX_CARDS = Number(opts.max) || CONFIG.max || 40
 const SINCE = opts.since || CONFIG.since || 'past-24h'
 const CV_PATH = opts.cv || CONFIG.cv
