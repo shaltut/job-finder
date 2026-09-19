@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   admits, ageOf, applyCueFor, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, legacyKey, storedKey,
-  excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, isThrottled, normalize, postedAt, postUrlFrom, prescreen,
+  excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, isThrottled, normalize, postedAt, postUrlFrom, prescreen, throttleEvidence,
   keepScrolling, resolveUrls, SCORE_SCHEMA, SCROLL_STALL_MS, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
@@ -568,4 +568,32 @@ test('isThrottled: LinkedIn pausing search is not an empty result', () => {
   // a genuinely empty result, and an ordinary post, must not read as a throttle
   assert.equal(isThrottled('No results found'), false)
   assert.equal(isThrottled('Senior .NET Developer — we are hiring, send your CV'), false)
+})
+
+test('throttleEvidence: an abort has to leave something a human can check', () => {
+  // A run-ending decision that saves no evidence cannot be audited afterwards. Measured 2026-09-19: the
+  // scraper aborted four terms in with exit 3, the account searched fine by hand minutes later, and there
+  // was no way to tell a real throttle that had since cleared from a false positive — the branch read the
+  // page text, tested it, and discarded it.
+  const page = 'Results  Our systems have detected unusual search traffic coming from your account. '
+    + 'Please try again later.  Try searching for something else'
+  const found = throttleEvidence(page)
+  assert.ok(found, 'a throttled page must yield evidence')
+  assert.match(found!, /unusual search traffic/, 'the evidence must contain the phrase that fired')
+  assert.ok(found!.length > 'unusual search traffic'.length, 'the phrase alone is not enough context to judge it')
+  assert.equal(throttleEvidence('No results found'), null, 'an empty result is not a throttle')
+})
+
+test('throttleEvidence and isThrottled cannot disagree', () => {
+  // Two copies of the same rule drift, and the pair that drifts here aborts a healthy run or misses a real
+  // pause. Every case the suite pins for one must give the same verdict from the other.
+  for (const [text, throttled] of [
+    ['Our systems have detected unusual search traffic coming from your account', true],
+    ['search activity on your account has been paused. Try again later.', true],
+    ['No results found', false],
+    ['Senior .NET Developer — we are hiring, send your CV', false]
+  ] as [string, boolean][]) {
+    assert.equal(isThrottled(text), throttled, `isThrottled disagrees on: ${text.slice(0, 40)}`)
+    assert.equal(throttleEvidence(text) !== null, throttled, `throttleEvidence disagrees on: ${text.slice(0, 40)}`)
+  }
 })

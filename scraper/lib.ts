@@ -342,8 +342,25 @@ export const postedAt = (age: string | null | undefined, at: Date = new Date()):
  * to the next term every time, asking an account that had just been throttled for more. Treated like a
  * lost login (abort the whole run) rather than an empty term, because continuing is what does the damage.
  */
-export const isThrottled = (text: string): boolean =>
-  /unusual\s+(?:search\s+)?traffic|search activity on your account has been paused/i.test(text)
+// One definition with two readers: the predicate that aborts, and the extractor that records why. Two
+// copies of this rule would drift, and a drift here either kills a healthy run or misses a real pause.
+const THROTTLE = /unusual\s+(?:search\s+)?traffic|search activity on your account has been paused/i
+
+export const isThrottled = (text: string): boolean => THROTTLE.test(text)
+
+/**
+ * The phrase that fired, with enough around it to judge the call later — or null when nothing matched.
+ *
+ * An abort that saves no evidence cannot be audited. Measured 2026-09-19: a run exited 3 four terms in,
+ * the same account searched fine by hand minutes later, and there was no way to tell a real throttle that
+ * had since cleared from a false positive, because this branch read the page text, tested it, and threw
+ * it away. Every other run-ending path here leaves a screenshot; this one left the exit code alone.
+ */
+export function throttleEvidence(text: string, context = 120): string | null {
+  const m = THROTTLE.exec(text)
+  if (!m) return null
+  return text.slice(Math.max(0, m.index - context), m.index + m[0].length + context).replace(/\s+/g, ' ').trim()
+}
 
 export const SCROLL_STALL_MS = 30_000
 

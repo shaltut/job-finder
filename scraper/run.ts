@@ -14,7 +14,7 @@ import Database from 'better-sqlite3'
 import { chromium } from 'playwright-core'
 import {
   admits, ageOf, applyCueFor, channelsOf, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, normalize, storedKey,
-  isThrottled, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
+  throttleEvidence, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
 import { loadCv, scorePost, type Score } from './score.ts'
@@ -188,9 +188,20 @@ async function scrapeTerm(page: import('playwright-core').Page, term: string): P
     // A throttled search is a normal 200 on the normal URL, so only the page text gives it away. Aborting
     // the whole run is the point: every further term is another request against an account already asked
     // to stop, and each one comes back empty anyway.
-    if (isThrottled(await page.locator('main').innerText({ timeout: 5000 }).catch(() => ''))) {
+    //
+    // The evidence is written BEFORE the throw. An exit code says a matcher fired; it is not proof the
+    // condition held, and on 2026-09-19 this branch ended a run four terms in while the same account
+    // searched fine by hand minutes later — with nothing saved, a throttle that had since cleared and a
+    // false positive were indistinguishable. Every other run-ending path here leaves a screenshot.
+    const evidence = throttleEvidence(await page.locator('main').innerText({ timeout: 5000 }).catch(() => ''))
+    if (evidence) {
+      fs.mkdirSync('logs', { recursive: true })
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const shot = `logs/throttled-${term.replace(/\W+/g, '-')}-${stamp}.png`
+      await page.screenshot({ path: shot, fullPage: true }).catch(() => {})
+      fs.writeFileSync(shot.replace(/\.png$/, '.txt'), `${page.url()}\n\n${evidence}\n`)
       throw Object.assign(
-        new Error('LinkedIn has paused search on this account (unusual traffic) — stop scraping today, it clears on its own'),
+        new Error(`LinkedIn has paused search on this account — evidence in ${shot}, read it before trusting this; it clears on its own`),
         { code: 3 }
       )
     }
