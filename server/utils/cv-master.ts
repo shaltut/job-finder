@@ -53,9 +53,21 @@ export interface MasterCv {
  * Exported because the model's own tailored strings need the same treatment (cv-tailor.ts): they are the
  * only other text that reaches the rendered PDF, and nothing else strips them.
  */
+/**
+ * Strip what a PDF text layer carries but no eye ever sees: control characters, zero-width and bidi
+ * marks, the BOM, and the Unicode noncharacters.
+ *
+ * The noncharacter range is here because U+FFFE was found in the real cached master's summary on
+ * 2026-09-19 — one occurrence, printing a tofu box into the first line of every tailored CV. It is
+ * neither a control character nor the BOM, so the original range missed it while stripping U+FEFF,
+ * which is one hex digit away and is the same two bytes in the other order.
+ *
+ * U+FFFD is deliberately NOT stripped: it means a character was already lost in decoding, and deleting
+ * it hides an extraction failure rather than showing it.
+ */
 export const clean = (s: string): string =>
   // eslint-disable-next-line no-control-regex -- the point of this regex is to match control characters
-  s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\uFEFF]/g, '')
+  s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\uFDD0-\uFDEF\uFEFF\uFFFE\uFFFF]/g, '')
 
 /**
  * One skill per item, however the extractor handed the line over.
@@ -160,7 +172,7 @@ export const MASTER_CACHE = 'data/cv/master.json'
  * session once already. A cache with no version, or the wrong one, is a miss: re-extraction is two model
  * calls, once.
  */
-export const MASTER_CACHE_VERSION = 2 // 2: skills split one per item (assignIds), which re-extracts every cached master
+export const MASTER_CACHE_VERSION = 3 // 3: clean() now strips Unicode noncharacters; 2: skills split one per item (assignIds). Each bump re-extracts every cached master
 
 export interface CachedMaster { version: number, pdfSha256: string, extractedAt: string, model: string, cv: MasterCv }
 

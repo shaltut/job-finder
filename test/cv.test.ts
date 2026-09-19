@@ -464,6 +464,7 @@ test('a control character in the extraction never reaches the master CV', () => 
 // escape text into the raw byte, which still runs and still passes while the source is corrupt.
 const CTRL = String.fromCharCode(14) // U+000E, the one the real CV text layer carried
 const ZWSP = String.fromCharCode(8203) // U+200B
+const NONCHAR = String.fromCharCode(0xFFFE) // U+FFFE, found in the real master's summary on 2026-09-19
 
 test('a control character the model emitted never reaches the rendered CV either', () => {
   // The master is cleaned in assignIds; the tailored summary and bullets are model output and were not,
@@ -477,6 +478,26 @@ test('a control character the model emitted never reaches the rendered CV either
   assert.equal(r.cv.summary, 'Backend engineer with 9 years delivering payment systems on .NET and PostgreSQL.')
   assert.equal(r.cv.roles[0]!.bullets[0], 'Reduced invoice generation latency by 40% by tuning query plans.')
   assert.equal(renderCvHtml(r.cv, profile).includes(CTRL), false)
+})
+
+test('a Unicode noncharacter never reaches the rendered CV', () => {
+  // U+FFFE is a permanently reserved noncharacter: it is not a control character and it is not the BOM,
+  // so the original regex — which stripped U+FEFF one hex digit away — let it straight through. Found in
+  // the real cached master's summary on 2026-09-19, one occurrence, meaning every tailored CV built from
+  // that cache shipped a tofu box in the first line a recruiter reads.
+  const t = tailored()
+  t.summary = 'Backend engineer with 9 years' + NONCHAR + ' delivering payment systems on .NET and PostgreSQL.'
+  const r = tailoredCv(t, master())
+  assert.ok(r.ok, r.ok ? '' : r.reason)
+  assert.equal(r.cv.summary, 'Backend engineer with 9 years delivering payment systems on .NET and PostgreSQL.')
+  assert.equal(renderCvHtml(r.cv, profile).includes(NONCHAR), false, 'a noncharacter must not print into the PDF')
+})
+
+test('cleaning a noncharacter out of the master is worthless without a cache bump', () => {
+  // The master is cached by (pdf hash, MASTER_CACHE_VERSION). Widening clean() changes what extraction
+  // produces but not the hash, so a cache written under the old rule is served forever and the fix does
+  // nothing for the install that needed it. The version is the only thing that forces a re-extract.
+  assert.ok(MASTER_CACHE_VERSION >= 3, 'widening clean() must bump MASTER_CACHE_VERSION, or stale masters keep their noncharacters')
 })
 
 test('a control character cannot smuggle a technology past rule 5', () => {
