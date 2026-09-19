@@ -12,6 +12,7 @@ import { runDrafter, type DraftPost } from './drafter'
 import { persist, signature } from './drafts'
 import { ccFrom, createDraft, gmail, renderHtml, replyHeaders } from './gmail'
 import { closedBy, decideStage, untilDue, type Decision, type GmailMessage } from './stages'
+import { healContact } from './contacts'
 
 interface RawMessage {
   id: string
@@ -67,14 +68,24 @@ export async function closedInGmail(
 ): Promise<false | string> {
   const cached = db.prepare('SELECT stage FROM contacts WHERE email = ?')
     .get(email.toLowerCase()) as { stage: Decision['stage'] } | undefined
-  return closedBy(decideStage({
+  const d = decideStage({
     messages: await threadMessages(email),
     selfEmail,
     recruiterEmail: email,
     dbStage: cached?.stage ?? null,
     hasPendingDraft: await hasPendingDraft(email),
     now
-  }))
+  })
+  const closed = closedBy(d)
+  // Gmail is the only state two machines running this app share, and this is the one moment either of
+  // them asks about an address it has never seen — the sweep cannot, because it only revisits addresses
+  // `contacts` already holds. So keep the verdict instead of discarding it with the rest of the Decision.
+  //
+  // Only when closed. Row 8 is the open one and it means nothing has ever been written to this address;
+  // `contacts` is the record of recruiters written to, and a row there for a stranger would put them in
+  // the Pipeline view and into the next sweep's Gmail calls.
+  if (closed) healContact(db, email, d, now)
+  return closed
 }
 
 export interface SweepLine {
