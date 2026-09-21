@@ -1,6 +1,6 @@
 import { and, desc, eq, isNotNull, isNull, like, or, sql } from 'drizzle-orm'
 import { z } from 'zod'
-import { applications, posts } from '../db/schema'
+import { applications, contacts, posts } from '../db/schema'
 import { db } from '../utils/db'
 
 const query = z.object({
@@ -86,10 +86,15 @@ export default defineEventHandler(async (event) => {
       dismissedAt: posts.dismissedAt,
       appliedAt: posts.appliedAt,
       verdict: applications.verdict,
-      verdictReason: applications.reason
+      verdictReason: applications.reason,
+      stage: contacts.stage
     })
     .from(posts)
     .leftJoin(applications, eq(applications.key, posts.key))
+    // The recruiter's stage, by the post's first address — the one the drafter groups by, and already
+    // lower-case from extraction. `email` is the primary key, so this never multiplies a row, and the
+    // count below needs no such join.
+    .leftJoin(contacts, sql`${contacts.email} = json_extract(${posts.emails}, '$[0]')`)
     .where(where.length ? and(...where) : undefined)
     // flagged posts sort last, then best score, then most recently posted — the original's ordering
     .orderBy(sql`json_array_length(${posts.flags}) > 0`, desc(posts.score), desc(posts.postedAt))

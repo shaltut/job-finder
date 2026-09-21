@@ -17,6 +17,7 @@ import Database from 'better-sqlite3'
 import { applyRecord, type ScraperRecord } from '../server/utils/ingest.ts'
 import { persist } from '../server/utils/drafts.ts'
 import type { DraftRequest, DraftResponse } from '../server/utils/drafter.ts'
+import { sentTo } from '../shared/recruiter-stage.ts'
 
 let dir: string
 let db: Database.Database
@@ -157,6 +158,16 @@ test('the Gmail gate writes no row for a chosen post either', () => {
   )
 })
 
+test('the Draft button hides on a recruiter Gmail has mail for, and never on a pending draft', () => {
+  // Hiding it on `drafted` is the silent failure: a Gmail draft deleted unsent reopens the recruiter,
+  // and a hidden button would leave nothing but curl able to reach the gate that can see that.
+  assert.equal(sentTo(null), false, 'a recruiter never written to keeps the button')
+  assert.equal(sentTo('drafted'), false, 'a pending draft can be deleted unsent, so only the gate can tell')
+  for (const s of ['contacted', 'followed_up', 'replied', 'final'] as const) {
+    assert.equal(sentTo(s), true, `${s}: the gate can only refuse, so the button would be noise`)
+  }
+})
+
 test('the Posts view keeps the Draft button on a skipped post', () => {
   // The whole of what buried a skipped post: 'skipped' is as truthy as 'drafted', so gating the button
   // on `r.verdict` hid the one control that could overrule the model. CLAUDE.md has described
@@ -165,4 +176,5 @@ test('the Posts view keeps the Draft button on a skipped post', () => {
   const gate = page.slice(page.indexOf('r.dismissedAt || r.appliedAt'), page.indexOf('label: \'Draft\''))
   assert.match(gate, /r\.verdict === 'drafted'/, 'the Draft button must hide on drafted only, never on skipped')
   assert.doesNotMatch(gate, /\|\|\s*r\.verdict\s*\|\|/, 'a bare `r.verdict` here hides the button on skipped posts too')
+  assert.match(gate, /sentTo\(r\.stage\)/, 'sentTo() is only tested above; this pins that the button actually uses it')
 })

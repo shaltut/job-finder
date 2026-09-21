@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { findFinishedMatch, stalePastes, type FinishedPasteJob } from '#shared/paste-poll'
+import { sentTo, STAGE_LABEL } from '#shared/recruiter-stage'
 import type { TableColumn } from '@nuxt/ui'
-import type { PostRow } from '~/types'
+import type { JobState, PostRow } from '~/types'
 
 useDashboard()
 useHead({ title: 'Posts' })
@@ -27,11 +28,38 @@ async function draft(key: string) {
       description: r.queued ? 'Read it in the Pipeline view in ~30s.' : r.note,
       icon: 'i-lucide-pen-line'
     })
+    drafting.add(key)
+    draftTimer ??= setInterval(pollDraftLane, 3000)
   } catch (e) {
     queued.value = new Set([...queued.value].filter(k => k !== key))
     toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
   }
 }
+
+// Keys pressed here whose draft job has not finished. What the job leaves behind — a verdict, or the
+// stage the Gmail gate wrote into `contacts` — only reaches the row when the list is fetched again, so
+// refresh once a key is neither queued nor in the running job. A queued request carries `args.key`;
+// pump() moves it into `args.keys` when the job starts, so both are checked. A separate set from
+// `queued`, which any refresh clears (a filter change included) and would stop this poll early.
+const drafting = new Set<string>()
+let draftTimer: ReturnType<typeof setInterval> | null = null
+
+async function pollDraftLane() {
+  const s = await $fetch<JobState>('/api/job')
+  const running = (s.lanes.draft.current?.args.keys ?? []) as string[]
+  const done = [...drafting].filter(k => !running.includes(k) && !s.queue.some(q => q.args.key === k))
+  if (!done.length) return
+  done.forEach(k => drafting.delete(k))
+  if (!drafting.size && draftTimer) {
+    clearInterval(draftTimer)
+    draftTimer = null
+  }
+  await Promise.all([refresh(), refreshNuxtData('stats')])
+}
+
+onUnmounted(() => {
+  if (draftTimer) clearInterval(draftTimer)
+})
 
 // ---------------- paste ----------------
 
@@ -444,17 +472,29 @@ const columns: TableColumn<PostRow>[] = [
   {
     accessorKey: 'verdict',
     header: 'Status',
-    // the owner's own triage outranks the drafter's verdict: a drafted post can be dismissed too
-    cell: ({ row }) => row.original.dismissedAt
-      ? h(UBadge, { variant: 'subtle', color: 'neutral' }, () => 'dismissed')
-      : row.original.appliedAt
-        ? h(UBadge, { variant: 'subtle', color: 'success' }, () => 'applied')
-        : row.original.verdict
-          ? h(UBadge, {
-              variant: 'subtle',
-              color: row.original.verdict === 'drafted' ? 'primary' : 'neutral'
-            }, () => row.original.verdict)
-          : h('span', { class: 'text-xs text-muted' }, 'unprocessed')
+    // the owner's own triage outranks the drafter's verdict: a drafted post can be dismissed too.
+    // The recruiter's stage outranks the verdict in turn — `drafted` is only where a post starts, and
+    // a post whose recruiter was written to about another role has no verdict at all. The verdict's
+    // reason stays on hover, since the stage badge hides it.
+    cell: ({ row }) => {
+      const r = row.original
+      return r.dismissedAt
+        ? h(UBadge, { variant: 'subtle', color: 'neutral' }, () => 'dismissed')
+        : r.appliedAt
+          ? h(UBadge, { variant: 'subtle', color: 'success' }, () => 'applied')
+          : r.stage
+            ? h(UBadge, {
+                variant: 'subtle',
+                color: r.stage === 'replied' ? 'success' : r.stage === 'final' ? 'neutral' : 'primary',
+                title: r.verdictReason ?? undefined
+              }, () => STAGE_LABEL[r.stage!])
+            : r.verdict
+              ? h(UBadge, {
+                  variant: 'subtle',
+                  color: r.verdict === 'drafted' ? 'primary' : 'neutral'
+                }, () => r.verdict)
+              : h('span', { class: 'text-xs text-muted' }, 'unprocessed')
+    }
   },
   {
     id: 'actions',
@@ -485,7 +525,8 @@ const columns: TableColumn<PostRow>[] = [
         // path this file has always been documented as providing and never did, because 'skipped' is
         // as truthy as 'drafted'. The post is out of the batch queue for good by then, so hiding the
         // button was the whole of what buried it.
-        r.dismissedAt || r.appliedAt || r.verdict === 'drafted' || !r.emails.length
+        // sentTo(): Gmail already holds mail for this recruiter, so the gate could only refuse.
+        r.dismissedAt || r.appliedAt || r.verdict === 'drafted' || sentTo(r.stage) || !r.emails.length
           ? null
           : h(UButton, {
               label: 'Draft',

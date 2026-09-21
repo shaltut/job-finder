@@ -469,7 +469,11 @@ drafts keep arguing from a stale CV.
   Pinned by `test/manual-draft.test.ts`, because the bug was invisible: nothing failed, posts just quietly
   stopped existing. **The re-draft still depends on the recruiter**: if an
   application to them has already gone out, the Gmail gate closes at row 5 and pressing Draft declines the
-  post again rather than sending a second application — but writes no row, so the button stays. It is not
+  post again rather than sending a second application. It writes no `applications` row, but the gate's
+  `healContact()` does write the stage into `contacts`, and the Posts view reads that: `posts.get.ts`
+  joins `contacts` on `emails[0]`, the Status badge shows the recruiter's stage over the verdict, and
+  `sentTo()` in `shared/recruiter-stage.ts` hides Draft on every stage but `drafted` — a pending draft
+  deleted unsent reopens the recruiter, and only the gate can see that. It is not
   lost either way — a skipped reason does not start
   with `named in `, so the follow-up picks the role up and names it there. A guard rejection writes no row at all, so those posts stay
   unprocessed and the next run picks them up, the same posture as a failed score. `jobs.ts` catches per

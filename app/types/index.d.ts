@@ -35,6 +35,8 @@ export interface PostRow {
   appliedAt: string | null
   verdict: Verdict | null
   verdictReason: string | null
+  /** The recruiter's stage in `contacts`, by the post's first address; null if never written to. */
+  stage: Stage | null
 }
 
 export interface Stats {
