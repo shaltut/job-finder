@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { check, index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { check, index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
 /**
  * Ported from the original Postgres `schema.sql`. Three translations matter:
@@ -133,6 +133,41 @@ export const contacts = sqliteTable('contacts', {
   // Addresses are lower-cased before any query or insert; the database refuses anything else.
   check('contacts_email_lower', sql`${t.email} = lower(${t.email})`)
 ])
+
+/**
+ * One row per requirement an application post states, judged against the master CV. Written only by the
+ * `gaps` job (server/utils/gaps.ts), and only rows whose quotes survived verification: `quote` is in the
+ * post, and `cv_shows` is in the master CV unless the status is `absent`, when it is ''. The status
+ * vocabulary is shared/background.ts's — one meaning of "partial" in this codebase, not two.
+ */
+export const postRequirements = sqliteTable('post_requirements', {
+  key: text('key').notNull().references(() => posts.key, { onDelete: 'cascade' }),
+  /** the keyword as a CV would write it; unique per post case-insensitively, enforced in code */
+  term: text('term').notNull(),
+  category: text('category', { enum: ['technology', 'domain', 'certification', 'practice', 'language', 'other'] }).notNull(),
+  importance: text('importance', { enum: ['must', 'nice'] }).notNull(),
+  status: text('status', { enum: ['present', 'partial', 'absent'] }).notNull(),
+  quote: text('quote').notNull(),
+  cvShows: text('cv_shows').notNull().default('')
+}, t => [
+  primaryKey({ columns: [t.key, t.term] })
+])
+
+/**
+ * One row per post the gaps job has read, and against which CV. It is what tells "done, nothing stated"
+ * from "not attempted", and what makes a new CV visible: a run whose `cv_sha` differs from the current
+ * CV's is stale and gets read again.
+ */
+export const requirementRuns = sqliteTable('requirement_runs', {
+  key: text('key').primaryKey().references(() => posts.key, { onDelete: 'cascade' }),
+  /** pdfSha256 of the CV this post was read against */
+  cvSha: text('cv_sha').notNull(),
+  model: text('model').notNull(),
+  /** rows stored / rows the checks discarded — a rising drop count is a drifting prompt */
+  kept: integer('kept').notNull(),
+  dropped: integer('dropped').notNull(),
+  extractedAt: integer('extracted_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`)
+})
 
 export type Post = typeof posts.$inferSelect
 export type NewPost = typeof posts.$inferInsert
