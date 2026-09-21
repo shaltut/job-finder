@@ -220,8 +220,14 @@ watch(type, (t) => {
 const expanded = ref<Record<string, boolean>>({})
 const rowSelection = ref<Record<string, boolean>>({})
 
+// Paged, because the server returns at most `limit` rows while reporting the full count: without this
+// the header read "834 posts" over the top 100 by score, and nothing said the rest existed.
+const PAGE_SIZE = 100
+const page = ref(1)
+const offset = computed(() => (page.value - 1) * PAGE_SIZE)
+
 const { data, status: reqStatus, refresh } = await useFetch<{ rows: PostRow[], total: number }>('/api/posts', {
-  query: { q, flags, scope, status, channel, minScore, type },
+  query: { q, flags, scope, status, channel, minScore, type, limit: PAGE_SIZE, offset },
   lazy: true,
   default: () => ({ rows: [], total: 0 })
 })
@@ -241,7 +247,25 @@ const selectedKeys = computed(() => data.value.rows.filter(r => rowSelection.val
 
 watch([q, flags, type, scope, status, channel, minScore], () => {
   rowSelection.value = {}
+  page.value = 1
 })
+
+// Dismissing or marking applied every row on the last page leaves it past the end: step back a page
+// rather than show an empty table under a count that says the posts exist.
+watch(() => data.value.total, (total) => {
+  page.value = Math.min(page.value, Math.max(1, Math.ceil(total / PAGE_SIZE)))
+})
+
+const rangeLabel = computed(() => {
+  const total = data.value.total
+  return total <= PAGE_SIZE
+    ? `${total} posts`
+    : `${offset.value + 1}–${Math.min(offset.value + PAGE_SIZE, total)} of ${total} posts`
+})
+
+// The pager sits under the table, so a page change would otherwise land at the bottom of the new page.
+const filterBar = useTemplateRef<HTMLElement>('filterBar')
+watch(page, () => filterBar.value?.scrollIntoView({ block: 'start' }))
 
 /**
  * Mark posts applied, or un-mark them. A post reachable only by link or number can never become a
@@ -669,7 +693,10 @@ const columns: TableColumn<PostRow>[] = [
         </template>
       </UCard>
 
-      <div class="flex flex-wrap items-center gap-1.5">
+      <div
+        ref="filterBar"
+        class="flex flex-wrap items-center gap-1.5"
+      >
         <UInput
           v-model="q"
           class="max-w-sm"
@@ -779,7 +806,7 @@ const columns: TableColumn<PostRow>[] = [
               @click="setDismissed(selectedKeys, true)"
             />
           </template>
-          <span class="text-sm text-muted">{{ data.total }} posts</span>
+          <span class="text-sm text-muted">{{ rangeLabel }}</span>
         </div>
       </div>
 
@@ -858,6 +885,18 @@ const columns: TableColumn<PostRow>[] = [
           </div>
         </template>
       </UTable>
+
+      <div
+        v-if="data.total > PAGE_SIZE"
+        class="flex justify-center py-2 shrink-0"
+      >
+        <UPagination
+          v-model:page="page"
+          :total="data.total"
+          :items-per-page="PAGE_SIZE"
+          show-edges
+        />
+      </div>
 
       <div
         v-if="!data.rows.length && reqStatus !== 'pending'"
