@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
 import { applyRecord, type ScraperRecord } from '../server/utils/ingest.ts'
-import { verifyRequirements, type RawRequirement } from '../server/utils/gaps.ts'
+import { extractGaps, pendingApplications, storeRun, verifyRequirements, type RawRequirement } from '../server/utils/gaps.ts'
 
 let dir: string
 let db: Database.Database
@@ -133,4 +133,85 @@ test('an empty term is dropped and a long one is capped', () => {
   const { kept, dropped } = verifyRequirements([req({ term: '  ' }), req({ term: 'K'.repeat(80) })], POST, CV)
   assert.deepEqual(dropped.map(d => d.why), ['no term'])
   assert.equal(kept[0]!.term.length, 60)
+})
+
+const draft = (key: string) =>
+  db.prepare(`INSERT INTO applications (key, verdict, reason) VALUES (?, 'drafted', 'named in application')`).run(key)
+const skip = (key: string) =>
+  db.prepare(`INSERT INTO applications (key, verdict, reason) VALUES (?, 'skipped', 'outside the field')`).run(key)
+const applyByHand = (key: string) => db.prepare('UPDATE posts SET applied_at = unixepoch() WHERE key = ?').run(key)
+const pendingOf = (sha: string, mine: string[]) =>
+  pendingApplications(db, sha).map(p => p.key).filter(key => mine.includes(key)).sort()
+
+test('an application is a drafted post or one applied to by hand, and nothing else', () => {
+  const [drafted, applied, skipped, untouched] = [k(10), k(11), k(12), k(13)]
+  for (const key of [drafted, applied, skipped, untouched]) addPost(key)
+  draft(drafted)
+  applyByHand(applied)
+  skip(skipped)
+  assert.deepEqual(pendingOf('sha-1', [drafted, applied, skipped, untouched]), [drafted, applied])
+})
+
+test('a post read against this CV is done, and a new CV makes it pending again', () => {
+  const key = k(20)
+  addPost(key)
+  draft(key)
+  storeRun(db, key, [], { cvSha: 'sha-1', model: 'm', dropped: 0 })
+  assert.deepEqual(pendingOf('sha-1', [key]), [], 'read against the current CV: done, even with no rows')
+  assert.deepEqual(pendingOf('sha-2', [key]), [key], 'a different CV makes it stale')
+})
+
+test('a re-run replaces the post\'s rows and its run, never mixing old and new', () => {
+  const key = k(30)
+  addPost(key)
+  draft(key)
+  storeRun(db, key, [req({ term: 'A' }), req({ term: 'B' })], { cvSha: 'sha-1', model: 'm', dropped: 2 })
+  storeRun(db, key, [req({ term: 'C' })], { cvSha: 'sha-2', model: 'm2', dropped: 0 })
+  const terms = db.prepare('SELECT term FROM post_requirements WHERE key = ? ORDER BY term').all(key) as { term: string }[]
+  assert.deepEqual(terms.map(t => t.term), ['C'])
+  const run = db.prepare('SELECT cv_sha, model, kept, dropped FROM requirement_runs WHERE key = ?').get(key)
+  assert.deepEqual(run, { cv_sha: 'sha-2', model: 'm2', kept: 1, dropped: 0 })
+})
+
+test('the loop stores what verifies, leaves a failed call pending, and says so', async () => {
+  const [ok, broken, empty] = [k(40), k(41), k(42)]
+  // distinct text per post, so the fake model below can tell them apart
+  addPost(ok)
+  addPost(broken, `${POST} BROKEN`)
+  addPost(empty, `${POST} EMPTY`)
+  for (const key of [ok, broken, empty]) draft(key)
+  const log: string[] = []
+  const invented = req({ term: 'Go', quote: '3 years of Go microservices', status: 'absent', cvShows: '' })
+  const res = await extractGaps(db, {
+    cvText: CV,
+    cvSha: 'sha-loop',
+    model: 'fake',
+    ask: async (text) => {
+      if (text.includes('BROKEN')) throw new Error('rate limited')
+      if (text.includes('EMPTY')) return []
+      return [req(), invented]
+    }
+  }, line => log.push(line))
+
+  // the fixture posts from earlier tests are pending under this sha too, so compare only ours
+  assert.equal(count('post_requirements', ok), 1, 'the verified row is stored, the invented one is not')
+  assert.equal(count('requirement_runs', broken), 0, 'a failed call writes nothing, so it is retried next run')
+  assert.equal(count('requirement_runs', empty), 1, 'an empty table is still a completed read')
+  assert.ok(res.stored < res.pending, 'the failure is visible in the counts')
+  assert.ok(log.some(l => l.includes('rate limited') && l.includes('left for the next run')))
+  assert.ok(log.some(l => l.includes('no requirements at all') && l.includes('JOBFINDER_GAPS_MODEL')))
+  assert.ok(log.some(l => l.includes('quote not found in the post')), 'drops are reported with their reason')
+})
+
+test('Stop is honoured between posts', async () => {
+  const key = k(50)
+  addPost(key)
+  draft(key)
+  const abort = new AbortController()
+  abort.abort()
+  const log: string[] = []
+  const res = await extractGaps(db, { cvText: CV, cvSha: 'sha-stop', model: 'fake', ask: async () => [req()] },
+    line => log.push(line), abort.signal)
+  assert.equal(res.stored, 0)
+  assert.ok(log.includes('stopped'))
 })

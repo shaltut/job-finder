@@ -10,6 +10,9 @@
 // sides — the post, and the CV.
 import { excludeRule } from '../../scraper/lib.ts'
 import { matchKey } from './cv-master.ts'
+import type Database from 'better-sqlite3'
+
+type Db = Database.Database
 
 export const REQUIREMENT_CATEGORIES = ['technology', 'domain', 'certification', 'practice', 'language', 'other'] as const
 export type RequirementCategory = typeof REQUIREMENT_CATEGORIES[number]
@@ -145,4 +148,93 @@ export function verifyRequirements(
     })
   }
   return { kept, dropped }
+}
+
+/**
+ * Application posts not yet read against this CV: drafted by the app, or applied to by hand. Newest
+ * application first, so a backfill that is stopped part-way has read the posts that matter most.
+ */
+export function pendingApplications(db: Db, cvSha: string): { key: string, text: string }[] {
+  return db.prepare(`
+    SELECT p.key, p.text FROM posts p
+    LEFT JOIN applications a ON a.key = p.key
+    LEFT JOIN requirement_runs r ON r.key = p.key
+    WHERE (a.verdict = 'drafted' OR p.applied_at IS NOT NULL)
+      AND (r.key IS NULL OR r.cv_sha <> ?)
+    ORDER BY coalesce(p.applied_at, a.created_at) DESC
+  `).all(cvSha) as { key: string, text: string }[]
+}
+
+export interface GapRunMeta { cvSha: string, model: string, dropped: number }
+
+/** Replaces the post's rows and its run in one transaction, so a post is never half old CV, half new. */
+export function storeRun(db: Db, key: string, kept: RawRequirement[], meta: GapRunMeta): void {
+  db.transaction(() => {
+    db.prepare('DELETE FROM post_requirements WHERE key = ?').run(key)
+    const insert = db.prepare(`
+      INSERT INTO post_requirements (key, term, category, importance, status, quote, cv_shows)
+      VALUES (@key, @term, @category, @importance, @status, @quote, @cvShows)
+    `)
+    for (const r of kept) {
+      insert.run({ key, term: r.term, category: r.category, importance: r.importance, status: r.status, quote: r.quote, cvShows: r.cvShows })
+    }
+    db.prepare(`
+      INSERT INTO requirement_runs (key, cv_sha, model, kept, dropped, extracted_at)
+      VALUES (@key, @cvSha, @model, @kept, @dropped, unixepoch())
+      ON CONFLICT (key) DO UPDATE SET
+        cv_sha = excluded.cv_sha, model = excluded.model, kept = excluded.kept,
+        dropped = excluded.dropped, extracted_at = excluded.extracted_at
+    `).run({ key, cvSha: meta.cvSha, model: meta.model, kept: kept.length, dropped: meta.dropped })
+  })()
+}
+
+export interface GapsDeps {
+  /** the model call: the post and the CV text in, the raw verdict table out */
+  ask: (postText: string, cvText: string) => Promise<RawRequirement[]>
+  cvText: string
+  cvSha: string
+  model: string
+}
+
+/**
+ * Reads every pending application once. A failed call writes nothing, so the post is simply pending
+ * again next time — the posture a failed score has. `stored < pending` is how the caller knows to exit 1.
+ */
+export async function extractGaps(
+  db: Db, deps: GapsDeps, push: (line: string) => void, signal?: AbortSignal
+): Promise<{ stored: number, pending: number }> {
+  const pending = pendingApplications(db, deps.cvSha)
+  if (!pending.length) {
+    push('gaps: every application is already read against the current CV')
+    return { stored: 0, pending: 0 }
+  }
+  push(`gaps: ${pending.length} application(s) to read with ${deps.model}`)
+  let stored = 0
+  for (const p of pending) {
+    if (signal?.aborted) {
+      push('stopped')
+      break
+    }
+    const id = p.key.slice(0, 8)
+    let raw: RawRequirement[]
+    try {
+      raw = await deps.ask(p.text, deps.cvText)
+    } catch (e) {
+      push(`${id}: ${(e as Error).message} — left for the next run`)
+      continue
+    }
+    const { kept, dropped } = verifyRequirements(raw, p.text, deps.cvText)
+    storeRun(db, p.key, kept, { cvSha: deps.cvSha, model: deps.model, dropped: dropped.length })
+    stored++
+    // An empty table is valid against the strict schema, which is exactly how nano failed on this task:
+    // say so rather than let it read as a post that asks for nothing.
+    if (!raw.length) {
+      push(`${id}: the model returned no requirements at all — if this repeats, set JOBFINDER_GAPS_MODEL to a stronger model`)
+    } else {
+      const why = [...new Set(dropped.map(d => d.why))].join('; ')
+      push(`${id}: ${kept.length} kept${dropped.length ? `, ${dropped.length} dropped (${why})` : ''}`)
+    }
+  }
+  push(`gaps: ${stored} of ${pending.length} read`)
+  return { stored, pending: pending.length }
 }
