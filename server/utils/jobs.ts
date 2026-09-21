@@ -489,8 +489,6 @@ async function runDraftJob(
       if (res.report) res.report.split('\n').filter(Boolean).forEach(push)
     }
     if (config.tailorCv) push(`cv: ${tailoredCount} tailored, ${fellBack} fell back`)
-    // every drafted post is a new application: read it for the gap record, after this lane frees up
-    if (job.added) enqueue('gaps')
     return 0
   } finally {
     // Neither close may depend on the other surviving. Closing the browser first meant a rejected
@@ -501,6 +499,9 @@ async function runDraftJob(
     const closingBrowser = renderer.close().catch(() => {})
     close()
     await closingBrowser
+    // every drafted post is a new application: read it for the gap record, after this lane frees up —
+    // in finally so a Stop (return 1) or a throw still queues it when a post was drafted before either
+    if (job.added) enqueue('gaps')
   }
 }
 
