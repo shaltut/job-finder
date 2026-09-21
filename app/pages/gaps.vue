@@ -48,7 +48,7 @@ const columns: TableColumn<GapTerm>[] = [
   },
   {
     accessorKey: 'category',
-    header: 'RequirementCategory',
+    header: 'Category',
     cell: ({ row }) => h('span', { class: 'text-muted' }, row.original.category)
   },
   {
