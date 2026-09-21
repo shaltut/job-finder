@@ -8,7 +8,11 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
 import { applyRecord, type ScraperRecord } from '../server/utils/ingest.ts'
-import { extractGaps, pendingApplications, storeRun, verifyRequirements, type RawRequirement } from '../server/utils/gaps.ts'
+import {
+  aggregateGaps, applicationCounts, extractGaps, pendingApplications, requirementRows, storeRun,
+  verifyRequirements, type GapRow, type RawRequirement
+} from '../server/utils/gaps.ts'
+import { keywordList, modeStatus, type GapTerm } from '../shared/gaps.ts'
 
 let dir: string
 let db: Database.Database
@@ -214,4 +218,71 @@ test('Stop is honoured between posts', async () => {
     line => log.push(line), abort.signal)
   assert.equal(res.stored, 0)
   assert.ok(log.includes('stopped'))
+})
+
+test('the most frequent status wins, and a tie goes to the worse one', () => {
+  assert.equal(modeStatus(['present', 'present', 'absent']), 'present')
+  assert.equal(modeStatus(['present', 'absent']), 'absent', 'a split verdict never hides a gap')
+  assert.equal(modeStatus(['partial', 'present']), 'partial')
+  assert.equal(modeStatus(['partial', 'absent', 'partial']), 'partial')
+})
+
+const row = (over: Partial<GapRow>): GapRow => ({
+  key: k(900), term: 'React', category: 'technology', importance: 'must', status: 'absent',
+  quote: 'q', cvShows: '', title: 'T', company: 'C', postUrl: null, appliedAt: 1_758_441_600, ...over
+})
+
+test('grouping: absent is Learn; otherwise On your CV when the CV names it on whole words, else Add now', () => {
+  const cv = 'Built APIs in C# on .NET 8, deployed on Google Cloud.'
+  const terms = aggregateGaps([
+    row({ term: 'React', status: 'absent' }),
+    row({ term: 'C#', status: 'present' }),
+    row({ term: '.NET', status: 'partial' }),
+    row({ term: 'Go', status: 'partial' }) // "Google" must not count as Go
+  ], cv)
+  const group = Object.fromEntries(terms.map(t => [t.term, t.group]))
+  assert.deepEqual(group, { 'React': 'learn', 'C#': 'on-cv', '.NET': 'on-cv', 'Go': 'add' })
+})
+
+test('terms group case-insensitively and rank by applications, then must-haves', () => {
+  const terms = aggregateGaps([
+    row({ key: k(901), term: 'Kafka' }),
+    row({ key: k(902), term: 'kafka', importance: 'nice' }),
+    row({ key: k(903), term: 'Terraform' }),
+    row({ key: k(904), term: 'Rust', importance: 'nice' }),
+    row({ key: k(905), term: 'Rust', importance: 'nice' })
+  ], '')
+  assert.deepEqual(terms.map(t => [t.term, t.applications, t.must]), [
+    ['Kafka', 2, 1], ['Rust', 2, 0], ['Terraform', 1, 1]
+  ])
+  assert.equal(terms[0]!.posts.length, 2, 'every application behind the term is listed')
+  assert.equal(terms[0]!.lastSeen, new Date(1_758_441_600_000).toISOString())
+})
+
+test('the copyable list has Add now, then Learn, and leaves out what is already on the CV', () => {
+  const t = (term: string, group: GapTerm['group'], applications: number, must: number): GapTerm =>
+    ({ term, category: 'technology', group, applications, must, lastSeen: null, posts: [] })
+  assert.equal(keywordList([t('React', 'learn', 12, 8), t('GitOps', 'add', 7, 5), t('C#', 'on-cv', 20, 20), t('Rust', 'learn', 1, 0)]),
+    'Add now — you have it, your CV doesn\'t say it\n'
+    + '- GitOps — 7 applications (5 must-have)\n\n'
+    + 'Learn — not on your CV yet\n'
+    + '- React — 12 applications (8 must-have)\n'
+    + '- Rust — 1 application (0 must-have)')
+})
+
+test('the page reads application rows only, and counts what was read against the current CV', () => {
+  const [a, b, gone] = [k(60), k(61), k(62)]
+  for (const key of [a, b, gone]) addPost(key)
+  draft(a)
+  applyByHand(b)
+  skip(gone) // rows left behind by a post that is not an application must not be ranked
+  storeRun(db, a, [req({ term: 'ZetaTerm' })], { cvSha: 'sha-page', model: 'm', dropped: 0 })
+  storeRun(db, b, [req({ term: 'ZetaTerm' })], { cvSha: 'sha-old', model: 'm', dropped: 0 })
+  storeRun(db, gone, [req({ term: 'ZetaTerm' })], { cvSha: 'sha-page', model: 'm', dropped: 0 })
+
+  const zeta = requirementRows(db).filter(r => r.term === 'ZetaTerm').map(r => r.key).sort()
+  assert.deepEqual(zeta, [a, b])
+  const counts = applicationCounts(db, 'sha-page')
+  assert.ok(counts.applications >= 2)
+  assert.ok(counts.analysed < counts.applications, 'b was read against an older CV, so it is not counted')
 })

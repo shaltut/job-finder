@@ -277,7 +277,7 @@ export function openAiExtractor(): Extractor {
   }
 }
 
-function readCache(path: string): CachedMaster | null {
+export function readCache(path: string): CachedMaster | null {
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as CachedMaster
   } catch {

@@ -10,9 +10,13 @@
 // sides — the post, and the CV.
 import { excludeRule } from '../../scraper/lib.ts'
 import { matchKey } from './cv-master.ts'
+import { groupFor, modeStatus, type GapTerm } from '../../shared/gaps.ts'
 import type Database from 'better-sqlite3'
 
 type Db = Database.Database
+
+/** What counts as an application, everywhere: drafted by the app, or applied to by hand. */
+const IS_APPLICATION = `(a.verdict = 'drafted' OR p.applied_at IS NOT NULL)`
 
 export const REQUIREMENT_CATEGORIES = ['technology', 'domain', 'certification', 'practice', 'language', 'other'] as const
 export type RequirementCategory = typeof REQUIREMENT_CATEGORIES[number]
@@ -159,7 +163,7 @@ export function pendingApplications(db: Db, cvSha: string): { key: string, text:
     SELECT p.key, p.text FROM posts p
     LEFT JOIN applications a ON a.key = p.key
     LEFT JOIN requirement_runs r ON r.key = p.key
-    WHERE (a.verdict = 'drafted' OR p.applied_at IS NOT NULL)
+    WHERE ${IS_APPLICATION}
       AND (r.key IS NULL OR r.cv_sha <> ?)
     ORDER BY coalesce(p.applied_at, a.created_at) DESC
   `).all(cvSha) as { key: string, text: string }[]
@@ -237,4 +241,86 @@ export async function extractGaps(
   }
   push(`gaps: ${stored} of ${pending.length} read`)
   return { stored, pending: pending.length }
+}
+
+/** One requirement row of one application post, with what the page shows beside it. */
+export interface GapRow {
+  key: string
+  term: string
+  category: string
+  importance: RequirementImportance
+  status: RequirementStatus
+  quote: string
+  cvShows: string
+  title: string | null
+  company: string | null
+  postUrl: string | null
+  /** epoch seconds: the draft's created_at, or applied_at for a post applied to by hand */
+  appliedAt: number | null
+}
+
+/**
+ * Every stored requirement of every application post. Filtered on the application predicate again, not
+ * just on the rows existing: a post un-marked applied keeps its rows, and must stop being ranked.
+ */
+export function requirementRows(db: Db): GapRow[] {
+  return db.prepare(`
+    SELECT r.key, r.term, r.category, r.importance, r.status, r.quote, r.cv_shows AS cvShows,
+           p.title, p.company, p.post_url AS postUrl,
+           coalesce(CASE WHEN a.verdict = 'drafted' THEN a.created_at END, p.applied_at) AS appliedAt
+    FROM post_requirements r
+    JOIN posts p ON p.key = r.key
+    LEFT JOIN applications a ON a.key = p.key
+    WHERE ${IS_APPLICATION}
+  `).all() as GapRow[]
+}
+
+/** How many applications exist, and how many were read against the CV with this sha. */
+export function applicationCounts(db: Db, cvSha: string): { applications: number, analysed: number } {
+  return db.prepare(`
+    SELECT count(*) AS applications, count(r.key) AS analysed
+    FROM posts p
+    LEFT JOIN applications a ON a.key = p.key
+    LEFT JOIN requirement_runs r ON r.key = p.key AND r.cv_sha = ?
+    WHERE ${IS_APPLICATION}
+  `).get(cvSha) as { applications: number, analysed: number }
+}
+
+const mostFrequent = (xs: string[]): string => {
+  const n = new Map<string, number>()
+  for (const x of xs) n.set(x, (n.get(x) ?? 0) + 1)
+  return [...n.entries()].reduce((best, e) => (e[1] > best[1] ? e : best))[0]
+}
+
+const iso = (seconds: number | null) => (seconds ? new Date(seconds * 1000).toISOString() : null)
+
+/**
+ * Terms across applications, grouped case-insensitively and ranked by how many applications ask, then how
+ * many make it a must-have. `cvText` is the CURRENT master CV, so "on your CV" follows a CV update before
+ * any re-extraction. The match is excludeRule()'s: whole words where \b can see the edge, so `C#` and
+ * `.NET` still match and `Go` does not match "Google".
+ */
+export function aggregateGaps(rows: GapRow[], cvText: string): GapTerm[] {
+  const byTerm = new Map<string, GapRow[]>()
+  for (const r of rows) {
+    const id = r.term.toLowerCase()
+    byTerm.set(id, [...(byTerm.get(id) ?? []), r])
+  }
+  return [...byTerm.values()].map((rs): GapTerm => {
+    const term = mostFrequent(rs.map(r => r.term))
+    const inCv = !!cvText && !!excludeRule([term])?.test(cvText)
+    const last = Math.max(...rs.map(r => r.appliedAt ?? 0))
+    return {
+      term,
+      category: mostFrequent(rs.map(r => r.category)),
+      group: groupFor(modeStatus(rs.map(r => r.status)), inCv),
+      applications: new Set(rs.map(r => r.key)).size,
+      must: new Set(rs.filter(r => r.importance === 'must').map(r => r.key)).size,
+      lastSeen: iso(last || null),
+      posts: rs.map(r => ({
+        key: r.key, title: r.title, company: r.company, postUrl: r.postUrl, importance: r.importance,
+        status: r.status, quote: r.quote, cvShows: r.cvShows, appliedAt: iso(r.appliedAt)
+      }))
+    }
+  }).sort((a, b) => b.applications - a.applications || b.must - a.must || a.term.localeCompare(b.term))
 }
