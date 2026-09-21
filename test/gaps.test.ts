@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
 import { applyRecord, type ScraperRecord } from '../server/utils/ingest.ts'
+import { verifyRequirements, type RawRequirement } from '../server/utils/gaps.ts'
 
 let dir: string
 let db: Database.Database
@@ -52,4 +53,84 @@ test('both tables exist, and deleting a post deletes its requirements and its ru
 
   assert.equal(count('post_requirements', key), 0, 'requirements cascade with the post')
   assert.equal(count('requirement_runs', key), 0, 'the run cascades with the post')
+})
+
+const CV = 'Led the migration to PostgreSQL, including query tuning with pg_stat_statements.\n'
+  + 'Deployed services with Argo CD on Kubernetes clusters.'
+
+const req = (over: Partial<RawRequirement> = {}): RawRequirement => ({
+  term: 'Kubernetes',
+  category: 'technology',
+  importance: 'must',
+  quote: '5+ years of Kubernetes in production',
+  status: 'partial',
+  cvShows: 'Argo CD on Kubernetes clusters',
+  ...over
+})
+
+test('a requirement survives only when its quote is in the post', () => {
+  const invented = req({ term: 'Go', quote: '3 years of Go microservices', status: 'absent', cvShows: '' })
+  const { kept, dropped } = verifyRequirements([req(), invented], POST, CV)
+  assert.deepEqual(kept.map(r => r.term), ['Kubernetes'])
+  assert.deepEqual(dropped.map(d => d.why), ['quote not found in the post'])
+})
+
+test('whitespace, case and punctuation do not break a quote match', () => {
+  const { kept } = verifyRequirements([req({ quote: '5+  YEARS of kubernetes, in production' })], POST, CV)
+  assert.equal(kept.length, 1)
+})
+
+test('a short quote must appear as a whole word, so a one-word bullet survives and "Go" in "Google" does not', () => {
+  // Posts list requirements as bare bullets, and the model quotes the bullet. Compared on letters and
+  // digits alone, "go" is inside "google", "going" and "ago" — so below MIN_QUOTE it is a whole-word match.
+  const post = `${POST}\n- React\n- AWS\nWe use Google Workspace.`
+  const { kept, dropped } = verifyRequirements([
+    req({ term: 'React', quote: 'React', status: 'absent', cvShows: '' }),
+    req({ term: 'AWS', quote: 'AWS', status: 'absent', cvShows: '' }),
+    req({ term: 'Go', quote: 'Go', status: 'absent', cvShows: '' })
+  ], post, CV)
+  assert.deepEqual(kept.map(r => r.term), ['React', 'AWS'])
+  assert.deepEqual(dropped.map(d => d.why), ['quote not found in the post'])
+})
+
+test('a one-word CV quote counts when the CV names the skill on its own', () => {
+  // the master CV lists skills one per line, so "Redis" is a complete, honest CV quote
+  const post = `${POST}\n- Redis\n- C#\n- Go`
+  const cv = `${CV}\nRedis\nC#\nGoogle Cloud`
+  const { kept, dropped } = verifyRequirements([
+    req({ term: 'Redis', quote: 'Redis', status: 'present', cvShows: 'Redis' }),
+    req({ term: 'C#', quote: 'C#', status: 'present', cvShows: 'C#' }),
+    req({ term: 'Go', quote: 'Go', status: 'present', cvShows: 'Go' })
+  ], post, cv)
+  assert.deepEqual(kept.map(r => r.term), ['Redis', 'C#'])
+  assert.deepEqual(dropped.map(d => d.why), ['CV quote not found in the CV'])
+})
+
+test('present and partial must quote the CV, and absent must not', () => {
+  const rows = [
+    req({ term: 'A', status: 'present', cvShows: '' }),
+    req({ term: 'B', status: 'partial', cvShows: 'ten years of Kubernetes operations' }),
+    req({ term: 'C', status: 'absent', cvShows: 'Argo CD on Kubernetes clusters' }),
+    req({ term: 'Terraform', status: 'absent', cvShows: '', quote: 'experience with Terraform modules', importance: 'nice' })
+  ]
+  const { kept, dropped } = verifyRequirements(rows, POST, CV)
+  assert.deepEqual(kept.map(r => r.term), ['Terraform'], 'only the honest absence survives')
+  assert.deepEqual(dropped.map(d => d.why), [
+    'present with no CV quote',
+    'CV quote not found in the CV',
+    'marked absent but quotes the CV'
+  ])
+  assert.equal(kept[0]!.cvShows, '', 'an absence stores no CV quote')
+})
+
+test('the same term twice on one post is kept once, case-insensitively', () => {
+  const { kept, dropped } = verifyRequirements([req(), req({ term: 'kubernetes ' })], POST, CV)
+  assert.equal(kept.length, 1)
+  assert.deepEqual(dropped.map(d => d.why), ['duplicate term'])
+})
+
+test('an empty term is dropped and a long one is capped', () => {
+  const { kept, dropped } = verifyRequirements([req({ term: '  ' }), req({ term: 'K'.repeat(80) })], POST, CV)
+  assert.deepEqual(dropped.map(d => d.why), ['no term'])
+  assert.equal(kept[0]!.term.length, 60)
 })
