@@ -87,6 +87,14 @@ const yieldColumns: TableColumn<YieldRow>[] = [
             icon="i-lucide-square"
             @click="post('/api/job/stop', { lane: 'scrape' })"
           />
+          <UButton
+            v-if="job.lanes.draft.current?.kind === 'gaps'"
+            label="Stop gaps"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-square"
+            @click="post('/api/job/stop', { lane: 'draft' })"
+          />
         </template>
       </UDashboardNavbar>
     </template>

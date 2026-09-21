@@ -1,7 +1,9 @@
 # Application gaps — design
 
-**Status: approved design, not yet implemented.** Agreed section by section on 2026-09-21. The reasoning
-behind each decision is kept here so it survives implementation.
+**Status: implemented**, on branch `application-gaps`, 2026-09-21. The live backfill: 131 applications,
+131 runs, 2415 rows kept, 241 dropped. The reasoning behind each decision is kept here for after
+implementation too, corrected where the measured run disagreed with the design (search this file for
+"measured" for what changed).
 
 ---
 
@@ -94,9 +96,10 @@ The model returns `requirements: [{ term, category, importance, quote, status, c
 1. **`quote` must be in the post.** At 8 or more letters and digits it is compared loosely,
    `matchKey(post).includes(matchKey(quote))`, so a line wrap or a changed dash cannot hide it. Below that
    it must appear as a **whole word**, via `excludeRule([quote])` — because compared loosely "go" is inside
-   "google". Short quotes are the common case, not an edge: posts list requirements as bare bullets, and
-   13 of the 36 skills on the real CV are under 8 (`C#`, `Redis`, `AWS`, `CI/CD`). A flat 8-character floor,
-   the first draft of this rule, would have dropped every one of them.
+   "google". Measured on the live backfill: 38 of 2415 post quotes (1.6%) and 243 of 1565 CV quotes (15.5%)
+   were under 8 characters — short quotes are the exception, not the common case as first written here, but
+   the rule still matters, mostly on the CV side, where it lists skills one per line (`C#`, `Redis`, `AWS`).
+   A flat 8-character floor, the first draft of this rule, would have dropped every one of those.
 2. **`present` and `partial` must quote the CV**, found in `masterText` by the same rule.
 3. **`absent` must not quote the CV** — a quote on an absence is a contradiction, as in `gapsFrom()`.
 4. **`term`** is trimmed, capped at 60 characters, and must be non-empty; a second row with the same term
@@ -106,9 +109,12 @@ The model returns `requirements: [{ term, category, importance, quote, status, c
 still recorded (a post may really state nothing), but the job log says which post returned zero rows and
 names `JOBFINDER_GAPS_MODEL`.
 
-**Cost**: gpt-5-mini at medium reasoning, under a dollar for the 110-post backfill and 10-25 minutes of
-the draft lane, a few cents a day after. The post text and
-the CV go to OpenAI — the same data the scorer and the tailoring already send.
+**Cost**: gpt-5-mini at medium reasoning. Measured on the live 131-post backfill: 2h19m total, p50 63s,
+p90 89s, max 165s per post — not the 10-25 minutes first estimated here, and §3's choice of the draft lane
+over a dedicated lane was made on that old estimate. Cost was not measured directly, plausibly ~$1.5-2
+rather than "under a dollar". A newly uploaded CV re-reads every application at that same rate, on the
+draft lane — hours for the full history, not a few cents. The post text and the CV go to OpenAI — the same
+data the scorer and the tailoring already send.
 
 ## 3. The job
 
@@ -147,8 +153,10 @@ is testable without OpenAI and without importing `jobs.ts`.
 ## 4. The page
 
 **`GET /api/gaps`** aggregates over application posts only (the same application predicate as the job) and
-returns every term — no paging; a few hundred terms is a small response. Terms group case-insensitively;
-the displayed spelling and category are the most frequent ones.
+returns every term — no paging. Measured on the live backfill: 1022 terms, ~1.5 MB, 687 of them asked by
+only one application — not "a few hundred terms", as first estimated here, though still small enough that
+paging is not worth adding. Terms group case-insensitively; the displayed spelling and category are the
+most frequent ones.
 
 **Grouping**, per term, in this order:
 
@@ -156,8 +164,11 @@ the displayed spelling and category are the most frequent ones.
 2. **On your CV** — otherwise, when `excludeRule([term])` matches the current master CV text.
 3. **Add now** — otherwise: the experience is there, the keyword is not.
 
-"On your CV" is computed per request against the **current** master CV and never stored, so updating the
-CV moves a keyword out of Add now at once, before any re-extraction.
+"On your CV" is computed per request against the master CV text and never stored, but that text is the
+**cached** `data/cv/master.json`, not the freshly uploaded PDF: only `loadMasterCv()` refreshes it, which
+happens on the next gaps job or a tailored draft, not on the CV upload itself. So the claim first written
+here — that updating the CV moves a keyword out of Add now at once, before any re-extraction — is false;
+a keyword only moves once the cache is refreshed.
 
 **`app/pages/gaps.vue`**, a **Gaps** entry in the sidebar between Pipeline and Run:
 
@@ -226,6 +237,16 @@ screenshot the page.
 - **`drafted` is not `sent`.** A draft deleted unsent still counts as an application.
 - **The whole-word check is ASCII-bounded**, as in `excludeRule()`: a term ending in a non-ASCII character
   matches as a substring at that edge.
+- **Learn means "the CV shows no evidence", not "the owner lacks the skill."** Top Learn terms on the live
+  backfill are Design Patterns (19), Git (18), SOLID (16), CSS (13), OOP (11), GitHub (11), HTML (10) —
+  skills the owner may well have but never wrote down. Of 468 Learn terms, 327 come from a single
+  application; only 71 are asked by 3 or more. The owner decides what is actually missing.
+- **The checks bias toward Learn.** An absent row cannot fail the CV-quote check; a present/partial row
+  can, so every dropped present/partial row can tip a term toward absent — and a tie already goes to the
+  worse status (15 terms won on a tie in the live data). In the saved logs, "CV quote not found in the CV"
+  was a drop reason on 23 of 58 posts, "quote not found in the post" on 1.
+- **"must" mostly means "not marked optional."** 2174 must rows vs 241 nice rows in the live backfill,
+  because the prompt defaults an unstated importance to must rather than inferring it.
 
 ## Notes for the implementation plan
 

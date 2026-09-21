@@ -238,9 +238,16 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
     where a.verdict = 'drafted' or p.applied_at is not null
     group by lower(r.term) order by apps desc, must desc"
   ```
-  **The one rule for any CV-enhancement pass: Add now keywords may go onto the CV; Learn keywords may not
-  until the skill is real.** `tailoredCv()` refuses technology the master CV does not name, so the base CV
-  is the only place honesty can slip — this is where it is held.
+  **The one rule for any CV-enhancement pass**: a **present**-majority Add-now term may go onto the CV; a
+  **partial**-majority Add-now term only after reading its `cv_shows` lines and confirming the evidence
+  really is that skill; a **Learn** term only when the owner confirms they have it — Learn means the CV
+  shows no evidence, not that the owner lacks the skill, and the checks bias toward it (an absent row can
+  never fail the CV-quote check, a present/partial row can, and a tie already goes to the worse status).
+  Read `importance` loosely too — it defaults to `must` whenever the post does not say, so it mostly means
+  "not marked optional," not "a hard requirement." `tailoredCv()` refuses technology the master CV does not
+  name, so the base CV is the only place honesty can slip — this is where it is held. A newly uploaded CV
+  re-reads every application at about a minute each on the draft lane (hours for the full history); Stop is
+  safe, the job resumes newest-first.
 
 ## Configuration
 

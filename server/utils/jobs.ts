@@ -1,7 +1,7 @@
 // Job runner: three lanes, each sequential, fed by one queue.
 //
 //   scrape lane — Chrome holds a lock on ./profile, so one scrape at a time.
-//   draft  lane — `claude -p` sessions (drafts, syncs), one at a time.
+//   draft  lane — `claude -p` sessions (drafts, syncs) and the gaps extraction job, one at a time.
 //   paste  lane — one OpenAI score call at a time; separate from the other two so a pasted post never
 //                 waits behind a scrape or a draft, and never makes one wait behind it.
 //

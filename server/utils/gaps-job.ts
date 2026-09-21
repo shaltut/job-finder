@@ -18,7 +18,9 @@ const MODEL = process.env.JOBFINDER_GAPS_MODEL || 'gpt-5-mini'
 
 let openai: OpenAI | undefined
 
-async function ask(postText: string, cvText: string): Promise<RawRequirement[]> {
+/** `signal` is the job's own AbortSignal, so Stop cancels the in-flight call (measured up to 165s)
+ * instead of waiting for it. GapsDeps.ask has no signal of its own — runGapsJob closes over it below. */
+async function ask(postText: string, cvText: string, signal?: AbortSignal): Promise<RawRequirement[]> {
   openai ??= new OpenAI()
   const r = await openai.responses.create({
     model: MODEL,
@@ -28,7 +30,7 @@ async function ask(postText: string, cvText: string): Promise<RawRequirement[]> 
       { role: 'user', content: `--- JOB POST ---\n${postText}\n\n--- CV ---\n${cvText}` }
     ],
     text: { format: { type: 'json_schema', name: 'post_requirements', strict: true, schema: REQUIREMENTS_SCHEMA } }
-  } as never) as { output_text: string }
+  } as never, { signal }) as { output_text: string }
   return (JSON.parse(r.output_text) as { requirements: RawRequirement[] }).requirements
 }
 
@@ -50,7 +52,7 @@ export async function runGapsJob(job: { added: number }, push: (line: string) =>
   const { db, close } = openWritableDb()
   try {
     const { stored, pending } = await extractGaps(db, {
-      ask,
+      ask: (t, cv) => ask(t, cv, signal),
       cvText: masterText(master),
       cvSha: pdfSha256(readFileSync(path)),
       model: MODEL

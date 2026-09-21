@@ -26,6 +26,8 @@ export interface GapTerm {
   term: string
   category: string
   group: GapGroup
+  /** the term's most frequent status across its posts — the value groupFor() decides the group from */
+  status: GapStatus
   /** distinct applications asking */
   applications: number
   /** of those, how many make it a must-have */
@@ -56,6 +58,7 @@ export function groupFor(status: GapStatus, inCv: boolean): GapGroup {
 
 const line = (t: GapTerm) =>
   `- ${t.term} — ${t.applications} application${t.applications === 1 ? '' : 's'} (${t.must} must-have)`
+  + (t.status === 'partial' ? ' — partial: check the CV evidence first' : '')
 
 /** The copyable list, in the order given (already ranked). On your CV is left out: nothing to change. */
 export function keywordList(terms: GapTerm[]): string {
@@ -64,7 +67,7 @@ export function keywordList(terms: GapTerm[]): string {
     return ts.length ? [title, ...ts.map(line)].join('\n') : ''
   }
   return [
-    section('Add now — you have it, your CV doesn\'t say it', 'add'),
+    section('Add now — your CV shows related experience; use the posts\' word where it is true', 'add'),
     section('Learn — not on your CV yet', 'learn')
   ].filter(Boolean).join('\n\n')
 }

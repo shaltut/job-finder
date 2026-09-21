@@ -259,15 +259,20 @@ test('terms group case-insensitively and rank by applications, then must-haves',
   assert.equal(terms[0]!.lastSeen, new Date(1_758_441_600_000).toISOString())
 })
 
-test('the copyable list has Add now, then Learn, and leaves out what is already on the CV', () => {
-  const t = (term: string, group: GapTerm['group'], applications: number, must: number): GapTerm =>
-    ({ term, category: 'technology', group, applications, must, lastSeen: null, posts: [] })
-  assert.equal(keywordList([t('React', 'learn', 12, 8), t('GitOps', 'add', 7, 5), t('C#', 'on-cv', 20, 20), t('Rust', 'learn', 1, 0)]),
-    'Add now — you have it, your CV doesn\'t say it\n'
-    + '- GitOps — 7 applications (5 must-have)\n\n'
-    + 'Learn — not on your CV yet\n'
-    + '- React — 12 applications (8 must-have)\n'
-    + '- Rust — 1 application (0 must-have)')
+test('the copyable list has Add now, then Learn, leaves out what is already on the CV, and flags a partial term', () => {
+  const t = (term: string, group: GapTerm['group'], applications: number, must: number, status: GapTerm['status'] = 'present'): GapTerm =>
+    ({ term, category: 'technology', group, status, applications, must, lastSeen: null, posts: [] })
+  assert.equal(keywordList([
+    t('React', 'learn', 12, 8, 'absent'),
+    t('GitOps', 'add', 7, 5, 'partial'),
+    t('C#', 'on-cv', 20, 20),
+    t('Rust', 'learn', 1, 0, 'absent')
+  ]),
+  'Add now — your CV shows related experience; use the posts\' word where it is true\n'
+  + '- GitOps — 7 applications (5 must-have) — partial: check the CV evidence first\n\n'
+  + 'Learn — not on your CV yet\n'
+  + '- React — 12 applications (8 must-have)\n'
+  + '- Rust — 1 application (0 must-have)')
 })
 
 test('the page reads application rows only, and counts what was read against the current CV', () => {

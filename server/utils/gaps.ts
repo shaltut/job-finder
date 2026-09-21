@@ -36,9 +36,10 @@ export interface RawRequirement {
 export interface DroppedRequirement { row: RawRequirement, why: string }
 
 /**
- * At or above this many letters and digits a quote is compared loosely; below it, as a whole word. Short
- * quotes are the common case, not an edge: a third of the skills on the real CV are under 8 ("C#",
- * "Redis", "AWS"), and posts list requirements as bare bullets.
+ * At or above this many letters and digits a quote is compared loosely; below it, as a whole word. Measured
+ * over the live backfill: only 38 of 2415 post quotes (1.6%) and 243 of 1565 CV quotes (15.5%) were under 8
+ * characters — short quotes are the exception, not the common case — but the rule still matters, mostly on
+ * the CV side, where it lists skills one per line ("C#", "Redis", "AWS").
  */
 export const MIN_QUOTE = 8
 
@@ -309,11 +310,13 @@ export function aggregateGaps(rows: GapRow[], cvText: string): GapTerm[] {
   return [...byTerm.values()].map((rs): GapTerm => {
     const term = mostFrequent(rs.map(r => r.term))
     const inCv = !!cvText && !!excludeRule([term])?.test(cvText)
+    const status = modeStatus(rs.map(r => r.status))
     const last = Math.max(...rs.map(r => r.appliedAt ?? 0))
     return {
       term,
       category: mostFrequent(rs.map(r => r.category)),
-      group: groupFor(modeStatus(rs.map(r => r.status)), inCv),
+      group: groupFor(status, inCv),
+      status,
       applications: new Set(rs.map(r => r.key)).size,
       must: new Set(rs.filter(r => r.importance === 'must').map(r => r.key)).size,
       lastSeen: iso(last || null),
