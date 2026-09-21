@@ -91,10 +91,13 @@ The model returns `requirements: [{ term, category, importance, quote, status, c
 
 **Checks in code** (pure, in `server/utils/gaps.ts`), each drop counted and logged:
 
-1. **`quote` must be in the post**: `matchKey(post).includes(matchKey(quote))`, and `matchKey(quote)` must
-   carry at least 8 characters, or a two-letter quote such as `C#` would match nearly anything.
-2. **`present` and `partial` must quote the CV**: `matchKey(masterText).includes(matchKey(cvShows))`, same
-   minimum.
+1. **`quote` must be in the post.** At 8 or more letters and digits it is compared loosely,
+   `matchKey(post).includes(matchKey(quote))`, so a line wrap or a changed dash cannot hide it. Below that
+   it must appear as a **whole word**, via `excludeRule([quote])` — because compared loosely "go" is inside
+   "google". Short quotes are the common case, not an edge: posts list requirements as bare bullets, and
+   13 of the 36 skills on the real CV are under 8 (`C#`, `Redis`, `AWS`, `CI/CD`). A flat 8-character floor,
+   the first draft of this rule, would have dropped every one of them.
+2. **`present` and `partial` must quote the CV**, found in `masterText` by the same rule.
 3. **`absent` must not quote the CV** — a quote on an absence is a contradiction, as in `gapsFrom()`.
 4. **`term`** is trimmed, capped at 60 characters, and must be non-empty; a second row with the same term
    (case-insensitive) on the same post is dropped as a duplicate.
@@ -103,7 +106,8 @@ The model returns `requirements: [{ term, category, importance, quote, status, c
 still recorded (a post may really state nothing), but the job log says which post returned zero rows and
 names `JOBFINDER_GAPS_MODEL`.
 
-**Cost**: gpt-5-mini, roughly $0.40 for the 110-post backfill, a few cents a day after. The post text and
+**Cost**: gpt-5-mini at medium reasoning, under a dollar for the 110-post backfill and 10-25 minutes of
+the draft lane, a few cents a day after. The post text and
 the CV go to OpenAI — the same data the scorer and the tailoring already send.
 
 ## 3. The job
@@ -192,7 +196,7 @@ master CV does not name, so the base CV is the only place honesty can slip, and 
 `node --test` against a migrated temp database, model call injected:
 
 1. A requirement whose quote is not in the post is dropped; whitespace, case and punctuation differences
-   are not a mismatch; a quote under the minimum is dropped.
+   are not a mismatch; a short quote matches only as a whole word, on the post and on the CV.
 2. `present`/`partial` without a verifiable CV quote are dropped; `absent` with a CV quote is dropped.
 3. Selection: drafted and applied-by-hand posts are picked, skipped and unprocessed posts are not, a post
    with a run at the current `cv_sha` is skipped, and the same post is picked again under a new sha.

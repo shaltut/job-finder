@@ -16,7 +16,7 @@
 - Any file a test imports must use **explicit `.ts` import specifiers** and must not import `./db`, `./config` or `./jobs` (Nitro resolves extensionless imports; `node --test` does not). `server/utils/gaps.ts` and `shared/gaps.ts` are test-imported.
 - The Nitro server is the sole writer of `data/jobfinder.db`.
 - Model: `process.env.JOBFINDER_GAPS_MODEL || 'gpt-5-mini'`, `reasoning: { effort: 'medium' }`, strict JSON schema. Never the scorer's nano (it returns an empty table on this task).
-- `MIN_QUOTE = 8`: a quote whose `matchKey()` is shorter is dropped.
+- `MIN_QUOTE = 8`: a quote of at least 8 letters/digits matches on `matchKey()` (spacing and punctuation ignored); a shorter one — `React`, `C#`, `AWS`, a third of the skills on the real CV — must match as a **whole word** via `excludeRule()`, so `Go` never matches inside `Google`.
 - Status vocabulary is `present` | `partial` | `absent` (as `shared/background.ts`).
 - Categories: `technology`, `domain`, `certification`, `practice`, `language`, `other`. Importance: `must`, `nice`.
 - Exported names from `server/utils/` are auto-imported globally by Nitro, so they must be specific: `RequirementStatus`, `RequirementCategory`, `RequirementImportance`, `GapRow`, `DroppedRequirement`, `GapRunMeta`, `REQUIREMENT_CATEGORIES` — never bare `Status`/`Category` (and `RequirementRow` is already taken by `shared/background.ts`).
@@ -198,7 +198,7 @@ git commit -m "Add the post_requirements and requirement_runs tables"
 - Test: `test/gaps.test.ts` (append)
 
 **Interfaces:**
-- Consumes: `matchKey(text: string): string` from `server/utils/cv-master.ts` (already exported).
+- Consumes: `matchKey(text: string): string` from `server/utils/cv-master.ts` (already exported); `excludeRule(list: readonly string[]): RegExp | null` from `scraper/lib.ts` (already exported).
 - Produces (all exported from `server/utils/gaps.ts`):
   - `type RequirementCategory = 'technology' | 'domain' | 'certification' | 'practice' | 'language' | 'other'`
   - `type RequirementImportance = 'must' | 'nice'`, `type RequirementStatus = 'present' | 'partial' | 'absent'`
@@ -233,7 +233,7 @@ test('a requirement survives only when its quote is in the post', () => {
   const invented = req({ term: 'Go', quote: '3 years of Go microservices', status: 'absent', cvShows: '' })
   const { kept, dropped } = verifyRequirements([req(), invented], POST, CV)
   assert.deepEqual(kept.map(r => r.term), ['Kubernetes'])
-  assert.deepEqual(dropped.map(d => d.why), ['quote is not in the post'])
+  assert.deepEqual(dropped.map(d => d.why), ['quote not found in the post'])
 })
 
 test('whitespace, case and punctuation do not break a quote match', () => {
@@ -241,12 +241,30 @@ test('whitespace, case and punctuation do not break a quote match', () => {
   assert.equal(kept.length, 1)
 })
 
-test('a quote too short to check is dropped rather than trusted', () => {
-  // "Go" keys to "go", which is inside "Google", "going", "ago" — it proves nothing
-  const { dropped } = verifyRequirements([req({ quote: 'Kubernetes' })], POST, CV)
-  assert.deepEqual(dropped.map(d => d.why), [])
-  const short = verifyRequirements([req({ quote: 'Kube' })], POST, CV)
-  assert.deepEqual(short.dropped.map(d => d.why), ['quote too short to check'])
+test('a short quote must appear as a whole word, so a one-word bullet survives and "Go" in "Google" does not', () => {
+  // Posts list requirements as bare bullets, and the model quotes the bullet. Compared on letters and
+  // digits alone, "go" is inside "google", "going" and "ago" — so below MIN_QUOTE it is a whole-word match.
+  const post = `${POST}\n- React\n- AWS\nWe use Google Workspace.`
+  const { kept, dropped } = verifyRequirements([
+    req({ term: 'React', quote: 'React', status: 'absent', cvShows: '' }),
+    req({ term: 'AWS', quote: 'AWS', status: 'absent', cvShows: '' }),
+    req({ term: 'Go', quote: 'Go', status: 'absent', cvShows: '' })
+  ], post, CV)
+  assert.deepEqual(kept.map(r => r.term), ['React', 'AWS'])
+  assert.deepEqual(dropped.map(d => d.why), ['quote not found in the post'])
+})
+
+test('a one-word CV quote counts when the CV names the skill on its own', () => {
+  // the master CV lists skills one per line, so "Redis" is a complete, honest CV quote
+  const post = `${POST}\n- Redis\n- C#\n- Go`
+  const cv = `${CV}\nRedis\nC#\nGoogle Cloud`
+  const { kept, dropped } = verifyRequirements([
+    req({ term: 'Redis', quote: 'Redis', status: 'present', cvShows: 'Redis' }),
+    req({ term: 'C#', quote: 'C#', status: 'present', cvShows: 'C#' }),
+    req({ term: 'Go', quote: 'Go', status: 'present', cvShows: 'Go' })
+  ], post, cv)
+  assert.deepEqual(kept.map(r => r.term), ['Redis', 'C#'])
+  assert.deepEqual(dropped.map(d => d.why), ['CV quote not found in the CV'])
 })
 
 test('present and partial must quote the CV, and absent must not', () => {
@@ -259,8 +277,8 @@ test('present and partial must quote the CV, and absent must not', () => {
   const { kept, dropped } = verifyRequirements(rows, POST, CV)
   assert.deepEqual(kept.map(r => r.term), ['Terraform'], 'only the honest absence survives')
   assert.deepEqual(dropped.map(d => d.why), [
-    'present with no checkable CV quote',
-    'CV quote is not in the CV',
+    'present with no CV quote',
+    'CV quote not found in the CV',
     'marked absent but quotes the CV'
   ])
   assert.equal(kept[0]!.cvShows, '', 'an absence stores no CV quote')
@@ -278,8 +296,6 @@ test('an empty term is dropped and a long one is capped', () => {
   assert.equal(kept[0]!.term.length, 60)
 })
 ```
-
-Note the third test deliberately asserts that a 10-character quote (`Kubernetes`) passes: the minimum guards against two- and four-letter quotes, not ordinary single words.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -299,6 +315,7 @@ Expected: FAIL — `Cannot find module '.../server/utils/gaps.ts'`
 // "present" the CV does not support, steers the CV rewrite and the learning plan wrong. So the model fills
 // in a verdict table and code drops every row it cannot justify, with quotes checked verbatim on BOTH
 // sides — the post, and the CV.
+import { excludeRule } from '../../scraper/lib.ts'
 import { matchKey } from './cv-master.ts'
 
 export const REQUIREMENT_CATEGORIES = ['technology', 'domain', 'certification', 'practice', 'language', 'other'] as const
@@ -318,7 +335,11 @@ export interface RawRequirement {
 
 export interface DroppedRequirement { row: RawRequirement, why: string }
 
-/** Below this many letters and digits a quote proves nothing: "Go" keys to "go", inside "Google". */
+/**
+ * At or above this many letters and digits a quote is compared loosely; below it, as a whole word. Short
+ * quotes are the common case, not an edge: a third of the skills on the real CV are under 8 ("C#",
+ * "Redis", "AWS"), and posts list requirements as bare bullets.
+ */
 export const MIN_QUOTE = 8
 
 export const REQUIREMENTS_SCHEMA = {
@@ -363,8 +384,8 @@ For each requirement:
                language (a spoken language), or other.
   importance - "must" when the post states it as required; "nice" when it says preferred, a plus, nice
                to have or bonus. When the post does not say, "must".
-  quote      - the post's own words that state it, copied exactly, at least a few words long. An entry
-               whose quote is not in the post is discarded.
+  quote      - the post's own words that state it, copied exactly; a bullet's own words are enough. An
+               entry whose quote is not in the post is discarded.
   status     - "present": the CV plainly shows it. "partial": the CV shows some of it, less of it, an
                older version of it, or something adjacent. "absent": the CV does not show it anywhere.
   cvShows    - for "present" and "partial", the CV's own words that settle it, copied exactly. For
@@ -375,18 +396,30 @@ Do not list years of experience, a seniority level, a location, a salary or work
 skills. Do not list a requirement in order to be able to mark it absent.`
 }
 
+interface Source { raw: string, key: string }
+
+/**
+ * Is this quote in the source? A long one is compared on letters and digits only (matchKey), so a line
+ * wrap, a bullet glyph or a changed dash cannot hide it. A short one would match inside anything that way
+ * — "go" is in "google" — so it must appear as a whole word, excludeRule()'s way: boundaries only where
+ * \b can see the edge, which keeps `C#` and `.NET` matchable.
+ */
+function found(quote: string, src: Source): boolean {
+  const key = matchKey(quote)
+  if (!key) return false
+  return key.length >= MIN_QUOTE ? src.key.includes(key) : !!excludeRule([quote])?.test(src.raw)
+}
+
 /** Why this row may not be stored, or null when it may. Order matters only for the message. */
-function rejection(r: RawRequirement, term: string, post: string, cv: string, seen: Set<string>): string | null {
+function rejection(r: RawRequirement, term: string, post: Source, cv: Source, seen: Set<string>): string | null {
   if (!term) return 'no term'
   if (seen.has(term.toLowerCase())) return 'duplicate term'
-  const quote = matchKey(String(r.quote ?? ''))
-  if (quote.length < MIN_QUOTE) return 'quote too short to check'
-  if (!post.includes(quote)) return 'quote is not in the post'
-  const shows = matchKey(String(r.cvShows ?? ''))
+  if (!found(String(r.quote ?? '').trim(), post)) return 'quote not found in the post'
+  const shows = String(r.cvShows ?? '').trim()
   if (r.status === 'absent') return shows ? 'marked absent but quotes the CV' : null
   if (r.status !== 'present' && r.status !== 'partial') return 'unknown status'
-  if (shows.length < MIN_QUOTE) return `${r.status} with no checkable CV quote`
-  if (!cv.includes(shows)) return 'CV quote is not in the CV'
+  if (!shows) return `${r.status} with no CV quote`
+  if (!found(shows, cv)) return 'CV quote not found in the CV'
   return null
 }
 
@@ -397,8 +430,8 @@ function rejection(r: RawRequirement, term: string, post: string, cv: string, se
 export function verifyRequirements(
   rows: RawRequirement[], postText: string, cvText: string
 ): { kept: RawRequirement[], dropped: DroppedRequirement[] } {
-  const post = matchKey(postText)
-  const cv = matchKey(cvText)
+  const post: Source = { raw: postText, key: matchKey(postText) }
+  const cv: Source = { raw: cvText, key: matchKey(cvText) }
   const kept: RawRequirement[] = []
   const dropped: DroppedRequirement[] = []
   const seen = new Set<string>()
@@ -425,7 +458,7 @@ export function verifyRequirements(
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `node --test test/gaps.test.ts`
-Expected: PASS, 7 tests
+Expected: PASS, 8 tests
 
 - [ ] **Step 5: Commit**
 
@@ -526,7 +559,7 @@ test('the loop stores what verifies, leaves a failed call pending, and says so',
   assert.ok(res.stored < res.pending, 'the failure is visible in the counts')
   assert.ok(log.some(l => l.includes('rate limited') && l.includes('left for the next run')))
   assert.ok(log.some(l => l.includes('no requirements at all') && l.includes('JOBFINDER_GAPS_MODEL')))
-  assert.ok(log.some(l => l.includes('quote is not in the post')), 'drops are reported with their reason')
+  assert.ok(log.some(l => l.includes('quote not found in the post')), 'drops are reported with their reason')
 })
 
 test('Stop is honoured between posts', async () => {
@@ -654,7 +687,7 @@ export async function extractGaps(
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `node --test test/gaps.test.ts`
-Expected: PASS, 12 tests
+Expected: PASS, 13 tests
 
 - [ ] **Step 5: Commit**
 
@@ -873,7 +906,7 @@ No `:disabled`: it runs on the draft lane, not the scrape lane, and `enqueue` de
 
 Run: `npm run typecheck` — Expected: exit 0, no errors
 Run: `npm run lint` — Expected: exit 0
-Run: `npm test` — Expected: all pass (the suite count grows by the 12 tests of Tasks 1-3)
+Run: `npm test` — Expected: all pass (the suite count grows by the 13 tests of Tasks 1-3)
 
 - [ ] **Step 10: Commit**
 
@@ -1057,10 +1090,9 @@ export function keywordList(terms: GapTerm[]): string {
 
 - [ ] **Step 4: Append the aggregation to `server/utils/gaps.ts`**
 
-Add to the imports at the top:
+Add to the imports at the top (`excludeRule` is already imported since Task 2):
 
 ```ts
-import { excludeRule } from '../../scraper/lib.ts'
 import { groupFor, modeStatus, type GapTerm } from '../../shared/gaps.ts'
 ```
 
@@ -1184,7 +1216,7 @@ export default defineEventHandler((): GapsResponse => {
 
 - [ ] **Step 7: Run to verify**
 
-Run: `node --test test/gaps.test.ts` — Expected: PASS, 17 tests
+Run: `node --test test/gaps.test.ts` — Expected: PASS, 18 tests
 Run: `npm run typecheck` — Expected: exit 0
 Run: `curl -s http://127.0.0.1:3939/api/gaps` (dev server running) — Expected: `{"terms":[],"applications":110,"analysed":0}` or close (the application count is live)
 
@@ -1483,6 +1515,8 @@ Expected: `202`, `202`, `200` — the first starts running on the idle draft lan
 
 - [ ] **Step 2: Watch it finish**
 
+Expect roughly 10-25 minutes at `reasoning: medium`, costing under a dollar. It occupies the draft lane the whole time: the Pipeline view shows **Stop drafting**, and a Draft pressed meanwhile queues behind it. That is expected, not a hang.
+
 Poll `curl -s http://127.0.0.1:3939/api/job` until `lanes.draft.current` is null, then read `lanes.draft.last.log` (or the Run view's log card).
 Expected: a first line `gaps: <N> application(s) to read with gpt-5-mini`, one line per post with kept/dropped counts, a final `gaps: <N> of <N> read`, exit 0. The second, queued job then logs `gaps: every application is already read against the current CV`.
 If more than a handful of posts log `returned no requirements at all`, stop and report — that is the silent-empty failure the model choice exists to prevent.
@@ -1522,7 +1556,8 @@ Expected: header `<N> of <N> applications analysed`, rows ranked by application 
   `gaps` job reads the post against the master CV with one `gpt-5-mini` call (`JOBFINDER_GAPS_MODEL`) and
   stores each requirement: `term`, `category`, `importance` must|nice, `status` present|partial|absent,
   the post's `quote` and the CV's `cv_shows`. **Both quotes are verified verbatim in code**
-  (`verifyRequirements` in `server/utils/gaps.ts`, `matchKey` comparison, 8-character minimum): a row whose
+  (`verifyRequirements` in `server/utils/gaps.ts`: a quote of 8+ letters/digits compared by `matchKey`, a
+  shorter one — `C#`, `Redis`, a third of the CV's skills — only as a whole word via `excludeRule`): a row whose
   post quote is not in the post, or whose present/partial CV quote is not in the master CV, is never
   stored, and an `absent` row carries no CV quote. `requirement_runs` records which CV (`cv_sha` =
   `pdfSha256`) each post was read against, so uploading a new CV makes every run stale and the next job
@@ -1548,7 +1583,7 @@ Expected: header `<N> of <N> applications analysed`, rows ranked by application 
 - [ ] **Step 6: Full verification**
 
 Run: `npm run typecheck && npm run lint && npm test`
-Expected: all three exit 0; the test count includes the 17 in `test/gaps.test.ts`.
+Expected: all three exit 0; the test count includes the 18 in `test/gaps.test.ts`.
 
 - [ ] **Step 7: Commit**
 
