@@ -1,6 +1,7 @@
 import { and, desc, eq, isNotNull, isNull, like, or, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { applications, contacts, posts } from '../db/schema'
+import { neverWrittenTo } from '../utils/contacts'
 import { db } from '../utils/db'
 
 const query = z.object({
@@ -45,6 +46,10 @@ export default defineEventHandler(async (event) => {
     // they sent. Only 'unprocessed' — the queue of what is still to do — drops them.
     p.status === 'applied' ? isNotNull(posts.appliedAt) : undefined,
     p.status === 'unprocessed' ? isNull(posts.appliedAt) : undefined,
+    // Nor a post whose recruiter was already written to about another role: that one is not waiting on
+    // the owner, the follow-up carries it. Still under 'all', showing the stage. A subquery rather than
+    // the contacts join below, which the count query does not carry.
+    p.status === 'unprocessed' ? sql.raw(neverWrittenTo('posts')) : undefined,
     p.channel !== 'all'
       ? sql`EXISTS (SELECT 1 FROM json_each(${posts.channels}) WHERE value = ${p.channel})`
       : undefined,

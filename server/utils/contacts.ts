@@ -46,3 +46,15 @@ export function healContact(db: Database.Database, email: string, d: Decision, n
     now: Math.floor(now / 1000)
   })
 }
+
+/**
+ * SQL: this post's recruiter — its first address, the one the drafter groups by — has no `contacts` row,
+ * so nothing has ever been written to them. The Unprocessed half of the Posts view and the To review KPI
+ * both carry it, and must agree, or the headline number disagrees with the list under it.
+ *
+ * NOT EXISTS, never `NOT IN (SELECT email FROM contacts)`: a post with no address extracts NULL, and a NOT
+ * IN over NULL is NULL, which would drop every link-only and phone-only post from the list meant to show
+ * them. A parameter for the alias because posts.get.ts builds its query unaliased and stats.get.ts as `p`.
+ */
+export const neverWrittenTo = (posts: string): string =>
+  `NOT EXISTS (SELECT 1 FROM contacts c WHERE c.email = json_extract(${posts}.emails, '$[0]'))`

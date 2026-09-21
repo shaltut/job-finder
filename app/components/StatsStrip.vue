@@ -16,7 +16,7 @@ const lastScrape = computed(() => {
 
 const stats = computed(() => [
   { title: 'Usable', icon: 'i-lucide-target', value: data.value.usable, hint: 'score 6+, unflagged, in scope' },
-  { title: 'To review', icon: 'i-lucide-inbox', value: data.value.unprocessed, hint: 'unflagged, no verdict yet' },
+  { title: 'To review', icon: 'i-lucide-inbox', value: data.value.unprocessed, hint: 'unflagged, recruiter not yet written to' },
   { title: 'Drafted', icon: 'i-lucide-mail', value: data.value.drafted, hint: 'applications written' },
   { title: 'Last 24h', icon: 'i-lucide-clock', value: data.value.last24h, hint: `last scrape ${lastScrape.value}` }
 ])

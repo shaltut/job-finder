@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
-import { healContact } from '../server/utils/contacts.ts'
+import { healContact, neverWrittenTo } from '../server/utils/contacts.ts'
+import { applyRecord, type ScraperRecord } from '../server/utils/ingest.ts'
 import type { Decision } from '../server/utils/stages.ts'
 
 let dir: string
@@ -80,4 +81,30 @@ test('final is never reset, however the other device left it', () => {
 test('an address lower-cases on the way in, because the schema refuses anything else', () => {
   healContact(db, 'MiXeD@Example.COM', row5(), NOW)
   assert.equal(contact('mixed@example.com')?.stage, 'contacted')
+})
+
+test('Unprocessed drops a post whose recruiter has any stage, and keeps one with no address', () => {
+  // The Posts view's Unprocessed and the To review KPI both carry this clause. A post whose recruiter
+  // was already written to about another role is not waiting on the owner — it rides in the follow-up.
+  // The no-address control is the failure worth pinning: json_extract of an empty array is NULL, and a
+  // NOT IN over NULL is NULL, so the obvious spelling would silently drop every link-only post.
+  const post = (key: string, emails: string[]): ScraperRecord => ({
+    op: 'post', key, searchTerm: 'x', author: 'A', authorUrl: 'https://www.linkedin.com/in/a', postUrl: null,
+    postedAge: '1h', postedAt: '2026-09-19T09:00:00.000Z', postType: 'hiring', title: 'Role', company: 'Co',
+    location: null, remote: true, inScope: true, emails, links: [], phones: [], refIds: [],
+    channels: emails.length ? ['email'] : ['link'], score: 7, reason: '', text: 'hiring', flags: []
+  } as ScraperRecord)
+  const stages = ['drafted', 'contacted', 'followed_up', 'replied', 'final'] as const
+  stages.forEach((stage, i) => {
+    const email = `stage-${stage}@example.com`
+    db.prepare('INSERT INTO contacts (email, stage) VALUES (?, ?)').run(email, stage)
+    // the recruiter is the FIRST address; a known address in second place is only a Cc
+    applyRecord(db, post(String(i).repeat(40), [email]))
+  })
+  applyRecord(db, post('a'.repeat(40), ['stranger@example.com', 'stage-final@example.com']))
+  applyRecord(db, post('b'.repeat(40), []))
+
+  const kept = (db.prepare(`SELECT key FROM posts p WHERE ${neverWrittenTo('p')} ORDER BY key`).all() as { key: string }[])
+    .map(r => r.key[0])
+  assert.deepEqual(kept, ['a', 'b'], 'every stage leaves, drafted included; a Cc match and a post with no address stay')
 })

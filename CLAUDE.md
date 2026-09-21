@@ -473,7 +473,10 @@ drafts keep arguing from a stale CV.
   `healContact()` does write the stage into `contacts`, and the Posts view reads that: `posts.get.ts`
   joins `contacts` on `emails[0]`, the Status badge shows the recruiter's stage over the verdict, and
   `sentTo()` in `shared/recruiter-stage.ts` hides Draft on every stage but `drafted` — a pending draft
-  deleted unsent reopens the recruiter, and only the gate can see that. It is not
+  deleted unsent reopens the recruiter, and only the gate can see that. Unprocessed, and the To review KPI
+  with it, drop a post whose recruiter has **any** stage (`neverWrittenTo()` in `server/utils/contacts.ts`,
+  NOT EXISTS because NOT IN over a no-address post's NULL would drop every link-only post); the bulk queue
+  does not, so a stale `drafted` recruiter is still re-asked of Gmail there. It is not
   lost either way — a skipped reason does not start
   with `named in `, so the follow-up picks the role up and names it there. A guard rejection writes no row at all, so those posts stay
   unprocessed and the next run picks them up, the same posture as a failed score. `jobs.ts` catches per

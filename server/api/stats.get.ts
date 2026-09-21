@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm'
+import { neverWrittenTo } from '../utils/contacts'
 import { db } from '../utils/db'
 import { PASTED_TERM } from '../utils/paste'
 
@@ -27,7 +28,9 @@ export default defineEventHandler(async () => {
       (SELECT count(*) FROM posts p LEFT JOIN applications a ON a.key = p.key
         WHERE a.key IS NULL AND coalesce(p.post_type, 'hiring') = 'hiring'
           AND json_array_length(p.flags) = 0 AND p.dismissed_at IS NULL
-          AND p.applied_at IS NULL) AS unprocessed,
+          AND p.applied_at IS NULL
+          -- the same clause as the Posts view's Unprocessed, so this number is the length of that list
+          AND ${sql.raw(neverWrittenTo('p'))}) AS unprocessed,
       -- Both figures below measure the scraper, so a pasted row (search_term = 'pasted') is excluded from
       -- each; coalesce guards the comparison because search_term is nullable in the schema, so a bare
       -- <> comparison would silently drop any row that happens to carry NULL there.
