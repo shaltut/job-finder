@@ -70,10 +70,11 @@ export interface DraftRequest {
   mode: 'apply' | 'follow-up'
   /**
    * The owner picked these posts by hand in the Posts view, rather than the batch queue picking
-   * them. It softens the procedure's fit screen (see drafter-procedure.md), but the promise that
-   * a chosen post is never recorded as `skipped` is kept in code — by persist() and by the Gmail
-   * gate in jobs.ts — because the model follows a written instruction only most of the time, the
-   * same reason gateOnPostType() and PLACEHOLDER are code rather than prompt.
+   * them. The procedure turns every skip into a soft flag (see drafter-procedure.md), and
+   * checkContract() refuses a `skipped` answer outright, because the model follows a written
+   * instruction only most of the time — the same reason gateOnPostType() and PLACEHOLDER are code
+   * rather than prompt. The Gmail gate in jobs.ts still refuses a recruiter already written to, and
+   * records no row for a chosen post.
    */
   chosen?: boolean
   recruiterEmail: string
@@ -262,6 +263,11 @@ export function checkContract(req: DraftRequest, res: DraftResponse): string[] {
     const prefix = req.mode === 'follow-up' ? 'named in follow-up' : 'named in application'
     if (r.verdict === 'drafted' && !r.reason.startsWith(prefix)) {
       problems.push(`drafted reason for ${r.key} must start with "${prefix}"`)
+    }
+    // Pressing Draft is the owner's call, not a question for the model. A refusal here fails the job
+    // loudly, carrying the model's reason, instead of being logged as "passed over".
+    if (req.chosen && r.verdict === 'skipped') {
+      problems.push(`skipped ${r.key}, which you chose by hand (${r.reason}) — press Draft again`)
     }
   }
   for (const k of asked) if (!seen.has(k)) problems.push(`no verdict returned for ${k}`)

@@ -447,10 +447,16 @@ drafts keep arguing from a stale CV.
   flags, but the model still returns `skipped` sometimes, and a persisted skip on a hand-picked post is
   no email and no way back. `test/manual-draft.test.ts` pins both directions, including the control that
   a **bulk** skip is still recorded — without it the guard could quietly empty the triage queue.
-  Two skips stay hard even when chosen: **the author is not hiring**, and **no content**. Choosing a post
-  cannot conjure a vacancy, and the cost is asymmetric — a wrong draft emails a fellow job seeker. The
-  drafter earns that rule: on the 2026-09-17 backup it caught a staffing agency's sales pitch the scorer
-  had scored 6.
+  **Since 2026-09-21 no skip survives a chosen post, by the owner's decision**: the procedure makes all
+  eight hard skips soft flags — not hiring and no content included — and a required value that was not
+  injected is left unanswered in the email and named first in the report, never a placeholder.
+  `checkContract` rejects a `skipped` verdict when `req.chosen`, so a refusal fails the job with the
+  model's reason and "press Draft again" rather than logging `passed over`; the `persist()` guard above
+  is now defence in depth. The cost that used to justify keeping *not hiring* hard: on the 2026-09-17
+  backup it caught a staffing agency's sales pitch the scorer had scored 6, so a mistaken press now
+  yields a draft to that person — a draft, reviewed before anything is sent. `test/drafter.test.ts` pins
+  the rejection and its bulk control. The Gmail gate is unchanged: a recruiter already written to is
+  still refused, because that is the two-emails ceiling, not a fit judgement.
 - **An email with a hole in it must never be deliverable.** A draft went out reading
   `Expected monthly salary: [ADD BEFORE SENDING]` and the recruiter replied to point at the gap. Nothing
   downstream reads the body before Gmail does, so `PLACEHOLDER` in `server/utils/drafter.ts` rejects a

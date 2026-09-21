@@ -417,7 +417,9 @@ async function runDraftJob(
       try {
         res = await runDrafter(req, config, { onLog: push, signal, masterCv: master })
       } catch (e) {
-        push(`${email}: ${(e as Error).message} — nothing drafted, the posts stay unprocessed and retry next run`)
+        // a chosen post's refusal already ends "press Draft again" (checkContract), and the bulk run
+        // it would otherwise wait for may never select it
+        push(`${email}: ${(e as Error).message} — nothing drafted${manual ? '' : ', the posts stay unprocessed and retry next run'}`)
         continue
       }
 

@@ -114,6 +114,35 @@ test('checkContract catches a duplicated key', () => {
   assert.ok(problems.some(p => p.includes('duplicate')), problems.join('; '))
 })
 
+// Pressing Draft is the owner's judgement and the drafter does not get to overrule it. Code, not only
+// procedure: the model follows a written instruction most of the time, and a chosen skip used to be
+// logged as "passed over" — the press did nothing, and said so only in the job log.
+const declined = {
+  results: [ok.results[0], { key: 'b'.repeat(40), verdict: 'skipped', reason: 'below the seniority floor' }],
+  report: ''
+}
+
+test('checkContract refuses a skip on a post the owner chose by hand', () => {
+  const problems = checkContract({ ...req, chosen: true }, parseResponse(JSON.stringify(declined)))
+  assert.ok(problems.some(p => p.includes('chose')), problems.join('; '))
+  assert.ok(problems.some(p => p.includes('below the seniority floor')), 'the model\'s own reason, so the log says why')
+})
+
+test('a bulk skip is still a valid answer — the triage queue depends on it', () => {
+  assert.deepEqual(checkContract(req, parseResponse(JSON.stringify(declined))), [])
+})
+
+test('the procedure keeps no hard skip for a post the owner chose', () => {
+  const proc = readProcedure()
+  const from = proc.indexOf('### When `chosen` is true')
+  const to = proc.indexOf('### Soft flags')
+  // anchored first: an unchecked indexOf of -1 would slice nothing and pass the assertions below vacuously
+  assert.ok(from >= 0 && to > from, 'the chosen section and the section after it must both still exist')
+  const chosen = proc.slice(from, to)
+  assert.doesNotMatch(chosen, /stays? (?:a )?hard skips?/i)
+  assert.match(chosen, /Nothing is a skip/)
+})
+
 test('profileBlock carries the identity the skill deliberately does not hardcode', () => {
   const b = profileBlock(config)
   assert.ok(b.includes(config.profile.name))

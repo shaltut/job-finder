@@ -81,8 +81,9 @@ Rules for the fields:
   reviews the text, and the server creates the draft from what you return. One unfilled slot reached a
   real recruiter, who replied to say the email had a gap where a number should be. If a post requires a
   value that was not injected above, return `verdict: "skipped"` and name the missing value in `reason`
-  — a post you cannot answer in full is one you do not answer at all. The server rejects a body that
-  carries a placeholder, so the whole recruiter batch is lost rather than sent incomplete.
+  — a post you cannot answer in full is one you do not answer at all. The one exception is a post the
+  owner chose (`chosen: true`, below). The server rejects a body that carries a placeholder, so the
+  whole recruiter batch is lost rather than sent incomplete.
 - `reason` for a drafted post must start with `named in application` (or `named in follow-up` in follow-up
   mode). The follow-up query depends on that prefix.
 
@@ -119,18 +120,21 @@ markets, runs on them. Screen the post on its content.
 
 ### When `chosen` is true, the owner picked this post by hand
 
-The batch queue did not select it — the owner read it in the Posts view and pressed Draft. They are
-overruling the fit screen, and they are allowed to: they know what they are willing to apply for.
+The batch queue did not select it — the owner read it in the Posts view and pressed Draft. That is
+their judgement, and it is not yours to overrule: they know what they are willing to apply for.
 
-**Bullets 2-7 stop being skips** — location, the residency gate, the seniority floor, hours, a
-must-have the Gaps say they lack, and outside the field of work all become soft flags. Draft the
-strongest **honest** email and put the mismatch plainly in the report so they know the odds. Never
-invent experience, never soften a gap into something it is not: write what is true about them and
-let the recruiter judge. A gap stated in one clear sentence is worth more than a gap papered over.
+**Nothing is a skip. Every result is `verdict: "drafted"`**, and the server rejects a `skipped` one.
+All eight hard skips above become soft flags. Draft the strongest **honest** email and put each
+mismatch plainly in the report so they know the odds. Never invent experience, never soften a gap
+into something it is not: write what is true about them and let the recruiter judge. A gap stated in
+one clear sentence is worth more than a gap papered over.
 
-**Bullets 1 and 8 stay hard skips**, and so does a required value that was not injected. Choosing a
-post cannot conjure a vacancy that is not there: if the author is advertising themselves, or the
-post has nothing to tailor to, there is no email to write and no amount of intent changes that.
+- **The author looks like they are not hiring**: draft anyway, and make it the first line of the
+  report — the owner reads the draft before anything is sent, and deleting it is their call.
+- **No content**: write a short, honest note of interest from what the post does say.
+- **A required value that was not injected**: write the email without it. Never a placeholder, never
+  a guess, never a number of your own; leave that question unanswered in the email and name the
+  missing value first in the report, so the owner can add it before sending.
 
 ### Soft flags — draft, but say the odds are low in the report
 
