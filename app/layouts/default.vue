@@ -19,6 +19,11 @@ const links = [[{
   to: '/pipeline',
   onSelect: close
 }, {
+  label: 'Gaps',
+  icon: 'i-lucide-target',
+  to: '/gaps',
+  onSelect: close
+}, {
   label: 'Run',
   icon: 'i-lucide-play',
   to: '/run',
