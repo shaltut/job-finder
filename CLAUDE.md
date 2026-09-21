@@ -214,6 +214,33 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
 - **`contacts`** — one row per recruiter email. `stage` drafted → contacted → followed_up → final, or replied.
   **Two emails per address, ever.** `final` is never reset — enforced by `WHERE contacts.stage <> 'final'` on
   the upsert, not by prose.
+- **`post_requirements` / `requirement_runs`** — the gap record, for improving the CV and choosing what to
+  learn. For every **application** (`applications.verdict = 'drafted'` or `posts.applied_at` set) the
+  `gaps` job reads the post against the master CV with one `gpt-5-mini` call (`JOBFINDER_GAPS_MODEL`) and
+  stores each requirement: `term`, `category`, `importance` must|nice, `status` present|partial|absent,
+  the post's `quote` and the CV's `cv_shows`. **Both quotes are verified verbatim in code**
+  (`verifyRequirements` in `server/utils/gaps.ts`: a quote of 8+ letters/digits compared by `matchKey`, a
+  shorter one — `C#`, `Redis`, a third of the CV's skills — only as a whole word via `excludeRule`): a row whose
+  post quote is not in the post, or whose present/partial CV quote is not in the master CV, is never
+  stored, and an `absent` row carries no CV quote. `requirement_runs` records which CV (`cv_sha` =
+  `pdfSha256`) each post was read against, so uploading a new CV makes every run stale and the next job
+  re-reads them. Triggers: after a draft job that drafted, after Mark applied, daily, and **Extract gaps**
+  in the Run view. `enqueue('gaps')` dedupes against the **queue only** — a running job already chose its
+  posts. The **Gaps** page groups each term: **Learn** when its most frequent status is `absent` (ties go
+  to the worse), else **On your CV** when `excludeRule([term])` matches the current master CV text, else
+  **Add now** — the experience is there, the keyword is not.
+  **Analysing it with Claude Code**: the CV to enhance is `data/cv/master.json` (the uploaded PDF, extracted
+  and cached); the ranked record is
+  ```bash
+  sqlite3 data/jobfinder.db "select r.term, r.category, count(*) apps, sum(r.importance='must') must,
+    group_concat(distinct r.status), group_concat(r.quote, ' | ') from post_requirements r
+    join posts p on p.key = r.key left join applications a on a.key = p.key
+    where a.verdict = 'drafted' or p.applied_at is not null
+    group by lower(r.term) order by apps desc, must desc"
+  ```
+  **The one rule for any CV-enhancement pass: Add now keywords may go onto the CV; Learn keywords may not
+  until the skill is real.** `tailoredCv()` refuses technology the master CV does not name, so the base CV
+  is the only place honesty can slip — this is where it is held.
 
 ## Configuration
 
