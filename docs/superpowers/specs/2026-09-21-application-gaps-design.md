@@ -129,7 +129,9 @@ WHERE (a.verdict = 'drafted' OR p.applied_at IS NOT NULL)
 - an **Extract gaps** button in the Run view's Maintenance row — which is also the backfill,
 - the daily task (`server/tasks/daily.ts`), so a newly uploaded CV is picked up unasked.
 
-`enqueue('gaps')` is a no-op while one is queued or running, exactly like `sync`.
+`enqueue('gaps')` is a no-op while one is already **queued**. Unlike `sync` it is not refused while one
+runs: a running job chose its posts when it started, so an application that arrives mid-run needs the
+queued one to pick it up.
 
 **Failure**: a post whose call fails writes nothing and is retried by the next job — the failed-score
 posture. No CV uploaded, no master CV, or no `OPENAI_API_KEY`: the job exits with one readable line and
@@ -160,7 +162,8 @@ CV moves a keyword out of Add now at once, before any re-extraction.
 - **Last seen** is the most recent application date among the posts asking: `applications.created_at` for
   a drafted post, `applied_at` for one applied by hand.
 - Table: keyword · category · asked by (`12 applications · 8 must-have`) · group · last seen. Default shows
-  Add now and Learn; a segmented control picks Add now / Learn / On your CV / All, plus a category filter.
+  Add now and Learn; a select picks Add now / Learn / On your CV / All, plus a category select — the same
+  control the Posts view filters use.
 - Ranked by applications asking, then must-have count.
 - Row expansion: the applications behind the term — title @ company, must/nice, the post's quote, the CV
   line when there is one, and a link to the post when `post_url` exists.
@@ -196,7 +199,8 @@ master CV does not name, so the base CV is the only place honesty can slip, and 
 4. A re-run replaces rows; no mix of old and new survives.
 5. Grouping: most-frequent status wins, ties go to the worse; On your CV matches `C#`, `.NET` and a plain
    word on whole words only.
-6. `enqueue('gaps')` twice queues one job.
+6. Queuing is verified live rather than in `node:test`, because no test can import `jobs.ts`: three POSTs to
+   `/api/run/gaps` back to back return 202, 202, 200 — one running, one queued, one refused.
 
 Live: run the backfill on the real database, compare `requirement_runs` against the 110 applications,
 screenshot the page.
