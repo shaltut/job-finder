@@ -19,9 +19,10 @@ import { ccFrom, createDraft, gmailStatus, renderHtml } from './gmail'
 import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 import { closedInGmail, sweep } from './sync'
 import { runPasteJob } from './paste-job'
+import { runGapsJob } from './gaps-job'
 
 export type Lane = 'scrape' | 'draft' | 'paste'
-export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste'
+export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps'
 
 export interface JobArgs {
   terms?: string
@@ -90,6 +91,9 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   if (kind === 'draft' && args.key
     && (queue.some(q => q.args.key === args.key) || lanes.draft.current?.args?.keys?.includes(args.key))) return null
   if (kind === 'sync' && (queue.some(q => q.kind === 'sync') || lanes.draft.current?.kind === 'sync')) return null
+  // Deduped against the QUEUE only, unlike sync: a gaps job already running chose its posts when it
+  // started, so an application that arrives mid-run needs the queued one to pick it up.
+  if (kind === 'gaps' && queue.some(q => q.kind === 'gaps')) return null
   // the same pasted text queued twice, or pasted again while its own score is still running, is a no-op
   if (kind === 'paste' && args.text
     && (queue.some(q => q.args.text === args.text) || lanes.paste.current?.args?.text === args.text)) return null
@@ -170,7 +174,9 @@ function runJob(lane: Lane, item: QueueItem) {
     // recruiter and runs one claude session per group. `abort` gives Stop something to kill.
     const abort = new AbortController()
     job.child = { kill: () => abort.abort() } as unknown as ChildProcess
-    const work = kind === 'sync' ? runSyncJob(push) : runDraftJob(job, args, push, abort.signal)
+    const work = kind === 'sync'
+      ? runSyncJob(push)
+      : (kind === 'gaps' ? runGapsJob(job, push, abort.signal) : runDraftJob(job, args, push, abort.signal))
     work
       .then(code => finish(code))
       .catch((e) => {
@@ -483,6 +489,8 @@ async function runDraftJob(
       if (res.report) res.report.split('\n').filter(Boolean).forEach(push)
     }
     if (config.tailorCv) push(`cv: ${tailoredCount} tailored, ${fellBack} fell back`)
+    // every drafted post is a new application: read it for the gap record, after this lane frees up
+    if (job.added) enqueue('gaps')
     return 0
   } finally {
     // Neither close may depend on the other surviving. Closing the browser first meant a rejected

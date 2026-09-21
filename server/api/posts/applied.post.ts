@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { sqlite } from '../../utils/db'
 import { setApplied } from '../../utils/ingest'
+import { enqueue } from '../../utils/jobs'
 
 const body = z.object({
   // one row's button, a bulk selection, and the Undo toast are all the same call
@@ -15,5 +16,8 @@ const body = z.object({
  */
 export default defineEventHandler(async (event) => {
   const a = await readValidatedBody(event, body.parse)
-  return { updated: setApplied(sqlite, a.keys, a.applied) }
+  const updated = setApplied(sqlite, a.keys, a.applied)
+  // an application made by hand is still an application: read it for the gap record
+  if (a.applied && updated) enqueue('gaps')
+  return { updated }
 })

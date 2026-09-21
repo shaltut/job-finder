@@ -37,6 +37,15 @@ export default defineTask({
       messages.push(`sweep not queued: ${(e as Error).message}`)
     }
 
+    // A newly uploaded CV makes every gap record stale; this re-reads them without anyone remembering.
+    // Costs nothing when nothing is pending: the master CV is cached and the selection comes back empty.
+    try {
+      enqueue('gaps', { auto: true })
+      messages.push('gaps queued')
+    } catch (e) {
+      messages.push(`gaps not queued: ${(e as Error).message}`)
+    }
+
     const summary = messages.join('; ')
     console.log(`[daily] ${summary}`)
     notify(`daily: ${summary}`)

@@ -40,7 +40,8 @@ const tokens = (text: string): string[] =>
  */
 const isTech = (t: string): boolean => (/[a-z]/i.test(t) && /[\d.#+]/.test(t)) || /^[A-Z]{2,}$/.test(t)
 
-const masterText = (m: MasterCv): string => [
+/** Every text field of the master CV, one per line — the full view the gap record checks quotes against. */
+export const masterText = (m: MasterCv): string => [
   m.summary,
   ...m.roles.flatMap(r => [r.title, r.employer, r.location, r.start, r.end, ...r.bullets.map(b => b.text)]),
   ...m.skills.flatMap(s => [s.group, ...s.items]),

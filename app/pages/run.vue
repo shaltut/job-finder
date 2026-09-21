@@ -174,6 +174,15 @@ const yieldColumns: TableColumn<YieldRow>[] = [
               :disabled="!!job.lanes.scrape.current"
               @click="post('/api/run/rescore')"
             />
+            <UButton
+              label="Extract gaps"
+              icon="i-lucide-list-checks"
+              color="neutral"
+              variant="outline"
+              size="sm"
+              title="Read every application not yet read against the current CV, for the Gaps page. Costs OpenAI calls."
+              @click="post('/api/run/gaps')"
+            />
           </div>
         </template>
       </UCard>
