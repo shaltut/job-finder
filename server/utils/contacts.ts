@@ -5,6 +5,7 @@
 // reasoning put pasteOnce() in paste.ts. Everything here is a plain SQLite write over an injected handle,
 // so test/heal.test.ts runs it against a real migrated database.
 import type Database from 'better-sqlite3'
+import type { DraftPost } from './drafter.ts'
 import { cachedStage, type Decision } from './stages.ts'
 
 /**
@@ -60,3 +61,43 @@ export function healContact(db: Database.Database, email: string, d: Decision, n
  */
 export const neverWrittenTo = (posts: string): string =>
   `NOT EXISTS (SELECT 1 FROM contacts c WHERE c.email = json_extract(${posts}.emails, '$[0]'))`
+
+/**
+ * The posts a follow-up to this recruiter carries: the roles their application named (`named: true`, the
+ * follow-up's subject) and any hiring post from them no email has mentioned yet.
+ *
+ * It used to be the second half only, and bailed when that was empty — which it is for every recruiter
+ * who posted one role, since the application named it. Measured 2026-09-25: 66 of 79 due follow-ups
+ * ended "leaving it to you", while the procedure has always described a follow-up that names the
+ * original role and date.
+ *
+ * A named post counts only when named in an application TO THIS ADDRESS: `emails` is matched at any
+ * index, so a post can reach here because this address was only its Cc, and its application went to
+ * somebody else. `named in follow-up` rows are out either way — that role has had its second email.
+ * Dismissed and hand-applied posts stay out: the owner has already said what they want done with them.
+ */
+export function followUpPosts(db: Database.Database, email: string): DraftPost[] {
+  const rows = db.prepare(`
+    SELECT p.*, (a.reason LIKE 'named in application%') AS named
+    FROM posts p LEFT JOIN applications a ON a.key = p.key
+    WHERE EXISTS (SELECT 1 FROM json_each(p.emails) WHERE value = @email)
+      AND coalesce(p.post_type, 'hiring') = 'hiring'
+      AND (a.key IS NULL
+        OR a.reason NOT LIKE 'named in %'
+        OR (a.reason LIKE 'named in application%' AND a.recruiter_email = @email))
+      AND p.dismissed_at IS NULL
+      AND p.applied_at IS NULL
+    ORDER BY named DESC, p.score DESC
+  `).all({ email: email.toLowerCase() }) as Record<string, unknown>[]
+  return rows.map(r => ({
+    key: r.key as string,
+    title: r.title as string | null,
+    company: r.company as string | null,
+    location: r.location as string | null,
+    score: r.score as number | null,
+    postType: (r.post_type as DraftPost['postType']) ?? null,
+    flags: JSON.parse((r.flags as string) || '[]'),
+    text: r.text as string,
+    named: r.named === 1
+  }))
+}

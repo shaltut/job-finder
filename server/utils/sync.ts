@@ -8,11 +8,11 @@
 import type Database from 'better-sqlite3'
 import type { AppConfig } from './config'
 import { followUpAttachment } from './cv-attach'
-import { runDrafter, type DraftPost } from './drafter'
+import { runDrafter } from './drafter'
 import { persist, signature } from './drafts'
 import { ccFrom, createDraft, gmail, renderHtml, replyHeaders } from './gmail'
 import { cachedStage, closedBy, decideStage, untilDue, type Decision, type GmailMessage } from './stages'
-import { healContact } from './contacts'
+import { followUpPosts, healContact } from './contacts'
 
 interface RawMessage {
   id: string
@@ -166,11 +166,9 @@ export async function sweep(
 }
 
 /**
- * The follow-up names every post from this address that no sent email has mentioned yet — that is what the
- * `named in ...` prefix on `applications.reason` is for. A dismissed post has no such row, so without the
- * `dismissed_at IS NULL` clause the sweep would offer up exactly the roles the owner threw away — and
- * `applied_at IS NULL` for the mirror case: a role the owner already applied to through its own link has
- * no `named in ...` row either, and pitching it again would contradict an application already sent.
+ * The follow-up is about the roles the application named, and names any role from this address that no
+ * sent email has mentioned yet — followUpPosts() in contacts.ts chooses both, and says why dismissed and
+ * hand-applied posts stay out.
  */
 async function draftFollowUp(
   db: Database.Database, config: AppConfig, email: string, onLog: (s: string) => void, replyTo?: GmailMessage
@@ -182,32 +180,19 @@ async function draftFollowUp(
     onLog(`${email}: follow-up due but the original email is not in Gmail — leaving it to you`)
     return
   }
-  const rows = db.prepare(`
-    SELECT p.* FROM posts p LEFT JOIN applications a ON a.key = p.key
-    WHERE EXISTS (SELECT 1 FROM json_each(p.emails) WHERE value = ?)
-      AND coalesce(p.post_type, 'hiring') = 'hiring'
-      AND (a.key IS NULL OR a.reason NOT LIKE 'named in %')
-      AND p.dismissed_at IS NULL
-      AND p.applied_at IS NULL
-  `).all(email) as Record<string, unknown>[]
-
-  const posts: DraftPost[] = rows.map(r => ({
-    key: r.key as string,
-    title: r.title as string | null,
-    company: r.company as string | null,
-    location: r.location as string | null,
-    score: r.score as number | null,
-    postType: (r.post_type as DraftPost['postType']) ?? null,
-    flags: JSON.parse((r.flags as string) || '[]'),
-    text: r.text as string
-  }))
-
+  const posts = followUpPosts(db, email)
   if (!posts.length) {
-    onLog(`${email}: follow-up due but no unnamed posts to carry it — leaving it to you`)
+    // every role this address posted was dismissed or applied to by hand since the application went out
+    onLog(`${email}: follow-up due but no live post to carry it — leaving it to you`)
     return
   }
 
-  const req = { mode: 'follow-up' as const, recruiterEmail: email, posts }
+  const req = {
+    mode: 'follow-up' as const,
+    recruiterEmail: email,
+    posts,
+    originalSentAt: new Date(replyTo.date).toISOString().slice(0, 10)
+  }
   const res = await runDrafter(req, config, { onLog })
   const carrier = res.results.find(r => r.body)
   if (!carrier?.body) {

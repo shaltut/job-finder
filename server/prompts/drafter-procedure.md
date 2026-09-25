@@ -33,9 +33,11 @@ A JSON object on stdin:
 {
   "mode": "apply",              // or "follow-up"
   "recruiter_email": "hr@example.com",
+  "original_sent_at": "2026-09-01", // follow-up mode only: the day the application went out
   "posts": [                     // every unprocessed post from THIS recruiter
     { "key": "<sha1>", "title": "…", "company": "…", "location": "…",
-      "score": 8, "post_type": "hiring", "flags": ["night-shift"], "text": "<full post text>" }
+      "score": 8, "post_type": "hiring", "flags": ["night-shift"], "text": "<full post text>",
+      "already_named": true }    // follow-up mode only: the application named this role
   ]
 }
 ```
@@ -241,7 +243,14 @@ CV is actually sent.
 plain sentences: the role and the date of the original email; still interested; one line naming any further
 roles from this recruiter that pass screening; an offer to provide anything further; "CV attached again."
 **No new claims and no new evidence** — the application already made the case. `reason` starts
-`named in follow-up`. Return no `subject`: the follow-up is sent as a reply inside the original thread, and
+`named in follow-up`.
+
+The posts marked `already_named: true` are the roles the application named, and `original_sent_at` is the
+day it went out: they are what this follow-up is about. **Never skip one** — it has already been applied
+to, so screening it again changes nothing, and the server rejects a skip on it. Return each as `drafted`,
+and put the email body on one of them. Every other post (`already_named: false`) is a role this recruiter
+posted since: screen it exactly as in apply mode, and name the ones that pass in the one further-roles
+line. With none that pass, leave that line out — the follow-up stands on the original role alone. Return no `subject`: the follow-up is sent as a reply inside the original thread, and
 the server takes the subject from the application itself. Any `subject` you return is discarded — Gmail only
 joins the thread when the Subject header matches the original exactly.
 

@@ -102,7 +102,11 @@ export function persist(
           verdict = excluded.verdict,
           reason = excluded.reason,
           gmail_draft_id = excluded.gmail_draft_id
+        -- A follow-up now carries the roles the application named. Their rows are the record of that
+        -- application — its reason and its draft id — and the follow-up must not overwrite them.
+        WHERE @mode <> 'follow-up' OR applications.reason NOT LIKE 'named in application%'
       `).run({
+        mode: req.mode,
         key: r.key,
         verdict: r.verdict,
         reason: r.reason,

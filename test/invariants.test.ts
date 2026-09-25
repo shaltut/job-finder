@@ -102,10 +102,21 @@ test('a skip can never downgrade a post an email already names', () => {
 function emailingQueries(): Record<string, string> {
   const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
   const sync = readFileSync('server/utils/sync.ts', 'utf8')
+  const contacts = readFileSync('server/utils/contacts.ts', 'utf8')
+  // The follow-up's selection moved into followUpPosts() so it could be tested against a real database;
+  // pin that the sweep still runs it, or the query below could be dead code carrying the right clauses.
+  assert.match(sync, /followUpPosts\(db, email\)/, 'the follow-up sweep must select through followUpPosts()')
+  // An anchor that is not found makes indexOf -1 and the slice silently wrong — fail on the anchor instead.
+  const between = (src: string, from: string, to: string) => {
+    const a = src.indexOf(from)
+    const b = src.indexOf(to, a)
+    assert.ok(a >= 0 && b > a, `anchor not found: ${from} .. ${to}`)
+    return src.slice(a, b)
+  }
   return {
-    'the batch drafter queue': jobs.slice(jobs.indexOf('LEFT JOIN applications a ON a.key = p.key'), jobs.indexOf('ORDER BY p.score DESC')),
-    'the single-key draft path': jobs.slice(jobs.indexOf('WHERE p.key IN'), jobs.indexOf('.all(...args.keys)')),
-    'the follow-up sweep': sync.slice(sync.indexOf('SELECT p.* FROM posts p'), sync.indexOf('`).all(email)'))
+    'the batch drafter queue': between(jobs, 'LEFT JOIN applications a ON a.key = p.key', 'ORDER BY p.score DESC'),
+    'the single-key draft path': between(jobs, 'WHERE p.key IN', '.all(...args.keys)'),
+    'the follow-up sweep': between(contacts, 'export function followUpPosts', 'ORDER BY named DESC')
   }
 }
 

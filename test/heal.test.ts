@@ -10,8 +10,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
-import { healContact, neverWrittenTo } from '../server/utils/contacts.ts'
-import { isClosed } from '../server/utils/drafts.ts'
+import { followUpPosts, healContact, neverWrittenTo } from '../server/utils/contacts.ts'
+import { isClosed, persist } from '../server/utils/drafts.ts'
 import { applyRecord, type ScraperRecord } from '../server/utils/ingest.ts'
 import type { Decision } from '../server/utils/stages.ts'
 
@@ -125,4 +125,42 @@ test('Unprocessed drops a post whose recruiter has any stage, and keeps one with
   const kept = (db.prepare(`SELECT key FROM posts p WHERE ${neverWrittenTo('p')} ORDER BY key`).all() as { key: string }[])
     .map(r => r.key[0])
   assert.deepEqual(kept, ['a', 'b'], 'every stage leaves, drafted included; a Cc match and a post with no address stay')
+})
+
+test('a follow-up carries the applied role and any newer one — and only what belongs to this address', () => {
+  // Before, it carried only never-named posts and gave up without one: 66 of 79 due follow-ups on
+  // 2026-09-25 were one-post recruiters whose only post the application had already named.
+  const rec = 'fu@acme.example'
+  const post = (key: string, emails: string[], score: number): ScraperRecord => ({
+    op: 'post', key, searchTerm: 'x', author: 'A', authorUrl: 'https://www.linkedin.com/in/a', postUrl: null,
+    postedAge: '1h', postedAt: '2026-09-19T09:00:00.000Z', postType: 'hiring', title: `Role ${key[0]}`, company: 'Co',
+    location: null, remote: true, inScope: true, emails, links: [], phones: [], refIds: [],
+    channels: ['email'], score, reason: '', text: 'hiring', flags: []
+  } as ScraperRecord)
+  const app = db.prepare('INSERT INTO applications (key, verdict, reason, recruiter_email, gmail_draft_id) VALUES (?, ?, ?, ?, ?)')
+  const k = (c: string) => c.repeat(40)
+  applyRecord(db, post(k('p'), [rec], 5))
+  app.run(k('p'), 'drafted', 'named in application; the role', rec, 'draft-app')
+  applyRecord(db, post(k('q'), [rec], 8)) // posted since, never named
+  applyRecord(db, post(k('r'), [rec], 7))
+  app.run(k('r'), 'drafted', 'named in follow-up; had its second email', rec, 'draft-fu')
+  applyRecord(db, post(k('s'), ['other@x.example', rec], 9))
+  app.run(k('s'), 'drafted', 'named in application; to someone else', 'other@x.example', 'x')
+  applyRecord(db, post(k('t'), [rec], 9))
+  db.prepare('UPDATE posts SET dismissed_at = 1 WHERE key = ?').run(k('t'))
+
+  const got = followUpPosts(db, 'FU@Acme.example')
+  assert.deepEqual(got.map(p => [p.key[0], p.named]), [['p', true], ['q', false]],
+    'the applied role first, then the newer one; not the followed-up, Cc-only or dismissed posts')
+
+  // and persisting that follow-up keeps the application's own record, while promoting the recruiter
+  db.prepare(`INSERT INTO contacts (email, stage) VALUES (?, 'contacted')`).run(rec)
+  persist(db, { mode: 'follow-up', recruiterEmail: rec, posts: got }, { report: '', results: [
+    { key: k('p'), verdict: 'drafted', reason: 'named in follow-up; still interested', body: 'B' },
+    { key: k('q'), verdict: 'drafted', reason: 'named in follow-up; newer role' }
+  ] }, 'draft-new')
+  const row = (key: string) => db.prepare('SELECT reason, gmail_draft_id FROM applications WHERE key = ?').get(key) as { reason: string, gmail_draft_id: string }
+  assert.deepEqual(row(k('p')), { reason: 'named in application; the role', gmail_draft_id: 'draft-app' }, 'the application row is untouched')
+  assert.equal(row(k('q')).reason, 'named in follow-up; newer role')
+  assert.equal(contact(rec)?.stage, 'followed_up', 'a draft now exists, so the recruiter is followed up')
 })

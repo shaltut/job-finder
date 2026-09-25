@@ -316,3 +316,54 @@ test('a master CV that would push the prompt past PROMPT_BUDGET does not fit', (
   assert.equal(fitsPromptBudget(config, assignIds(cvContent)), true)
   assert.equal(fitsPromptBudget(config, assignIds({ ...cvContent, summary: 'x'.repeat(PROMPT_BUDGET) })), false)
 })
+
+// ---------------- follow-up: the role the application named ----------------
+
+const fu: DraftRequest = {
+  mode: 'follow-up',
+  recruiterEmail: 'hr@acme.sa',
+  originalSentAt: '2026-09-20',
+  posts: [
+    { ...req.posts[0]!, named: true },
+    { ...req.posts[1]!, named: false }
+  ]
+}
+
+test('a follow-up about the applied role, plus a skipped newer post, is a valid answer', () => {
+  const res = parseResponse(JSON.stringify({ results: [
+    { key: 'a'.repeat(40), verdict: 'drafted', reason: 'named in follow-up; still interested', body: 'B' },
+    { key: 'b'.repeat(40), verdict: 'skipped', reason: 'on-site outside the injected scope' }
+  ] }))
+  assert.deepEqual(checkContract(fu, res), [])
+})
+
+test('checkContract refuses a skip on the role the application already named', () => {
+  // A skipped subject is a follow-up that is never written — the 2026-09-25 failure, reached another way.
+  const res = parseResponse(JSON.stringify({ results: [
+    { key: 'a'.repeat(40), verdict: 'skipped', reason: 'location outside scope' },
+    { key: 'b'.repeat(40), verdict: 'drafted', reason: 'named in follow-up; newer role', body: 'B' }
+  ] }))
+  assert.ok(checkContract(fu, res).some(p => p.includes('already named')))
+})
+
+test('checkContract refuses a follow-up about an applied role that carries no body', () => {
+  const res = parseResponse(JSON.stringify({ results: [
+    { key: 'a'.repeat(40), verdict: 'drafted', reason: 'named in follow-up; still interested' },
+    { key: 'b'.repeat(40), verdict: 'skipped', reason: 'not a fit' }
+  ] }))
+  assert.ok(checkContract(fu, res).some(p => p.includes('no email body')))
+})
+
+test('with no named role, an all-skipped follow-up is still allowed to say nothing', () => {
+  // control: the no-body rule is about a follow-up that has a subject, not a blanket requirement
+  const none = { ...fu, posts: fu.posts.map(p => ({ ...p, named: false })) }
+  const res = parseResponse(JSON.stringify({ results: none.posts.map(p => ({ key: p.key, verdict: 'skipped', reason: 'not a fit' })) }))
+  assert.deepEqual(checkContract(none, res), [])
+})
+
+test('the procedure tells the follow-up what already_named and original_sent_at mean', () => {
+  const proc = readProcedure()
+  assert.match(proc, /already_named/)
+  assert.match(proc, /original_sent_at/)
+  assert.match(proc, /Never skip one/)
+})

@@ -719,8 +719,15 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
 - **Row 6 is cached as `contacted`, not `followed_up`** (`cachedStage()`, used by the sweep and by
   `healContact()`). A due follow-up is not a written one: `persist()` promotes the recruiter only once a draft
   exists. Measured 2026-09-25: pre-writing the stage left 76 of 79 `followed_up` recruiters with no follow-up
-  at all — `draftFollowUp()` hands off ("leaving it to you") when no un-named post can carry one, which is the
-  common one-post case. The cached note is `follow-up due <iso>`, so the Pipeline reads "follow-up due now".
+  at all. The cached note is `follow-up due <iso>`, so the Pipeline reads "follow-up due now".
+- **Every recruiter who stays silent gets the follow-up, one post or many.** `followUpPosts()` in
+  `server/utils/contacts.ts` sends the roles the application named (`already_named`, with
+  `original_sent_at`) plus any newer post no email has mentioned. It used to send only the second half and
+  hand off when that was empty — 66 of 79 due follow-ups on 2026-09-25, since the application had already
+  named a one-post recruiter's only role. `checkContract` refuses a skip on an already-named role, and a
+  follow-up that has one but no body; `persist()` never overwrites the application's own
+  `named in application` rows (their reason and draft id). A named role counts only when named in an
+  application **to this address** — a Cc-only match belongs to somebody else's application.
   Two consequences are pinned in `test/stages.test.ts`: **row 4 keys on the pending draft alone**, so a
   follow-up the owner drafts by hand beside a cached `contacted` is never doubled; and `isClosed()` treats
   `contacted` as closed, so the no-Gmail cache cannot open the door to a second application.

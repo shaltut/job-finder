@@ -64,6 +64,12 @@ export interface DraftPost {
   postType: 'hiring' | 'seeking' | 'other' | null
   flags: string[]
   text: string
+  /**
+   * Follow-up mode only: the application being followed up already named this role. It is the follow-up's
+   * subject, not a candidate for screening — checkContract() refuses a skip on it, because a skipped subject
+   * is a follow-up that never gets written (66 of 79 due on 2026-09-25, when these were not sent at all).
+   */
+  named?: boolean
 }
 
 export interface DraftRequest {
@@ -79,6 +85,8 @@ export interface DraftRequest {
   chosen?: boolean
   recruiterEmail: string
   posts: DraftPost[]
+  /** Follow-up mode: the date the application went out, YYYY-MM-DD, for "my email of <date>". */
+  originalSentAt?: string
 }
 
 const resultSchema = z.object({
@@ -261,6 +269,10 @@ export function checkContract(req: DraftRequest, res: DraftResponse): string[] {
     if (seen.has(r.key)) problems.push(`duplicate result for ${r.key}`)
     seen.add(r.key)
     const prefix = req.mode === 'follow-up' ? 'named in follow-up' : 'named in application'
+    const askedPost = req.posts.find(p => p.key === r.key)
+    if (req.mode === 'follow-up' && askedPost?.named && r.verdict === 'skipped') {
+      problems.push(`skipped ${r.key}, the role the application already named — it is what this follow-up is about`)
+    }
     if (r.verdict === 'drafted' && !r.reason.startsWith(prefix)) {
       problems.push(`drafted reason for ${r.key} must start with "${prefix}"`)
     }
@@ -274,6 +286,11 @@ export function checkContract(req: DraftRequest, res: DraftResponse): string[] {
 
   const withBody = res.results.filter(r => r.body)
   if (withBody.length > 1) problems.push('more than one post carries an email body; expected one per recruiter')
+  // A follow-up about a role already applied to always has something to say, so no body is a failure to
+  // report, not a quiet "nothing to send" — that silence is how 76 follow-ups went unwritten.
+  if (req.mode === 'follow-up' && !withBody.length && req.posts.some(p => p.named)) {
+    problems.push('the follow-up carries no email body')
+  }
   if (req.mode === 'apply' && withBody.length === 1 && !withBody[0]!.subject) {
     problems.push('the drafted email has a body but no subject')
   }
@@ -325,9 +342,11 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
     mode: req.mode,
     chosen: req.chosen ?? false,
     recruiter_email: req.recruiterEmail,
+    ...(req.mode === 'follow-up' ? { original_sent_at: req.originalSentAt ?? null } : {}),
     posts: req.posts.map(p => ({
       key: p.key, title: p.title, company: p.company, location: p.location,
-      score: p.score, post_type: p.postType, flags: p.flags, text: p.text
+      score: p.score, post_type: p.postType, flags: p.flags, text: p.text,
+      ...(req.mode === 'follow-up' ? { already_named: !!p.named } : {})
     }))
   })
 
