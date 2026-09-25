@@ -400,6 +400,17 @@ drafts keep arguing from a stale CV.
   language (Arabic) and scroll-loaded ones in English. `normalize()` folds the Arabic age back into English
   (`٣ من الساعات` → `3h`) before the age regex or the dedupe key see it. The two render paths can still key the
   same post twice; rare, and the email is identical either way, so no recruiter is contacted twice.
+- **The "…more" expander follows the UI language, not the post's.** Those first ~10 cards carry
+  `…المزيد` even on an English post, and the click loop matched `…more` only: measured 2026-09-26, 7 of
+  the first 9 feed cards were stored **collapsed**, two of them hiring posts that kept their address only
+  because it sat above the fold. `MORE_LABEL` in `scraper/lib.ts` carries both labels and
+  `test/lib.test.ts` pins it. Fixing it exposed the next limit: the stored card was cut at 3000 characters,
+  which is LinkedIn's cap on the post *body* alone — the header adds up to 1605 more — so a full-length
+  post lost its tail, where the address sits (median at 86% of a post). `TEXT_CAP` is 6000.
+- **`npm run dry` prints a quality line per term** — cards over `TEXT_CAP`, cards still collapsed, no
+  author, no age, no channel, duplicate keys — and `len=` per card. Read it after any change to
+  `readCards` or the expander. Measured 2026-09-26: a search term 40/40 cards, 40/40 permalinks, all clean;
+  the feed's undated cards are sponsored posts and the composer box, which carry no age and no channel.
 - **The feed's reposts name the wrong author** unless you look: a card opening with "X reposted this" links X
   first. `readCards` picks the **most repeated** href — the real author is linked three times (avatar, name,
   menu), a resharer twice.
@@ -685,7 +696,15 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   `Kubernetes`, `Terraform`) is not caught at all, and the all-caps branch is defeated by any punctuation
   `tokens()` does not split on, so bare `AWS` is rejected while `"AWS"`, `*SAP*` and `AWS-native` pass.
   It is a net for the obvious cases, not a guarantee, and `test/cv.test.ts` pins that ceiling as a
-  **passing** test so tightening it is a visible change. **Any failure attaches the uploaded PDF** —
+  **passing** test so tightening it is a visible change. **Rule 8: the CV never declares a gap** —
+  "no direct experience", "familiar with", "currently learning" and the like are refused unless the master
+  CV itself says them; gaps are the email's to declare, once. Measured 2026-09-26: 0 of 97 real tailored
+  CVs would fail it, so it pins a habit. The `HEDGE` list is narrow on purpose — no bare "learning" or
+  "gap" — because a false match costs the tailoring. **The headline under the name is tailored too**
+  (`checkHeadline`): it must start with `profile.title` exactly — it may describe the owner, never rename
+  them — and every later word must already be in the master CV, with no number, hedge or placeholder. A
+  bad headline is dropped on its own and the plain title prints; the CV keeps its tailoring. The job log's
+  `cv: tailored` line names the headline used or why it was dropped. **Any failure attaches the uploaded PDF** —
   extraction, the prompt budget, the check, or rendering — and says why in the job log, with a
   `cv: N tailored, M fell back` line per job. `contacts.cv_path` records a tailored CV sent (null for the
   uploaded one); the follow-up reuses it. Tailored PDFs live in

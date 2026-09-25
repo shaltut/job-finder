@@ -18,10 +18,43 @@ const cvBlock = z.object({
     id: z.string().regex(/^r\d+$/),
     bullets: z.array(z.object({ id: z.string().regex(/^r\d+\.b\d+$/), text: z.string().min(1) }))
   })),
-  skills: z.array(z.object({ id: z.string().regex(/^s\d+$/), items: z.array(z.string()) }))
+  skills: z.array(z.object({ id: z.string().regex(/^s\d+$/), items: z.array(z.string()) })),
+  headline: z.string().optional()
 })
 
-export type TailorResult = { ok: true, cv: CvContent } | { ok: false, reason: string }
+/**
+ * `headline`: what prints under the name, in place of the plain profile title — or null, which prints the
+ * title. `headlineNote` says why a returned headline was dropped; the rest of the CV stands either way.
+ */
+export type TailorResult = { ok: true, cv: CvContent, headline: string | null, headlineNote?: string } | { ok: false, reason: string }
+
+/** Joiners a headline may use between its words without the master CV having to contain them. */
+const JOINERS = new Set(['·', '|', '-', '–', '—', '&', 'and', 'with', 'in', 'of', 'for'])
+
+/**
+ * The line under the name, positioned for these posts — within limits that keep it the owner's own:
+ * it starts with their title exactly as stored (it may describe them, never rename them), every word
+ * after that is a word the master CV already contains, and it carries no number, hedge or placeholder.
+ * "Engineering Manager · Hands-on .NET & PostgreSQL" passes; "Senior .NET Developer" does not, and
+ * neither does "Engineering Manager · Kafka expert" unless the master CV says Kafka and expert.
+ *
+ * A bad headline is dropped on its own rather than failing the CV: it is one line, and costing the whole
+ * tailored CV over it would trade a better fit for a slightly better title line.
+ */
+function checkHeadline(raw: string | undefined, title: string, vocab: Set<string>, masterLower: string): { headline: string | null, note?: string } {
+  const h = raw === undefined ? '' : clean(raw).replace(/\s+/g, ' ').trim()
+  if (!h || h === title) return { headline: null }
+  const drop = (why: string) => ({ headline: null, note: `headline dropped (${why}): "${h}"` })
+  if (!title) return drop('no profile title to anchor it')
+  if (!h.startsWith(title)) return drop('it must start with the profile title')
+  if (h.length > title.length + 60) return drop('too long')
+  if (/\d/.test(h.slice(title.length))) return drop('a number')
+  const alien = tokens(h.slice(title.length)).map(w => w.toLowerCase()).find(w => !JOINERS.has(w) && !vocab.has(w))
+  if (alien) return drop(`"${alien}" is not in the master CV`)
+  const hole = h.match(PLACEHOLDER)?.[0] ?? hedgeProblem('headline', h, masterLower)
+  if (hole) return drop(hole)
+  return { headline: h }
+}
 
 const fail = (reason: string): TailorResult => ({ ok: false, reason })
 
@@ -53,6 +86,15 @@ export const masterText = (m: MasterCv): string => [
   ...m.languages
 ].join('\n')
 
+/**
+ * Rule 8's vocabulary: a CV that declares what the candidate lacks. The email is where gaps are declared,
+ * honestly and once; the CV positions the candidate for the role and never argues against them. Measured
+ * 2026-09-26: 0 of 97 tailored CVs carried any of these, so this pins a habit rather than fixing a leak.
+ * Deliberately narrow — no bare "learning" or "gap", which live inside "machine learning" and "bridging the
+ * gap" — because a false match costs the tailoring: any failed rule attaches the uploaded PDF instead.
+ */
+const HEDGE = /\b(?:no (?:direct |hands-on |production |commercial |professional |prior )?(?:experience|exposure)|not yet|limited (?:exposure|experience|knowledge)|lack(?:s|ing)?|basic (?:knowledge|understanding|exposure)|familiar(?:ity)? with|currently (?:learning|ramping)|ramping up|(?:willing|eager|keen) to learn|transferable skills?|(?:skills?|knowledge|experience) gaps?|while (?:i|he|she) (?:have|has) not)\b/i
+
 /** Rules 4, 5, 6 (when a limit is given) and 7, in that order, for one piece of text. */
 function contentProblem(where: string, text: string, sourceNumbers: string[], vocab: Set<string>, maxLength?: number): string | null {
   const known = new Set(sourceNumbers)
@@ -68,7 +110,16 @@ function contentProblem(where: string, text: string, sourceNumbers: string[], vo
   return null
 }
 
-export function tailoredCv(raw: unknown, master: MasterCv): TailorResult {
+/** Rule 8, for one piece of text: a hedge the master CV does not itself contain. */
+function hedgeProblem(where: string, text: string, master: string): string | null {
+  const hedge = text.match(HEDGE)?.[0]
+  return hedge && !master.includes(hedge.toLowerCase())
+    ? `rule 8 at ${where}: "${hedge}" declares a gap — the email declares gaps, the CV never does`
+    : null
+}
+
+/** `title` is the profile title, the anchor a headline must start with; with none, no headline is used. */
+export function tailoredCv(raw: unknown, master: MasterCv, title = ''): TailorResult {
   const parsed = cvBlock.safeParse(raw)
   if (!parsed.success) return fail(`malformed cv block: ${parsed.error.issues[0]?.message ?? 'unreadable'}`)
   const t = parsed.data
@@ -109,11 +160,13 @@ export function tailoredCv(raw: unknown, master: MasterCv): TailorResult {
 
   // rules 4-7 — each bullet against its own source bullet
   const vocab = new Set(tokens(masterText(master)).map(x => x.toLowerCase()))
+  const masterLower = masterText(master).toLowerCase()
   for (const [i, role] of master.roles.entries()) {
     for (const bullet of t.roles[i]!.bullets) {
       const source = role.bullets.find(b => b.id === bullet.id)!
       const limit = Math.floor(source.text.length * 1.5) + 20
       const problem = contentProblem(bullet.id, bullet.text, numbersIn(source.text), vocab, limit)
+        ?? hedgeProblem(bullet.id, bullet.text, masterLower)
       if (problem) return fail(problem)
     }
   }
@@ -131,10 +184,15 @@ export function tailoredCv(raw: unknown, master: MasterCv): TailorResult {
   const summaryNumbers = numbersIn([master.summary, ...master.roles.flatMap(r => [r.start, r.end])].join('\n'))
   const summaryLimit = Math.floor((master.summary.length || 200) * 1.5) + 20
   const summaryProblem = contentProblem('summary', t.summary, summaryNumbers, vocab, summaryLimit)
+    ?? hedgeProblem('summary', t.summary, masterLower)
   if (summaryProblem) return fail(summaryProblem)
+
+  const { headline, note: headlineNote } = checkHeadline(t.headline, title.trim(), vocab, masterLower)
 
   return {
     ok: true,
+    headline,
+    ...(headlineNote ? { headlineNote } : {}),
     cv: {
       summary: t.summary,
       roles: master.roles.map((role, i) => ({

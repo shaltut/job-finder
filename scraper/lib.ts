@@ -385,6 +385,17 @@ export function throttleEvidence(text: string, context = 120): string | null {
   return text.slice(Math.max(0, m.index - context), m.index + m[0].length + context).replace(/\s+/g, ' ').trim()
 }
 
+/**
+ * The "…more" expander on a collapsed post, in both languages LinkedIn renders this account's UI in. The
+ * button follows the UI language, not the post's: the first ~10 feed cards arrive in the account's
+ * language, so an English post there carries "…المزيد". Matching English alone left 7 of the first 9 feed
+ * cards collapsed (measured 2026-09-26), and a collapsed card hides the tail where the address usually is.
+ * The click loop matches a button's text with it; the dry run matches each line of a card's text with
+ * collapsedText(), to report any card the loop still missed.
+ */
+export const MORE_LABEL = /…\s*(?:more|المزيد)\s*$/
+export const collapsedText = (text: string): boolean => new RegExp(MORE_LABEL.source, 'm').test(text)
+
 export const SCROLL_STALL_MS = 30_000
 
 /** Keep scrolling while there is room for more cards and the count has grown recently enough. */

@@ -201,6 +201,19 @@ rate and time zone. Named companies with real job specs get the full treatment. 
 Only when a **Master CV** section is injected above. With none injected, return no `cv` key and ignore
 this section.
 
+**The tailored CV is the case for the candidate, written for these posts.** It never mentions a gap, a
+missing skill, a weaker area or anything the candidate is still learning: gaps are declared once, in the
+email, and nowhere else — the server rejects a CV that declares one and attaches the original instead.
+Within the facts the master CV states, make it read as the closest possible fit for the role:
+
+- The summary opens with what the posts are hiring for, framed by the candidate's own title and years,
+  then the posts' must-haves that the master CV supports — in the posts' order and in their words. Keep
+  the master summary's voice: if it never says "I", neither does the tailored one.
+- The skill groups the posts lean on come first, and within each group the items the posts name first.
+- The bullets that answer the posts' requirements come first in every role, the current one included —
+  for a hands-on role, the hands-on delivery bullets lead rather than the leadership ones — reworded in
+  the posts' vocabulary wherever the fact stays identical.
+
 In apply mode, add one top-level `cv` key beside `results` and `report`, tailoring the injected master CV
 to the posts in this email:
 
@@ -208,7 +221,8 @@ to the posts in this email:
 "cv": {
   "summary": "…",
   "roles":  [{ "id": "r0", "bullets": [{ "id": "r0.b3", "text": "…" }] }],
-  "skills": [{ "id": "s1", "items": ["…"] }]
+  "skills": [{ "id": "s1", "items": ["…"] }],
+  "headline": "…"
 }
 ```
 
@@ -225,6 +239,11 @@ to the posts in this email:
   is rejected — the digits in a date of birth and a graduation year look the same to a checker, and one
   of those becoming a years-of-experience claim is the failure this whole contract exists to stop. Cite
   such a figure in the bullet that owns it.
+- **Headline:** the line printed under the candidate's name. Start it with the injected current title,
+  exactly as written, then ` · ` and two or three things these posts want that the master CV shows —
+  e.g. `<title> · Hands-on <skill> & <skill>`. Every word after the title must already appear in the
+  master CV; no numbers, no other job title in its place. Omit `headline` when the title alone fits. A
+  headline that breaks these is dropped and the plain title prints — the rest of the CV is kept.
 - Education, certifications and languages are not returned; they are copied from the master CV unchanged.
 - Never copy an id such as `r0.b3` into a bullet or into the email.
 

@@ -28,11 +28,14 @@ export async function applicationAttachment(input: {
   if (input.raw === undefined) return original('the drafter returned no cv block')
 
   try {
-    const checked = tailoredCv(input.raw, input.master)
+    const checked = tailoredCv(input.raw, input.master, input.profile.title)
     if (!checked.ok) return original(checked.reason)
     const out = tailoredCvPath(input.cvPath, input.recruiterEmail)
-    const bytes = await input.renderer.render(renderCvHtml(checked.cv, input.profile), out)
-    return { path: out, tailored: true, note: `cv: tailored (${bytes} bytes)` }
+    // the headline prints where the title does; only the rendered CV sees it, never the stored profile
+    const profile = checked.headline ? { ...input.profile, title: checked.headline } : input.profile
+    const bytes = await input.renderer.render(renderCvHtml(checked.cv, profile), out)
+    const head = checked.headline ? `, headline "${checked.headline}"` : (checked.headlineNote ? `, ${checked.headlineNote}` : '')
+    return { path: out, tailored: true, note: `cv: tailored (${bytes} bytes)${head}` }
   } catch (e) {
     // Nothing that happens here may cost an email: jobs.ts calls this outside the try that guards the
     // drafter, so an escaping throw would end the whole batch, not just this recruiter's CV.

@@ -13,7 +13,7 @@ import { parseArgs } from 'node:util'
 import Database from 'better-sqlite3'
 import { chromium } from 'playwright-core'
 import {
-  admits, ageOf, applyCueFor, channelsOf, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, normalize, storedKey,
+  admits, ageOf, applyCueFor, channelsOf, collapsedText, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, MORE_LABEL, normalize, storedKey,
   throttleEvidence, rotateTerms, dayIndex, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
@@ -71,6 +71,14 @@ const CV_PATH = opts.cv || CONFIG.cv
 // Compiled once, for the dry run's report only. The scrape itself reaches the same rule through
 // prescreen(), so there is exactly one definition of what "excluded" means.
 const EXCLUDE_RE = excludeRule(CONFIG.excludes)
+/**
+ * Characters of a card stored and scored — the card, not the post. LinkedIn caps a post body at 3000
+ * characters, and the card adds the header above it (measured up to 1605) plus the reaction footer, so the
+ * old 3000 cut the tail off every full-length post, and the tail is where the address sits (median at 86%
+ * of a post). Invisible while the top feed cards stayed collapsed; the first dry run after they expanded
+ * found one over 3000. 6000 holds a full body under the longest header measured.
+ */
+const TEXT_CAP = 6000
 
 // ---------------- output ----------------
 /** One NDJSON record on stdout. The only channel through which data leaves this process. */
@@ -151,7 +159,8 @@ function readCards() {
     return [{
       author: links.find(l => l.href === authorUrl && l.text)?.text || '',
       authorUrl,
-      text: (card as HTMLElement).innerText.slice(0, 3000),
+      // a runaway bound only; the stored cut is TEXT_CAP, applied in run() so a dry run can see what it loses
+      text: (card as HTMLElement).innerText.slice(0, 20000),
       mailtos: [...card.querySelectorAll('a[href^="mailto:"]')].map(m => (m as HTMLAnchorElement).href.slice(7).split('?')[0]!),
       // Outbound anchors, for the link contact channel. LinkedIn's own hosts are filtered in lib.ts
       // rather than here: every card links its author, the company and each hashtag.
@@ -227,7 +236,11 @@ async function scrapeTerm(page: import('playwright-core').Page, term: string): P
       }
     }
     // reverse order: each click removes a button, so a forward loop over index locators skips every other one
-    const more = await page.locator('main button', { hasText: /…\s*more$/ }).all()
+    // Both labels. The button follows the UI language, not the post's: the first ~10 feed cards render in
+    // the account's language, so even an English post there carries "…المزيد". Measured 2026-09-26: with
+    // the English label alone, 7 of the first 9 feed cards were stored collapsed — two of them hiring posts
+    // that kept their address only because it happened to sit above the fold.
+    const more = await page.locator('main button', { hasText: MORE_LABEL }).all()
     for (const b of more.reverse()) await b.click({ timeout: 2000 }).catch(() => {})
     await sleep(1000)
     cards = (await page.evaluate(readCards) as Card[]).slice(0, MAX_CARDS)
@@ -280,9 +293,11 @@ async function run({ dry }: { dry: boolean }) {
       // The permalink count is here because it was invisible: a search that resolves half its cards looks
       // exactly like one that resolves all of them. Measured 29/50 on a real term. 'feed' is always 0.
       log(`[${term}] ${cards.length} cards, ${cards.filter(c => c.postUrl).length} permalinks`)
+      const q = { overCap: 0, unexpanded: 0, noAuthor: 0, noAge: 0, noChannel: 0, keys: new Set<string>(), dupes: 0 }
       for (const c of cards) {
         checkStop()
-        const text = normalize(c.text) // Arabic-rendered cards, before the age regex and the key see them
+        const full = normalize(c.text) // Arabic-rendered cards, before the age regex and the key see them
+        const text = full.slice(0, TEXT_CAP)
         const age = ageOf(text)
         const emails = extractEmails(text, c.mailtos)
         const links = extractLinks(text, c.hrefs)
@@ -300,7 +315,17 @@ async function run({ dry }: { dry: boolean }) {
           // The exclude list is the one setting a dry run SHOULD report against: unlike the channel
           // gate, it is a rule the owner is writing right now and wants to see land before saving it.
           const excl = EXCLUDE_RE?.test(text) ? ' | EXCLUDED' : ''
-          log(`- ${key.slice(0, 8)} | ${c.author} | ${age || '-'} | ${channels.join('+') || 'NO CHANNEL'}${excl} | cue:${cue ? `"${cue}"` : '-'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refIds.join(' ') || '-'} | ${text.replace(/\s+/g, ' ').slice(0, 200)}`)
+          // capture quality, which the per-card line never showed: a truncated or still-collapsed body hides
+          // exactly the part of a post an address usually sits in
+          const more = collapsedText(full)
+          if (full.length > TEXT_CAP) q.overCap++
+          if (more) q.unexpanded++
+          if (!c.author) q.noAuthor++
+          if (!age) q.noAge++
+          if (!channels.length) q.noChannel++
+          if (q.keys.has(key)) q.dupes++
+          q.keys.add(key)
+          log(`- ${key.slice(0, 8)} | len=${full.length}${more ? ' UNEXPANDED' : ''} | ${c.author} | ${age || '-'} | ${channels.join('+') || 'NO CHANNEL'}${excl} | cue:${cue ? `"${cue}"` : '-'} | ${emails.join(' ') || '-'} | ${links.join(' ') || '-'} | ${phones.join(' ') || '-'} | ${refIds.join(' ') || '-'} | ${text.replace(/\s+/g, ' ').slice(0, 200)}`)
           continue
         }
         if (!admits(channels, CONFIG.contactChannels)) continue
@@ -351,6 +376,7 @@ async function run({ dry }: { dry: boolean }) {
         })
         added++
       }
+      if (dry) log(`[${term}] quality: ${cards.length} cards, ${q.overCap} over ${TEXT_CAP} chars, ${q.unexpanded} unexpanded, ${q.noAuthor} no author, ${q.noAge} no age, ${q.noChannel} no channel, ${q.dupes} duplicate keys`)
       if (!dry) await sleep(rand(10000, 20000))
     }
   } finally {

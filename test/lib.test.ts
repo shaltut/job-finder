@@ -634,3 +634,19 @@ test('throttleEvidence and isThrottled cannot disagree', () => {
     assert.equal(throttleEvidence(text) !== null, throttled, `throttleEvidence disagrees on: ${text.slice(0, 40)}`)
   }
 })
+
+test('the expander label matches LinkedIn\'s "…more" in both UI languages', async () => {
+  // The button follows the UI language, not the post's: English alone left 7 of the first 9 feed cards
+  // collapsed on 2026-09-26, and a collapsed card hides the tail where the address usually sits.
+  const { MORE_LABEL, collapsedText } = await import('../scraper/lib.ts')
+  // the two labels a live run expanded — not guessed variants: the fixed locator left 0 of 15 collapsed
+  for (const label of ['…more', '… more', '…المزيد', '… المزيد']) {
+    assert.ok(MORE_LABEL.test(label), `the click loop must match ${label}`)
+  }
+  for (const label of ['see more', 'more…', 'Show more results']) {
+    assert.ok(!MORE_LABEL.test(label), `and must not click ${label}`)
+  }
+  // the dry run reads a whole card, so the label has to be found at the end of any line, not the text
+  assert.ok(collapsedText('We are hiring a .NET lead…المزيد\n12 reactions'))
+  assert.ok(!collapsedText('Send your CV to jobs@example.com\n12 reactions'))
+})

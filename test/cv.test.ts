@@ -606,3 +606,87 @@ test('assignIds collapses a line break inside a skill into a single space', () =
   cv.skills = [{ group: 'Leadership', items: ['Technical roadmaps · Vendor evaluation\n& buy-vs-build'] }]
   assert.deepEqual(assignIds(cv).skills[0]!.items, ['Technical roadmaps', 'Vendor evaluation & buy-vs-build'])
 })
+
+// ---------------- rule 8: the CV positions, it never declares a gap ----------------
+
+test('rule 8: a summary that declares what the candidate lacks is rejected', () => {
+  // The email declares gaps, honestly and once; the tailored CV is the case for the candidate.
+  rejects((t) => {
+    t.summary = 'Backend engineer with 9 years on .NET and PostgreSQL; no direct experience with Kafka.'
+  }, /rule 8 at summary/)
+  rejects((t) => {
+    t.summary = 'Backend engineer with 9 years on .NET, currently learning Go.'
+  }, /rule 8/)
+})
+
+test('rule 8: a bullet that hedges is rejected too', () => {
+  rejects((t) => {
+    t.roles[0]!.bullets[1]!.text = 'Moved the billing service to PostgreSQL with zero downtime, though familiar with MySQL only.'
+  }, /rule 8 at r0\.b0/)
+})
+
+test('rule 8 does not fire on ordinary wording that merely contains a hedge word', () => {
+  // "machine learning" and "bridging the gap" are strengths, not admissions; a false match here costs
+  // the tailoring outright, because any failed rule attaches the uploaded PDF instead.
+  const t = tailored()
+  t.summary = 'Backend engineer with 9 years on .NET and PostgreSQL, bridging the gap between product and engineering.'
+  const r = tailoredCv(t, master())
+  assert.ok(r.ok, r.ok ? '' : r.reason)
+})
+
+test('rule 8 allows a phrase the master CV itself contains', () => {
+  // the owner wrote it, so tailoring may keep it — the rule is about what tailoring adds
+  const cv = content()
+  cv.roles[1]!.bullets = ['Built REST APIs in C# and ASP.NET Core, familiar with gRPC.']
+  const t = tailored()
+  t.roles[1]!.bullets = [{ id: 'r1.b0', text: 'Built REST APIs in C# and ASP.NET Core, familiar with gRPC.' }]
+  const r = tailoredCv(t, assignIds(cv))
+  assert.ok(r.ok, r.ok ? '' : r.reason)
+})
+
+// ---------------- the headline under the name ----------------
+
+const withHeadline = (headline: string) => tailoredCv({ ...tailored(), headline }, master(), 'Engineering Manager')
+
+test('a headline anchored on the profile title and built from master-CV words is used', () => {
+  const r = withHeadline('Engineering Manager · Backend .NET & PostgreSQL')
+  assert.ok(r.ok, r.ok ? '' : r.reason)
+  assert.equal(r.headline, 'Engineering Manager · Backend .NET & PostgreSQL')
+})
+
+test('a headline that breaks a limit is dropped alone — the tailored CV is kept', () => {
+  // it may describe the owner, never rename them, and never say what the master CV does not
+  for (const [h, why] of [
+    ['Senior .NET Developer', /start with the profile title/],
+    ['Engineering Manager · Kafka expert', /"kafka" is not in the master CV/],
+    ['Engineering Manager · 15 years of .NET', /a number/],
+    ['Engineering Manager · currently learning PostgreSQL', /not in the master CV|rule 8/],
+    ['Engineering Manager · [ADD SKILL]', /./]
+  ] as const) {
+    const r = withHeadline(h)
+    assert.ok(r.ok, `the CV must survive a bad headline: ${h}`)
+    assert.equal(r.headline, null, h)
+    assert.match(r.headlineNote ?? '', why, h)
+  }
+})
+
+test('no headline, or no profile title to anchor one, prints the plain title', () => {
+  const none = tailoredCv(tailored(), master(), 'Engineering Manager')
+  assert.ok(none.ok && none.headline === null && !none.headlineNote)
+  const unanchored = tailoredCv({ ...tailored(), headline: 'Backend .NET' }, master())
+  assert.ok(unanchored.ok && unanchored.headline === null)
+})
+
+test('the attached CV prints the headline where the title goes, and the note says which', async () => {
+  let html = ''
+  const renderer = {
+    render: async (h: string) => {
+      html = h
+      return 1
+    },
+    close: async () => {}
+  }
+  const a = await attach({ raw: { ...tailored(), headline: 'Engineering Manager · Backend .NET' }, renderer })
+  assert.match(html, /<div class="title">Engineering Manager · Backend \.NET<\/div>/)
+  assert.match(a.note, /headline "Engineering Manager · Backend \.NET"/)
+})
