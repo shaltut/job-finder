@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
 import { healContact, neverWrittenTo } from '../server/utils/contacts.ts'
+import { isClosed } from '../server/utils/drafts.ts'
 import { applyRecord, type ScraperRecord } from '../server/utils/ingest.ts'
 import type { Decision } from '../server/utils/stages.ts'
 
@@ -76,6 +77,23 @@ test('final is never reset, however the other device left it', () => {
   const c = contact(email)
   assert.equal(c?.stage, 'final', 'the two-emails-ever ceiling is a property of the database')
   assert.equal(c?.note, 'two emails sent', 'and its note is not overwritten either')
+})
+
+test('a due follow-up heals as contacted, never followed_up: nothing has been drafted yet', () => {
+  // closedInGmail() heals through here, so it must apply the same rule as the sweep (cachedStage).
+  const email = 'due@example.com'
+  healContact(db, email, row5({ row: 6, stage: 'followed_up', action: 'draft-the-follow-up', note: 'silent for 3 days', followUpDueAt: NOW - 3600e3 }), NOW)
+  const c = contact(email)
+  assert.equal(c?.stage, 'contacted')
+  assert.match(c?.note ?? '', /^follow-up due /)
+})
+
+test('the no-Gmail cache keeps a contacted recruiter closed to a second application', () => {
+  // Without a token, isClosed() is the whole gate. `contacted` means the application went out; Gmail's own
+  // gate answers row 5/6 for it, and the cache must not be the one door left open.
+  db.prepare(`INSERT INTO contacts (email, stage) VALUES ('sent@example.com', 'contacted')`).run()
+  assert.ok(isClosed(db, 'sent@example.com'))
+  assert.equal(isClosed(db, 'nobody@example.com'), false, 'a stranger is still open')
 })
 
 test('an address lower-cases on the way in, because the schema refuses anything else', () => {

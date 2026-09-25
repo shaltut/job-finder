@@ -11,7 +11,7 @@ import { followUpAttachment } from './cv-attach'
 import { runDrafter, type DraftPost } from './drafter'
 import { persist, signature } from './drafts'
 import { ccFrom, createDraft, gmail, renderHtml, replyHeaders } from './gmail'
-import { closedBy, decideStage, untilDue, type Decision, type GmailMessage } from './stages'
+import { cachedStage, closedBy, decideStage, untilDue, type Decision, type GmailMessage } from './stages'
 import { healContact } from './contacts'
 
 interface RawMessage {
@@ -60,8 +60,9 @@ async function hasPendingDraft(email: string): Promise<boolean> {
  * The cache is only ever as fresh as the last sweep, and two of the ways it goes stale cost something: a
  * recruiter who has replied still reads `contacted`, so a new post earns them a second email in the middle
  * of a conversation; and a recruiter written to outside this app has no row at all, so they read as a
- * stranger. Gmail knows both. `dbStage` is still passed for one narrow job: rows 4 and 7 are both "a draft
- * is waiting", and only `contacts` says whether that draft is the application or the follow-up.
+ * stranger. Gmail knows both. Rows 4 and 7 are both "a draft is waiting", and the sent count tells them
+ * apart: one outgoing message means the pending draft is a follow-up, none means it is the application.
+ * `dbStage` only colours row 8's stage, and row 8 is the open door, so nothing here depends on it.
  */
 export async function closedInGmail(
   db: Database.Database, email: string, selfEmail: string, now = Date.now()
@@ -124,21 +125,24 @@ export async function sweep(
       messages, selfEmail, recruiterEmail: c.email, dbStage: c.stage, hasPendingDraft: pending, now
     })
 
-    // 'final' is never reset — the WHERE clause enforces that, not this code
+    // 'final' is never reset — the WHERE clause enforces that, not this code. cachedStage(), not d.stage:
+    // row 6 becomes `followed_up` only when draftFollowUp() below actually creates the draft.
+    const cached = cachedStage(d)
     db.prepare(`
       UPDATE contacts SET stage = @stage, note = @note, last_sent_at = @lastSent, updated_at = @now
       WHERE email = @email AND stage <> 'final'
     `).run({
       email: c.email,
-      stage: d.stage,
-      note: d.note,
+      stage: cached.stage,
+      note: cached.note,
       lastSent: d.followUpDueAt ? Math.floor((d.followUpDueAt - 72 * 3600e3) / 1000) : null,
       now: Math.floor(now / 1000)
     })
 
     if (d.action === 'draft-the-follow-up') {
-      // Per recruiter, like the batch drafter in jobs.ts: this contact is already marked followed_up above,
-      // and one Gmail rejection must not cost every recruiter still queued behind it.
+      // Per recruiter, like the batch drafter in jobs.ts: one Gmail rejection must not cost every recruiter
+      // still queued behind it. The contact stays `contacted` above; persist() promotes it to followed_up
+      // only if a draft is actually created here.
       try {
         await draftFollowUp(db, config, c.email, onLog, d.replyTo)
       } catch (e) {
@@ -150,13 +154,13 @@ export async function sweep(
       email: c.email,
       row: d.row,
       from: c.stage,
-      to: d.stage,
+      to: cached.stage,
       action: d.action,
       note: d.note,
       due: untilDue(d.followUpDueAt, now)
     }
     lines.push(line)
-    onLog(`${c.email}: ${c.stage} -> ${d.stage} (row ${d.row}, ${d.action})${line.due ? `, follow-up ${line.due}` : ''}`)
+    onLog(`${c.email}: ${c.stage} -> ${cached.stage} (row ${d.row}, ${d.action})${line.due ? `, follow-up ${line.due}` : ''}`)
   }
   return lines
 }

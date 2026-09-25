@@ -1,4 +1,5 @@
 import { backup } from '../utils/backup'
+import { DB_PATH } from '../utils/db'
 import { readConfigLoose } from '../utils/config'
 import { gmailStatus } from '../utils/gmail'
 import { enqueue, notify } from '../utils/jobs'
@@ -14,7 +15,7 @@ export default defineTask({
     const messages: string[] = []
 
     try {
-      const { file, pruned } = backup()
+      const { file, pruned } = backup(DB_PATH)
       messages.push(`backup ${file.split('/').pop()}${pruned.length ? `, pruned ${pruned.length}` : ''}`)
     } catch (e) {
       messages.push(`backup failed: ${(e as Error).message}`)

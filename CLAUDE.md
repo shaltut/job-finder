@@ -289,13 +289,17 @@ and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
   one-character needle matches every post ever scraped. `parseSettings` folds case when deduping, since
   the match does. Two ways in: the Settings list, or **Exclude…** in a post row's ⋯ menu, which posts
   to `/api/settings/excludes` rather than PUTting the whole config back from a page that never loaded
-  it to edit — the same trap the CV upload documents below. Both then wait for a re-flag.
+  it to edit — the same trap the CV upload documents below. Both then wait for a re-flag. **Saving
+  Settings re-flags whenever `flagInputs()` in `shared/settings.ts` changes** — every field `flagRules()`
+  reads, not only `excludes`; a stored flag is never recomputed otherwise, and a floor change once left 7
+  posts scoring 6-8 out of the queue. `test/settings.test.ts` mutates every setting and fails if
+  `flagRules()` reacts to one that list omits.
 - `contactChannels` — which contact routes admit a post, `['email' | 'link' | 'phone']`, default `['email']`
   so an existing install is unchanged. `CONTACT_CHANNELS` in `shared/settings.ts` is the one definition
   (`scraper/lib.ts` re-exports it — it imports `node:crypto` and cannot be what a browser bundle reads).
   `parseSettings` orders and dedupes it, so the order the Settings dirty check depends on is a property of
   the stored row. Empty saves but `missingFields()` refuses to run: the usual two-schema split.
-- **`.env`** — `OPENAI_API_KEY`; optionally `JOBFINDER_DB`, `JOBFINDER_MODEL`, `PROFILE_DIR`. Loaded with
+- **`.env`** — `OPENAI_API_KEY`; optionally `JOBFINDER_DB`, `JOBFINDER_MODEL`, `JOBFINDER_DRAFTER_MODEL` (default `opus`), `PROFILE_DIR`. Loaded with
   Node's `--env-file-if-exists`. Never write the key into a tracked file.
 
 **Two schemas, not one, and the split is load-bearing.** `settingsSchema` checks shape and format only and
@@ -592,11 +596,13 @@ drafts keep arguing from a stale CV.
     (`test/invariants.test.ts` failed on exactly that).
   - **Stop is a hard kill.** `child.kill('SIGTERM')` is `TerminateProcess` on Windows, so the scraper's
     `stopping` flag never runs and Chrome can outlive it, holding the `./profile` lock until closed by hand.
-- **`claude -p` still loads the user-global `~/.claude/CLAUDE.md`, hooks and plugins** — `neutralCwd()` only
-  avoids the *project* CLAUDE.md, and `--strict-mcp-config` only skips MCP. Measured on a Windows install: a
-  one-post draft took ~175s, and the drafter's report quoted a location from the global file that
-  contradicted the injected settings. Keep the global file consistent with Settings, or find a flag that
-  skips user memory.
+- **`--setting-sources local` is what keeps the user-global `~/.claude/CLAUDE.md`, hooks and plugins out of
+  the drafter.** `neutralCwd()` only avoids the *project* CLAUDE.md, and `--strict-mcp-config` only skips MCP.
+  Before the flag, a one-post draft took ~175s and the model quoted a job title and three plugins' hook
+  instructions from the global setup; with it, a probe came back clean 2 of 2 and a real one-post draft took
+  21s. `--bare` would also skip them but accepts only `ANTHROPIC_API_KEY`, never OAuth. Dropping user
+  settings drops their `model` too, so `--model` is explicit (`JOBFINDER_DRAFTER_MODEL`, default `opus`).
+  Pinned by `test/invariants.test.ts`, including that the flag sits before the variadic tool flags.
 
 - **`npm run typecheck`'s coverage boundary is reachability from a typechecked entry point, not a
   directory — and it moves silently as imports are added.** `scraper/run.ts` is still uncovered, verified
@@ -710,6 +716,14 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
 - **The stage machine is a pure function** in `server/utils/stages.ts` — the original's 8-row table in code,
   with a test per row. Order matters: a bounce or an auto-reply must never be read as a human reply, or a
   live application stops dead. Silence is 72 hours from the last outgoing message.
+- **Row 6 is cached as `contacted`, not `followed_up`** (`cachedStage()`, used by the sweep and by
+  `healContact()`). A due follow-up is not a written one: `persist()` promotes the recruiter only once a draft
+  exists. Measured 2026-09-25: pre-writing the stage left 76 of 79 `followed_up` recruiters with no follow-up
+  at all — `draftFollowUp()` hands off ("leaving it to you") when no un-named post can carry one, which is the
+  common one-post case. The cached note is `follow-up due <iso>`, so the Pipeline reads "follow-up due now".
+  Two consequences are pinned in `test/stages.test.ts`: **row 4 keys on the pending draft alone**, so a
+  follow-up the owner drafts by hand beside a cached `contacted` is never doubled; and `isClosed()` treats
+  `contacted` as closed, so the no-Gmail cache cannot open the door to a second application.
 - **Gmail is the truth about what was sent; `contacts` only caches the stage.** A draft is not a contact
   until you send it. Run a sweep after sending.
 - **The draft gate asks Gmail, not that cache.** Before a recruiter is drafted, `closedInGmail()` in
@@ -723,7 +737,7 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   already written to rides in the follow-up, which the procedure already provides for. `closedBy` returns
   `note` and never `postsReason`: row 6's `postsReason` is `named in follow-up`, and writing that prefix
   onto a *skipped* row would tell the follow-up query its own posts were already covered.
-  With no token there is no truth to ask, so `isClosed()` (the cache) is used unchanged and the local-file
+  With no token there is no truth to ask, so `isClosed()` (the cache) is the gate — closed on every stage but a missing row — and the local-file
   draft path still works. A Gmail error writes no row and leaves the posts for the next run, the same
   posture as a drafter rejection — a `skipped` verdict is permanent as far as the batch queue is concerned.
 - **`drafts` are not returned by `messages.list`, even with `in:draft`** — pending drafts are found with the
@@ -732,7 +746,8 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   account would make every sent application look unsent. Settings shows a warning when the connected address
   differs from the stored settings.
 - **Daily housekeeping** is a Nitro scheduled task (`server/tasks/daily.ts`, `7 8 * * *`) replacing the
-  launchd plist: a dated `.db` copy in `backups/` (newest 14) and a queued sweep, so follow-ups fire without
+  launchd plist: a dated `VACUUM INTO` snapshot in `backups/` (newest 14 — never a file copy: commits sit in
+  `-wal` until a checkpoint, and the old copy lost 12 posts on 2026-09-25; `test/backup.test.ts`) and a queued sweep, so follow-ups fire without
   anyone remembering. It only runs while the dev server is up — the same constraint the original had. Run it
   by hand with `curl -X POST http://127.0.0.1:3939/_nitro/tasks/daily`.
 

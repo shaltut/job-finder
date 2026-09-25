@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { buildMime, ccFrom, findAttachment, renderHtml, replyHeaders } from '../server/utils/gmail.ts'
-import { classifyMessage, closedBy, decideStage, FOLLOW_UP_AFTER_MS, untilDue, type GmailMessage } from '../server/utils/stages.ts'
+import { cachedStage, classifyMessage, closedBy, decideStage, FOLLOW_UP_AFTER_MS, untilDue, type GmailMessage } from '../server/utils/stages.ts'
 
 const ME = 'me@gmail.com'
 const REC = 'hr@acme.sa'
@@ -105,6 +105,43 @@ test('row 6: at exactly 72 hours the follow-up becomes due', () => {
 test('row 6 boundary: one minute short is still row 5', () => {
   const sent = NOW - FOLLOW_UP_AFTER_MS + 60_000
   assert.equal(decideStage({ ...base, messages: [msg({ from: ME, date: sent })] }).row, 5)
+})
+
+test('row 6 is cached as contacted with a countdown, never as followed_up before a draft exists', () => {
+  // Measured 2026-09-25: 76 of 79 followed_up recruiters had no follow-up at all, because the sweep wrote
+  // the stage before trying to draft. persist() is what promotes a recruiter once a draft really exists.
+  const sent = NOW - 4 * 86400e3
+  const d = decideStage({ ...base, messages: [msg({ from: ME, date: sent })] })
+  assert.equal(d.row, 6)
+  const c = cachedStage(d)
+  assert.equal(c.stage, 'contacted')
+  // the exact shape pipeline.vue's due() parses, so the hand-off reads "follow-up due now"
+  const m = c.note.match(/follow-up due (.+)$/)
+  assert.equal(Date.parse(m![1]!), sent + FOLLOW_UP_AFTER_MS)
+})
+
+test('every other row is cached exactly as decided', () => {
+  const out = msg({ from: ME, date: NOW - 5 * 86400e3 })
+  for (const d of [
+    decideStage({ ...base, messages: [msg({ from: 'mailer-daemon@x.com', subject: 'Undeliverable' })] }),
+    decideStage({ ...base, messages: [out, msg({ date: NOW })] }),
+    decideStage({ ...base, messages: [out, msg({ from: ME, date: NOW })] }),
+    decideStage({ ...base, hasPendingDraft: true, messages: [out] }),
+    decideStage({ ...base, messages: [msg({ from: ME, date: NOW - 3600e3 })] }),
+    decideStage({ ...base, hasPendingDraft: true, messages: [] }),
+    decideStage({ ...base, messages: [] })
+  ]) assert.deepEqual(cachedStage(d), { stage: d.stage, note: d.note }, `row ${d.row}`)
+})
+
+test('row 4 without followed_up cached: a follow-up the owner wrote by hand is never doubled', () => {
+  // The hand-off case. Row 6 now caches `contacted`, so the owner's own follow-up draft sits beside that
+  // stage — and keying row 4 on dbStage would have drafted a second follow-up next to theirs.
+  const d = decideStage({
+    ...base, dbStage: 'contacted', hasPendingDraft: true, messages: [msg({ from: ME, date: NOW - 5 * 86400e3 })]
+  })
+  assert.equal(d.row, 4)
+  assert.equal(d.action, 'send-the-follow-up')
+  assert.equal(closedBy(d), 'follow-up draft pending, send it', 'and the draft gate stays shut')
 })
 
 test('row 7: an unsent application draft is never edited', () => {

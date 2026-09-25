@@ -463,3 +463,52 @@ test('a settings row written before tailorCv existed reads as switched off, in f
   assert.equal(upgraded.tailorCv, false)
   assert.deepEqual(Object.keys(upgraded), Object.keys(EMPTY_SETTINGS))
 })
+
+test('flagInputs() covers every setting flagRules() reads, so a Settings save never leaves stale flags', async () => {
+  // A stored flag is never recomputed on its own and keeps a post out of the drafter queue. The Settings
+  // page re-flags only when flagInputs() changes, so a field flagRules() reads that flagInputs() omits is
+  // the 2026-09-25 bug again: floor 5 -> 0, and 7 good posts hidden behind `junior` flags nobody re-ran.
+  const { flagRules } = await import('../scraper/lib.ts')
+  const { flagInputs } = await import('../shared/settings.ts')
+  const base = emptySettings()
+  base.profile.location = 'Riyadh, Saudi Arabia'
+  base.constraints.onsiteCountries = ['Saudi Arabia', 'UAE']
+  base.constraints.willRelocate = ['Qatar']
+  base.scope.seniorityFloor = 5
+  base.excludes = ['acme']
+  const rules = (s: typeof base) => JSON.stringify(Object.entries(flagRules(s)).map(([k, re]) => [k, re.source]))
+
+  // every leaf, changed to something a rule could plausibly react to
+  const mutations: { path: string, apply: (s: typeof base) => void }[] = []
+  const walk = (obj: Record<string, unknown>, path: string[]) => {
+    for (const [k, v] of Object.entries(obj)) {
+      const at = [...path, k]
+      const set = (val: unknown) => (s: typeof base) => {
+        let o = s as unknown as Record<string, unknown>
+        for (const p of at.slice(0, -1)) o = o[p] as Record<string, unknown>
+        o[k] = val
+      }
+      if (Array.isArray(v)) mutations.push({ path: at.join('.'), apply: set([...v, 'Egypt', 'India', 'contoso']) })
+      else if (v && typeof v === 'object') walk(v as Record<string, unknown>, at)
+      else if (typeof v === 'number') mutations.push({ path: at.join('.'), apply: set(v === 1 ? 2 : 1) })
+      else if (typeof v === 'boolean') mutations.push({ path: at.join('.'), apply: set(!v) })
+      else mutations.push({ path: at.join('.'), apply: set('Cairo, Egypt') })
+    }
+  }
+  walk(base as unknown as Record<string, unknown>, [])
+  assert.ok(mutations.length > 20, 'the walk reached the settings tree')
+
+  const moved: string[] = []
+  for (const m of mutations) {
+    const next = structuredClone(base)
+    m.apply(next)
+    if (rules(next) !== rules(base)) {
+      moved.push(m.path)
+      assert.notEqual(flagInputs(next), flagInputs(base), `flagRules() reads ${m.path}, but flagInputs() does not`)
+    }
+  }
+  // non-vacuous: every declared input really does move the rules, so the implication above was exercised
+  assert.deepEqual(moved.sort(), [
+    'constraints.onsiteCountries', 'constraints.willRelocate', 'excludes', 'profile.location', 'scope.seniorityFloor'
+  ])
+})

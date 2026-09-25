@@ -110,8 +110,11 @@ export function decideStage(input: DecideInput): Decision {
     const last = outgoing[0]!.date
     const due = last + FOLLOW_UP_AFTER_MS
 
-    // 4 — the follow-up is already written and waiting to be sent
-    if (dbStage === 'followed_up' && hasPendingDraft) {
+    // 4 — the follow-up is already written and waiting to be sent. Keyed on the pending draft alone, not
+    // on dbStage: with the application already sent, any draft to this address is a second email waiting,
+    // whoever wrote it. Since cachedStage() stopped pre-writing `followed_up`, a follow-up the owner drafts
+    // by hand sits beside a cached `contacted`, and requiring `followed_up` here would draft a second one.
+    if (hasPendingDraft) {
       return { row: 4, stage: 'followed_up', action: 'send-the-follow-up', note: 'follow-up draft pending, send it', postsReason: 'follow-up pending', followUpDueAt: due }
     }
     // 5 — sent, but three days have not passed
@@ -145,6 +148,21 @@ export function decideStage(input: DecideInput): Decision {
  */
 export function closedBy(d: Decision): false | string {
   return d.action === 'draft-the-application' ? false : d.note
+}
+
+/**
+ * What `contacts` should cache for this decision — which is not always `d.stage`.
+ *
+ * Row 6 means a follow-up is DUE, not that one exists. Caching it as `followed_up` before a draft was
+ * written left 76 of 79 recruiters on 2026-09-25 marked as followed up with nothing drafted: the sweep
+ * bails when no unnamed post can carry the follow-up, and the drafter often returns no body. So row 6
+ * caches `contacted` with the countdown note the Pipeline parses (it then reads "follow-up due now"),
+ * and persist() promotes the row to `followed_up` only once a follow-up draft actually exists.
+ */
+export function cachedStage(d: Decision): { stage: Stage, note: string } {
+  return d.action === 'draft-the-follow-up' && d.followUpDueAt
+    ? { stage: 'contacted', note: `follow-up due ${new Date(d.followUpDueAt).toISOString()}` }
+    : { stage: d.stage, note: d.note }
 }
 
 /** Human-readable countdown for the Pipeline view. */

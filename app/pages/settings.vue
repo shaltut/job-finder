@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { COUNTRIES } from '#shared/countries'
-import { CONTACT_CHANNELS, type ContactChannel } from '#shared/settings'
+import { CONTACT_CHANNELS, flagInputs, type ContactChannel } from '#shared/settings'
 import type { EditorToolbarItem } from '@nuxt/ui'
 import type { AppConfig, GmailStatus, SettingsStatus } from '~/types'
 
@@ -74,7 +74,9 @@ async function save() {
     form.value.excludes = form.value.excludes.map(s => s.trim()).filter(Boolean)
     // the editor's trailing blank line, for the same reason — see `settled` above
     form.value.background.evidence = form.value.background.evidence.trimEnd()
-    rulesChanged = JSON.stringify(form.value.excludes) !== JSON.stringify(data.value?.excludes ?? [])
+    // every input the pre-screen flags derive from, not only the exclude list: a stored flag is never
+    // recomputed on its own, and a stale one keeps a post out of the drafter queue
+    rulesChanged = !data.value || flagInputs(form.value) !== flagInputs(data.value)
     const saved = await $fetch<AppConfig>('/api/config', { method: 'PUT', body: form.value })
     adopt(saved)
     await refreshStatus()

@@ -150,5 +150,8 @@ export function isClosed(db: Database.Database, email: string): false | string {
   if (row.stage === 'replied') return 'recruiter replied'
   if (row.stage === 'drafted') return 'application draft pending'
   if (row.stage === 'followed_up') return 'follow-up draft pending'
+  // The application went out. Gmail's gate closes this as row 5/6 — a new role rides in the follow-up —
+  // and the cache must agree, now that a due-but-unwritten follow-up is cached as `contacted` too.
+  if (row.stage === 'contacted') return 'recruiter contacted, follow-up due'
   return false
 }

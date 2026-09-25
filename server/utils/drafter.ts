@@ -296,10 +296,24 @@ export interface RunOptions {
   masterCv?: MasterCv | null
 }
 
+/**
+ * Pinned, because `--setting-sources local` below also drops the user settings that used to choose it.
+ * An alias, so it follows the latest model of that family.
+ */
+const DRAFTER_MODEL = process.env.JOBFINDER_DRAFTER_MODEL || 'opus'
+
 export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOptions = {}): Promise<DraftResponse> {
   const { onLog = () => {}, timeoutMs = 10 * 60_000 } = opts
   const args = [
     '-p',
+    // neutralCwd() keeps out the PROJECT CLAUDE.md, but the user-global one and every SessionStart hook
+    // still loaded. Measured 2026-09-25 with these exact flags: the model quoted a job title from
+    // ~/.claude/CLAUDE.md that contradicts Settings, plus three plugins' hook instructions, into a
+    // JSON-only run. `local` means only .claude/settings.local.json of the cwd — and the cwd is an empty
+    // temp dir — so neither loads; 2 of 2 probe runs came back clean, and OAuth still authenticates,
+    // unlike --bare, which accepts only ANTHROPIC_API_KEY. Early in the list: the tool flags are variadic.
+    '--setting-sources', 'local',
+    '--model', DRAFTER_MODEL,
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--allowed-tools', 'NoToolsPermitted',
     '--disallowed-tools', ...DENY,

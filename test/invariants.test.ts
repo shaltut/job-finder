@@ -35,6 +35,17 @@ test('the drafter runs from a neutral directory, never the project root', () => 
   assert.doesNotMatch(src, /spawn\(\s*'claude'[^)]*cwd:\s*process\.cwd\(\)/s, 'the drafter must not spawn in the project root')
 })
 
+test('the drafter loads no user CLAUDE.md, hooks or plugins, and names its model', () => {
+  // neutralCwd() only avoids the PROJECT CLAUDE.md. Without this flag the user-global one and every
+  // SessionStart hook reached the drafter (measured 2026-09-25) — a title contradicting Settings, and three
+  // plugins' instructions, inside a JSON-only run. Dropping user settings also drops their model choice.
+  const src = read('server/utils/drafter.ts')
+  assert.match(src, /'--setting-sources', 'local'/, 'user settings, memory and hooks must not load')
+  assert.match(src, /'--model', DRAFTER_MODEL/, 'the model must be explicit once user settings are skipped')
+  const args = src.slice(src.indexOf('\'-p\''), src.indexOf('\'--allowed-tools\''))
+  assert.match(args, /--setting-sources/, 'and it must come before the variadic tool flags, or they swallow it')
+})
+
 test('the drafter is granted no usable tools', () => {
   const src = read('server/utils/drafter.ts')
   assert.match(src, /--strict-mcp-config/, 'MCP servers must be skipped')

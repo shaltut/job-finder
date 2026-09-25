@@ -162,6 +162,20 @@ export function missingFields(cfg: StoredSettings): string[] {
 }
 
 /**
+ * Every setting flagRules() in scraper/lib.ts reads, as one comparable string.
+ *
+ * A post's flags are computed once, when it is inserted, and a flag keeps it out of the drafter queue
+ * outright. So a change to any of these leaves stale flags hiding posts until a re-flag runs — measured
+ * 2026-09-25: the seniority floor went 5 -> 0, the Settings page only re-flagged on an `excludes` change,
+ * and 7 posts scoring 6-8 sat out of the queue on `junior` flags the current settings no longer produce.
+ * The page re-flags whenever this string changes; test/settings.test.ts fails if flagRules() starts
+ * reading a field this leaves out.
+ */
+export const flagInputs = (s: StoredSettings): string => JSON.stringify([
+  s.excludes, s.scope.seniorityFloor, s.constraints.onsiteCountries, s.constraints.willRelocate, s.profile.location
+])
+
+/**
  * The EXTRAS a draft needs on top of missingFields(). Deliberately does not repeat the base list, so
  * the status endpoint can show two tiers without de-duplicating them.
  *

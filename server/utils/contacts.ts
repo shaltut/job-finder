@@ -5,7 +5,7 @@
 // reasoning put pasteOnce() in paste.ts. Everything here is a plain SQLite write over an injected handle,
 // so test/heal.test.ts runs it against a real migrated database.
 import type Database from 'better-sqlite3'
-import type { Decision } from './stages.ts'
+import { cachedStage, type Decision } from './stages.ts'
 
 /**
  * Write what Gmail said about a recruiter into the local cache.
@@ -28,6 +28,8 @@ import type { Decision } from './stages.ts'
  * from the last outgoing message, so the due date minus 72 hours is when that message went.
  */
 export function healContact(db: Database.Database, email: string, d: Decision, now: number): void {
+  // the same rule as the sweep: a follow-up that is due is not one that exists
+  const { stage, note } = cachedStage(d)
   db.prepare(`
     INSERT INTO contacts (email, stage, note, last_sent_at, updated_at)
     VALUES (@email, @stage, @note, @lastSent, @now)
@@ -40,8 +42,8 @@ export function healContact(db: Database.Database, email: string, d: Decision, n
   `).run({
     // the schema carries CHECK (email = lower(email)) and refuses anything else
     email: email.toLowerCase(),
-    stage: d.stage,
-    note: d.note,
+    stage,
+    note,
     lastSent: d.followUpDueAt ? Math.floor((d.followUpDueAt - 72 * 3600e3) / 1000) : null,
     now: Math.floor(now / 1000)
   })
