@@ -75,7 +75,8 @@ Rules for the fields:
 
 - Every post in the input gets exactly one entry in `results`.
 - `subject` and `body` appear **only** on the one post that carries the email. When several posts share a
-  recruiter, the others get `verdict: "drafted"` with `reason` starting `named in application` and no body.
+  recruiter, the others get `verdict: "drafted"` with `reason` starting `named in application` (in follow-up
+  mode, `named in follow-up` — for every drafted post, including those already named) and no body.
 - `body` is **plain text only.** No markdown, no HTML, no `&`. The server renders the HTML part and
   appends the signature — do not write a signature yourself.
 - **The email must be sendable exactly as written.** Never leave a placeholder, a blank, a

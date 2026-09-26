@@ -29,7 +29,10 @@ export function backup(src: string, now = new Date(), dir = DIR): { file: string
   // meant a failed vacuum (disk full, I/O) cost that day's good backup, and could leave a partial file
   // counted among the 14 kept. `.db.tmp` does not end in `.db`, so pruning never sees one.
   const tmp = `${file}.tmp`
-  rmSync(tmp, { force: true })
+  // Leftovers from any earlier run that died mid-way — a kill during VACUUM, or a failed rename — whatever
+  // their date: pruning matches `.db` only, so nothing else would ever remove them. One backup runs at a
+  // time (the daily task), so any tmp here belongs to a run that is over.
+  for (const f of readdirSync(dir)) if (/^jobfinder-.*\.db\.tmp(?:-journal)?$/.test(f)) rmSync(join(dir, f), { force: true })
   const db = new Database(src, { readonly: true, fileMustExist: true })
   try {
     db.prepare('VACUUM INTO ?').run(tmp)
@@ -39,7 +42,12 @@ export function backup(src: string, now = new Date(), dir = DIR): { file: string
   } finally {
     db.close()
   }
-  renameSync(tmp, file) // replaces an existing file, on Windows too
+  try {
+    renameSync(tmp, file) // replaces an existing file, on Windows too — unless another program holds it open
+  } catch (e) {
+    rmSync(tmp, { force: true })
+    throw new Error(`could not replace ${file} — is it open in another program? (${(e as NodeJS.ErrnoException).code ?? (e as Error).message})`, { cause: e })
+  }
 
   const old = readdirSync(dir).filter(f => f.startsWith('jobfinder-') && f.endsWith('.db')).sort().slice(0, -KEEP)
   old.forEach(f => rmSync(join(dir, f)))

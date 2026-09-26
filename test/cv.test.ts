@@ -690,3 +690,69 @@ test('the attached CV prints the headline where the title goes, and the note say
   assert.match(html, /<div class="title">Engineering Manager · Backend \.NET<\/div>/)
   assert.match(a.note, /headline "Engineering Manager · Backend \.NET"/)
 })
+
+// ---------------- the review's reproductions (2026-09-26) ----------------
+
+test('rule 8 checks every hedge: an allowed one cannot shield a new one behind it', () => {
+  const cv = content()
+  cv.roles[1]!.bullets = ['Built REST APIs in C# and ASP.NET Core, familiar with gRPC.']
+  const t = tailored()
+  t.summary = 'Backend engineer with 9 years on .NET, familiar with gRPC; no direct experience with Redis.'
+  const r = tailoredCv(t, assignIds(cv))
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.reason, /rule 8 at summary: "no direct experience"/)
+})
+
+test('rule 8 is not excused by a master word that merely contains the hedge', () => {
+  // "Slack" in the master must not allow "lack" into the tailored CV
+  const cv = content()
+  cv.skills[1]!.items = ['PostgreSQL', 'Redis', 'Slack']
+  const t = tailored()
+  t.skills = [{ id: 's1', items: ['Slack', 'Redis', 'PostgreSQL'] }, { id: 's0', items: ['ASP.NET Core', 'C#', '.NET'] }]
+  t.summary = 'Backend engineer with 9 years on .NET, despite a lack of Redis depth.'
+  const r = tailoredCv(t, assignIds(cv))
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.match(r.reason, /rule 8/)
+})
+
+test('rule 8 sees through a line break, a tab or a non-breaking space inside a hedge', () => {
+  for (const gap of ['\n', '\t', ' ', '  ']) {
+    rejects((t) => {
+      t.summary = `Backend engineer with 9 years on .NET, currently${gap}learning Go.`
+    }, /rule 8/)
+  }
+})
+
+test('"headline": null keeps the tailored CV and prints the plain title', () => {
+  const r = tailoredCv({ ...tailored(), headline: null }, master(), 'Engineering Manager')
+  assert.ok(r.ok, r.ok ? '' : r.reason)
+  assert.equal(r.headline, null)
+})
+
+test('a headline that is only a separator, or recombines CV words into a job title, is dropped', () => {
+  for (const [h, why] of [
+    ['Engineering Manager ·', /nothing after the title/],
+    ['Engineering Manager · &', /nothing after the title/],
+    ['Engineering Manager · Backend Engineer', /reads as another job title/]
+  ] as const) {
+    const r = withHeadline(h)
+    assert.ok(r.ok && r.headline === null, h)
+    if (r.ok) assert.match(r.headlineNote ?? '', why, h)
+  }
+})
+
+test('a profile title with odd whitespace still anchors its headline', () => {
+  const r = tailoredCv({ ...tailored(), headline: 'Engineering Manager · Backend .NET' }, master(), 'Engineering  Manager ')
+  assert.ok(r.ok && r.headline === 'Engineering Manager · Backend .NET', r.ok ? String(r.headlineNote) : r.reason)
+})
+
+test('a headline naming a C-level title is dropped, cio as well as cto', () => {
+  // the first version of ROLE_NOUN wrote ct[oi], which matches "cti" and never "cio"
+  const cv = content()
+  cv.certifications = ['CIO and CTO leadership programme']
+  for (const word of ['CTO', 'CIO']) {
+    const r = tailoredCv({ ...tailored(), headline: `Engineering Manager · ${word}` }, assignIds(cv), 'Engineering Manager')
+    assert.ok(r.ok && r.headline === null, word)
+    if (r.ok) assert.match(r.headlineNote ?? '', /another job title/, word)
+  }
+})

@@ -367,3 +367,32 @@ test('the procedure tells the follow-up what already_named and original_sent_at 
   assert.match(proc, /original_sent_at/)
   assert.match(proc, /Never skip one/)
 })
+
+// ---------------- the drafter's environment ----------------
+
+test('userSettingsEnv passes on the user settings env block and nothing else', async () => {
+  // --setting-sources local skips ~/.claude/settings.json whole; its env (certificates, auth, routing)
+  // has to reach the drafter anyway, or drafts fail on a machine that needs it.
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { userSettingsEnv } = await import('../server/utils/drafter.ts')
+  const dir = mkdtempSync(join(tmpdir(), 'jobfinder-env-'))
+  try {
+    const file = join(dir, 'settings.json')
+    writeFileSync(file, JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: '/x/ca.pem', NUM: 3 }, hooks: { SessionStart: [] }, model: 'opus' }))
+    assert.deepEqual(userSettingsEnv(file), { NODE_EXTRA_CA_CERTS: '/x/ca.pem' }, 'string values only; hooks and model stay out')
+    assert.deepEqual(userSettingsEnv(join(dir, 'missing.json')), {}, 'no settings file is an empty env, not a crash')
+    writeFileSync(file, '{not json')
+    assert.deepEqual(userSettingsEnv(file), {})
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a real-sized prompt with a master CV fits the budget, with room to grow', () => {
+  // The owner's real prompt measured 28,165 on 2026-09-26; this fixture plus a CV of that size must fit
+  // with room, so a procedure edit can never again switch tailoring off by a few hundred characters.
+  const big = assignIds({ ...cvContent, summary: 'y'.repeat(30_000) })
+  assert.equal(fitsPromptBudget(config, big), true)
+})

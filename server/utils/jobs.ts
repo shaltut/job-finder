@@ -94,6 +94,9 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   // Deduped against the QUEUE only, unlike sync: a gaps job already running chose its posts when it
   // started, so an application that arrives mid-run needs the queued one to pick it up.
   if (kind === 'gaps' && queue.some(q => q.kind === 'gaps')) return null
+  // The server queues a reflag on every save that changes a flag input, and the page then asks for one
+  // too, to report the count; one queued reflag already reads the newest settings when it runs.
+  if (kind === 'reflag' && queue.some(q => q.kind === 'reflag')) return null
   // the same pasted text queued twice, or pasted again while its own score is still running, is a no-op
   if (kind === 'paste' && args.text
     && (queue.some(q => q.args.text === args.text) || lanes.paste.current?.args?.text === args.text)) return null
@@ -175,7 +178,7 @@ function runJob(lane: Lane, item: QueueItem) {
     const abort = new AbortController()
     job.child = { kill: () => abort.abort() } as unknown as ChildProcess
     const work = kind === 'sync'
-      ? runSyncJob(push)
+      ? runSyncJob(push, abort.signal)
       : (kind === 'gaps' ? runGapsJob(job, push, abort.signal) : runDraftJob(job, args, push, abort.signal))
     work
       .then(code => finish(code))
@@ -510,7 +513,7 @@ async function runDraftJob(
  * A drafter run does NOT call it — it asks Gmail per recruiter through closedInGmail() instead, which also
  * covers addresses `contacts` has never heard of.
  */
-async function runSyncJob(push: (line: string) => void): Promise<number> {
+async function runSyncJob(push: (line: string) => void, signal: AbortSignal): Promise<number> {
   const config = readConfig()
   const status = gmailStatus(config.profile.email)
   if (!status.authorized) {
@@ -523,7 +526,7 @@ async function runSyncJob(push: (line: string) => void): Promise<number> {
   }
   const { db, close } = openWritableDb()
   try {
-    const lines = await sweep(db, config, status.email ?? config.profile.email, push)
+    const lines = await sweep(db, config, status.email ?? config.profile.email, push, signal)
     push(`sweep finished: ${lines.length} recruiter(s) checked`)
     return 0
   } finally {

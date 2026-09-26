@@ -3,7 +3,7 @@
 // which is what backup() used to do, silently leaves them out. Measured 2026-09-25: 12 posts missing
 // from that day's backup.
 import assert from 'node:assert/strict'
-import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -64,9 +64,44 @@ test('a failed backup leaves that day\'s earlier backup intact, and no partial f
     assert.throws(() => backup(broken, new Date('2026-09-25T20:00:00'), backups))
 
     const d = new Database(file, { readonly: true })
-    assert.equal((d.prepare('SELECT count(*) n FROM posts').get() as { n: number }).n, 2, 'the morning backup survives')
-    d.close()
+    try {
+      assert.equal((d.prepare('SELECT count(*) n FROM posts').get() as { n: number }).n, 2, 'the morning backup survives')
+    } finally {
+      d.close() // a leaked handle turns a failed assertion into EBUSY at cleanup on Windows
+    }
     assert.deepEqual(readdirSync(backups), ['jobfinder-2026-09-25.db'], 'and no .tmp is left to count as a backup')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('leftover tmp files from any earlier run are cleared, and a target held open fails cleanly', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jobfinder-backup-'))
+  const backups = join(dir, 'backups')
+  const src = join(dir, 'live.db')
+  const live = new Database(src)
+  live.exec('CREATE TABLE posts (key TEXT PRIMARY KEY)')
+  live.close()
+  try {
+    // a run killed mid-VACUUM on another day left these; pruning only ever looked at `.db`
+    backup(src, new Date('2026-09-20T08:07:00'), backups)
+    writeFileSync(join(backups, 'jobfinder-2026-09-21.db.tmp'), 'partial')
+    writeFileSync(join(backups, 'jobfinder-2026-09-21.db.tmp-journal'), 'partial')
+    const { file } = backup(src, new Date('2026-09-25T08:07:00'), backups)
+    assert.deepEqual(readdirSync(backups).sort(), ['jobfinder-2026-09-20.db', 'jobfinder-2026-09-25.db'])
+
+    // the same day again while a viewer holds the backup open: Windows refuses the rename
+    const fd = openSync(file, 'r')
+    try {
+      if (process.platform === 'win32') {
+        assert.throws(() => backup(src, new Date('2026-09-25T20:00:00'), backups), /open in another program/)
+      } else {
+        backup(src, new Date('2026-09-25T20:00:00'), backups) // POSIX renames over an open file
+      }
+    } finally {
+      closeSync(fd)
+    }
+    assert.ok(!readdirSync(backups).some(f => f.includes('.tmp')), 'no tmp survives either way')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

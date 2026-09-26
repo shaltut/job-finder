@@ -51,7 +51,7 @@ export type Action
     | 'draft-the-application'
 
 export interface Decision {
-  /** the row of the original 8-row table this matched, for the report and the tests */
+  /** the row of the table this matched (the original's 8, plus row 9), for the report and the tests */
   row: number
   stage: Stage
   action: Action
@@ -80,7 +80,8 @@ export interface DecideInput {
 }
 
 /**
- * The 8-row table from the original skill, in code. Rows are tested top to bottom; the first match wins.
+ * The 8-row table from the original skill, in code, plus row 9 (a follow-up deleted unsent). Rows are
+ * tested in the order they appear below, not by number; the first match wins.
  */
 export function decideStage(input: DecideInput): Decision {
   const { messages, selfEmail, recruiterEmail, dbStage, hasPendingDraft, now } = input
@@ -116,6 +117,13 @@ export function decideStage(input: DecideInput): Decision {
     // by hand sits beside a cached `contacted`, and requiring `followed_up` here would draft a second one.
     if (hasPendingDraft) {
       return { row: 4, stage: 'followed_up', action: 'send-the-follow-up', note: 'follow-up draft pending, send it', postsReason: 'follow-up pending', followUpDueAt: due }
+    }
+    // 9 — a follow-up WAS drafted (only persist() caches `followed_up`, and only once the draft exists), yet
+    // it is neither pending nor sent: the owner deleted it. Leave the recruiter be. Without this row the
+    // next sweep reads row 6 and drafts it again, every sweep, until the owner gives in and sends one; and
+    // a single missed `drafts` search would put a duplicate beside a follow-up still waiting.
+    if (dbStage === 'followed_up') {
+      return { row: 9, stage: 'followed_up', action: 'none', note: 'one email sent, no follow-up draft found and none sent — not re-drafted', postsReason: 'follow-up declined', followUpDueAt: due }
     }
     // 5 — sent, but three days have not passed
     if (now < due) {

@@ -31,7 +31,9 @@ test('the drafter runs from a neutral directory, never the project root', () => 
   // `claude -p` loads the CLAUDE.md of its cwd. Running it in the project folder leaked the previous
   // owner's name into a drafter report; the identity in the appended prompt must be the only one it sees.
   const src = read('server/utils/drafter.ts')
-  assert.match(src, /cwd: neutralCwd\(\)/, 'the drafter must spawn with cwd: neutralCwd()')
+  // the prompt file lives in that same directory, so the path is held once and handed to spawn
+  assert.match(src, /const cwd = neutralCwd\(\)/, 'the drafter must take its cwd from neutralCwd()')
+  assert.match(src, /spawn\('claude', args, \{ cwd,/, 'and spawn claude there')
   assert.doesNotMatch(src, /spawn\(\s*'claude'[^)]*cwd:\s*process\.cwd\(\)/s, 'the drafter must not spawn in the project root')
 })
 
@@ -42,8 +44,20 @@ test('the drafter loads no user CLAUDE.md, hooks or plugins, and names its model
   const src = read('server/utils/drafter.ts')
   assert.match(src, /'--setting-sources', 'local'/, 'user settings, memory and hooks must not load')
   assert.match(src, /'--model', DRAFTER_MODEL/, 'the model must be explicit once user settings are skipped')
-  const args = src.slice(src.indexOf('\'-p\''), src.indexOf('\'--allowed-tools\''))
+  const from = src.indexOf('\'-p\'')
+  const to = src.indexOf('\'--allowed-tools\'', from)
+  assert.ok(from >= 0 && to > from, 'anchors: the -p flag and the tool flags')
+  const args = src.slice(from, to)
   assert.match(args, /--setting-sources/, 'and it must come before the variadic tool flags, or they swallow it')
+})
+
+test('the drafter prompt travels in a file, never on the command line', () => {
+  // On the command line Windows capped it at 32,767 characters; a 28,000 budget standing in for that cap
+  // was exceeded by 165 on 2026-09-26 and switched CV tailoring off with nothing but a log line.
+  const src = read('server/utils/drafter.ts')
+  assert.match(src, /'--append-system-prompt-file', promptFile/)
+  assert.doesNotMatch(src, /'--append-system-prompt',/, 'the argv form must not come back')
+  assert.match(src, /\.finally\(\(\) => rmSync\(promptFile/, 'and the file, which holds the whole profile, is removed after every run')
 })
 
 test('the drafter is granted no usable tools', () => {
@@ -105,7 +119,7 @@ function emailingQueries(): Record<string, string> {
   const contacts = readFileSync('server/utils/contacts.ts', 'utf8')
   // The follow-up's selection moved into followUpPosts() so it could be tested against a real database;
   // pin that the sweep still runs it, or the query below could be dead code carrying the right clauses.
-  assert.match(sync, /followUpPosts\(db, email\)/, 'the follow-up sweep must select through followUpPosts()')
+  assert.match(sync, /followUpPosts\(db, email, replyTo\.date\)/, 'the follow-up sweep must select through followUpPosts()')
   // An anchor that is not found makes indexOf -1 and the slice silently wrong — fail on the anchor instead.
   const between = (src: string, from: string, to: string) => {
     const a = src.indexOf(from)
@@ -271,4 +285,35 @@ test('switching tailoring off returns follow-ups to the uploaded PDF, not only n
   // The else branch is the half that matters: it IS the rollback lever. A regex stopping at
   // `followUpAttachment(` would stay green if someone rewrote `: config.cv` to `: null`.
   assert.match(fn, /config\.tailorCv\s*\?\s*followUpAttachment\([^)]*\)\s*:\s*config\.cv/)
+})
+
+test('Stop reaches a running sync: the signal is threaded from the lane to every drafter run', () => {
+  // It used to stop at jobs.ts — Stop said the job stopped while the sweep ran an Opus session per due
+  // recruiter on the draft lane, blocking every draft behind it.
+  const jobs = read('server/utils/jobs.ts')
+  const sync = read('server/utils/sync.ts')
+  assert.match(jobs, /runSyncJob\(push, abort\.signal\)/)
+  assert.match(jobs, /sweep\(db, config, [^)]*, push, signal\)/)
+  assert.match(sync, /if \(signal\?\.aborted\)/, 'the sweep loop checks it between recruiters')
+  assert.match(sync, /draftFollowUp\(db, config, c\.email, onLog, d\.replyTo, signal\)/)
+  assert.match(sync, /runDrafter\(req, config, \{ onLog, signal \}\)/, 'and the running claude session is killed with it')
+})
+
+test('the sweep caches a stage through cachedStage(), never the raw decision', () => {
+  // The review found reverting this call left all 361 tests green, and the raw d.stage is the bug that
+  // marked 76 recruiters followed_up with no follow-up written.
+  const sync = read('server/utils/sync.ts')
+  assert.match(sync, /const cached = cachedStage\(d\)/)
+  assert.match(sync, /stage: cached\.stage,/)
+  assert.doesNotMatch(sync, /stage: d\.stage,/)
+})
+
+test('a settings save that changes a flag input re-flags from the server, whichever tab sent it', () => {
+  // The page decided this against its own load-time copy, so a stale tab could write old flag inputs back
+  // and skip the re-flag; the review also found reverting the page's flagInputs call left every test green.
+  const put = read('server/api/config.put.ts')
+  assert.match(put, /const before = flagInputs\(readConfigLoose\(\)\)/)
+  assert.match(put, /if \(flagInputs\(saved\) !== before\) enqueue\('reflag'\)/)
+  assert.match(read('server/api/settings/excludes.post.ts'), /enqueue\('reflag'\)/)
+  assert.match(read('server/utils/jobs.ts'), /kind === 'reflag' && queue\.some\(q => q\.kind === 'reflag'\)/, 'and a second request while one is queued is a no-op')
 })

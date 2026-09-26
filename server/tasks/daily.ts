@@ -1,3 +1,4 @@
+import { basename } from 'node:path'
 import { backup } from '../utils/backup'
 import { DB_PATH } from '../utils/db'
 import { readConfigLoose } from '../utils/config'
@@ -16,7 +17,7 @@ export default defineTask({
 
     try {
       const { file, pruned } = backup(DB_PATH)
-      messages.push(`backup ${file.split('/').pop()}${pruned.length ? `, pruned ${pruned.length}` : ''}`)
+      messages.push(`backup ${basename(file)}${pruned.length ? `, pruned ${pruned.length}` : ''}`)
     } catch (e) {
       messages.push(`backup failed: ${(e as Error).message}`)
     }

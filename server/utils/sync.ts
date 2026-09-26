@@ -103,7 +103,10 @@ export async function sweep(
   db: Database.Database,
   config: AppConfig,
   selfEmail: string,
-  onLog: (s: string) => void = () => {}
+  onLog: (s: string) => void = () => {},
+  // Stop. It used to reach nothing: jobs.ts made the controller and never passed it, so Stop reported
+  // success while the sweep ran on — now an Opus session per due recruiter, holding the draft lane.
+  signal?: AbortSignal
 ): Promise<SweepLine[]> {
   const open = db.prepare(
     `SELECT email, stage FROM contacts WHERE stage IN ('drafted','contacted','followed_up')`
@@ -119,6 +122,10 @@ export async function sweep(
   const lines: SweepLine[] = []
 
   for (const c of open) {
+    if (signal?.aborted) {
+      onLog('stopped')
+      break
+    }
     const messages = await threadMessages(c.email)
     const pending = await hasPendingDraft(c.email)
     const d = decideStage({
@@ -144,26 +151,38 @@ export async function sweep(
       // still queued behind it. The contact stays `contacted` above; persist() promotes it to followed_up
       // only if a draft is actually created here.
       try {
-        await draftFollowUp(db, config, c.email, onLog, d.replyTo)
+        await draftFollowUp(db, config, c.email, onLog, d.replyTo, signal)
       } catch (e) {
-        onLog(`${c.email}: follow-up draft failed — ${(e as Error).message}`)
+        // Stop kills the claude session, which surfaces here as an exit code — not a failure worth a note
+        if (signal?.aborted) {
+          onLog(`${c.email}: stopped`)
+        } else {
+          onLog(`${c.email}: follow-up draft failed — ${(e as Error).message}`)
+          noteOn(db, c.email, `follow-up draft failed, retried next sweep: ${(e as Error).message.slice(0, 160)}`)
+        }
       }
     }
 
+    // read back, not `cached`: a follow-up drafted above has just moved it to followed_up in persist()
+    const stageNow = (db.prepare('SELECT stage FROM contacts WHERE email = ?').get(c.email) as { stage: Decision['stage'] } | undefined)?.stage ?? cached.stage
     const line: SweepLine = {
       email: c.email,
       row: d.row,
       from: c.stage,
-      to: cached.stage,
+      to: stageNow,
       action: d.action,
       note: d.note,
       due: untilDue(d.followUpDueAt, now)
     }
     lines.push(line)
-    onLog(`${c.email}: ${c.stage} -> ${cached.stage} (row ${d.row}, ${d.action})${line.due ? `, follow-up ${line.due}` : ''}`)
+    onLog(`${c.email}: ${c.stage} -> ${stageNow} (row ${d.row}, ${d.action})${line.due ? `, follow-up ${line.due}` : ''}`)
   }
   return lines
 }
+
+/** The Pipeline shows `contacts.note`, so a follow-up that was not written says why there. */
+const noteOn = (db: Database.Database, email: string, note: string) =>
+  db.prepare(`UPDATE contacts SET note = ? WHERE email = ? AND stage <> 'final'`).run(note, email.toLowerCase())
 
 /**
  * The follow-up is about the roles the application named, and names any role from this address that no
@@ -171,7 +190,8 @@ export async function sweep(
  * hand-applied posts stay out.
  */
 async function draftFollowUp(
-  db: Database.Database, config: AppConfig, email: string, onLog: (s: string) => void, replyTo?: GmailMessage
+  db: Database.Database, config: AppConfig, email: string, onLog: (s: string) => void, replyTo?: GmailMessage,
+  signal?: AbortSignal
 ) {
   // Row 6 is reached precisely because exactly one outgoing message was found, so it always carries one.
   // If it ever does not, the honest outcome is no draft: a follow-up that cannot name the thread it is
@@ -180,10 +200,12 @@ async function draftFollowUp(
     onLog(`${email}: follow-up due but the original email is not in Gmail — leaving it to you`)
     return
   }
-  const posts = followUpPosts(db, email)
+  const posts = followUpPosts(db, email, replyTo.date)
   if (!posts.length) {
-    // every role this address posted was dismissed or applied to by hand since the application went out
+    // Every role the application named was dismissed or applied to by hand. That is the owner's call, but
+    // it used to be visible only in the job log while the Pipeline read "follow-up due now" forever.
     onLog(`${email}: follow-up due but no live post to carry it — leaving it to you`)
+    noteOn(db, email, 'no follow-up drafted: its roles were dismissed or applied to by hand — write one yourself if you want it')
     return
   }
 
@@ -191,9 +213,11 @@ async function draftFollowUp(
     mode: 'follow-up' as const,
     recruiterEmail: email,
     posts,
-    originalSentAt: new Date(replyTo.date).toISOString().slice(0, 10)
+    // the owner's local day, not UTC: a 01:30 send in UTC+3 is the previous day in UTC, and the follow-up
+    // would cite that date directly above the quoted original showing the real one
+    originalSentAt: new Date(replyTo.date).toLocaleDateString('sv-SE')
   }
-  const res = await runDrafter(req, config, { onLog })
+  const res = await runDrafter(req, config, { onLog, signal })
   const carrier = res.results.find(r => r.body)
   if (!carrier?.body) {
     onLog(`${email}: the drafter returned no follow-up body`)
@@ -201,10 +225,10 @@ async function draftFollowUp(
   }
 
   const sig = signature(config.profile)
-  // The same Cc the first email carried, and deliberately NOT computed from `rows`: that query holds only
-  // the posts no email has named yet, while the post that carried the second address is usually the one
-  // the first email already named — so reading it from `rows` would drop the Cc on every follow-up. This
-  // asks the whole question instead: every post reaching this recruiter, named or not. `email` came from
+  // The same Cc the first email carried, and deliberately NOT computed from `posts`: followUpPosts() leaves
+  // out dismissed, hand-applied and excluded posts and roles of an application that never went out, and
+  // the post that carried the second address can be any of those — so this asks the whole question
+  // instead: every post reaching this recruiter, named or not. `email` came from
   // `contacts` and both queries match json_each at ANY index, so the contact is not necessarily emails[0]
   // — ccFrom() excludes it by value, not position.
   const reachable = db.prepare(

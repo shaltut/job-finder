@@ -63,32 +63,44 @@ export const neverWrittenTo = (posts: string): string =>
   `NOT EXISTS (SELECT 1 FROM contacts c WHERE c.email = json_extract(${posts}.emails, '$[0]'))`
 
 /**
- * The posts a follow-up to this recruiter carries: the roles their application named (`named: true`, the
- * follow-up's subject) and any hiring post from them no email has mentioned yet.
+ * The posts a follow-up to this recruiter carries: the roles their SENT application named (`named: true`,
+ * the follow-up's subject) and any hiring post from them no email has mentioned yet.
+ *
+ * "Sent", not "drafted". A `named in application` row is written when the draft is created, so an
+ * application the owner deleted unsent still leaves its rows — and a follow-up built on those would tell
+ * the recruiter the owner applied for a role they never applied for. Rows written together share one
+ * `gmail_draft_id`, so the application that actually went out is the latest one drafted at or before the
+ * sent message Gmail reports (`sentAt`, the row-6 message); only that one's roles count. A role the
+ * owner deletes from a draft by hand before sending is still named — the sent body is never read.
  *
  * It used to be the second half only, and bailed when that was empty — which it is for every recruiter
- * who posted one role, since the application named it. Measured 2026-09-25: 66 of 79 due follow-ups
- * ended "leaving it to you", while the procedure has always described a follow-up that names the
- * original role and date.
+ * who posted one role. Measured 2026-09-25: 66 of 79 due follow-ups ended "leaving it to you".
  *
  * A named post counts only when named in an application TO THIS ADDRESS: `emails` is matched at any
- * index, so a post can reach here because this address was only its Cc, and its application went to
- * somebody else. `named in follow-up` rows are out either way — that role has had its second email.
- * Dismissed and hand-applied posts stay out: the owner has already said what they want done with them.
+ * index, so a post can reach here because this address was only its Cc. `named in follow-up` rows are out —
+ * that role has had its second email. Dismissed, hand-applied and `excluded` posts stay out: the owner has
+ * already said what they want done with them, and the exclude list is a promise the batch queue keeps too.
  */
-export function followUpPosts(db: Database.Database, email: string): DraftPost[] {
+export function followUpPosts(db: Database.Database, email: string, sentAt: number): DraftPost[] {
   const rows = db.prepare(`
+    WITH sent AS (
+      SELECT gmail_draft_id FROM applications
+      WHERE recruiter_email = @email AND reason LIKE 'named in application%' AND created_at <= @sentAt
+      ORDER BY created_at DESC LIMIT 1
+    )
     SELECT p.*, (a.reason LIKE 'named in application%') AS named
     FROM posts p LEFT JOIN applications a ON a.key = p.key
     WHERE EXISTS (SELECT 1 FROM json_each(p.emails) WHERE value = @email)
       AND coalesce(p.post_type, 'hiring') = 'hiring'
       AND (a.key IS NULL
         OR a.reason NOT LIKE 'named in %'
-        OR (a.reason LIKE 'named in application%' AND a.recruiter_email = @email))
+        OR (a.reason LIKE 'named in application%' AND a.recruiter_email = @email
+          AND a.gmail_draft_id = (SELECT gmail_draft_id FROM sent)))
       AND p.dismissed_at IS NULL
       AND p.applied_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM json_each(p.flags) WHERE value = 'excluded')
     ORDER BY named DESC, p.score DESC
-  `).all({ email: email.toLowerCase() }) as Record<string, unknown>[]
+  `).all({ email: email.toLowerCase(), sentAt: Math.ceil(sentAt / 1000) }) as Record<string, unknown>[]
   return rows.map(r => ({
     key: r.key as string,
     title: r.title as string | null,

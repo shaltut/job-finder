@@ -293,7 +293,10 @@ and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
   Settings re-flags whenever `flagInputs()` in `shared/settings.ts` changes** — every field `flagRules()`
   reads, not only `excludes`; a stored flag is never recomputed otherwise, and a floor change once left 7
   posts scoring 6-8 out of the queue. `test/settings.test.ts` mutates every setting and fails if
-  `flagRules()` reacts to one that list omits.
+  `flagRules()` reacts to one that list omits. **The decision is the server's** (`config.put.ts`,
+  `settings/excludes.post.ts`), taken against the stored row: the page used to take it against its own
+  load-time copy, so a save from a stale tab could write old flag inputs back and skip the re-flag. The
+  page still requests one to report the count; `enqueue()` drops a second queued reflag.
 - `contactChannels` — which contact routes admit a post, `['email' | 'link' | 'phone']`, default `['email']`
   so an existing install is unchanged. `CONTACT_CHANNELS` in `shared/settings.ts` is the one definition
   (`scraper/lib.ts` re-exports it — it imports `node:crypto` and cannot be what a browser bundle reads).
@@ -614,6 +617,15 @@ drafts keep arguing from a stale CV.
   21s. `--bare` would also skip them but accepts only `ANTHROPIC_API_KEY`, never OAuth. Dropping user
   settings drops their `model` too, so `--model` is explicit (`JOBFINDER_DRAFTER_MODEL`, default `opus`).
   Pinned by `test/invariants.test.ts`, including that the flag sits before the variadic tool flags.
+  `local` drops the whole user settings file, **including its `env` block** — certificates, auth and API
+  routing live there (`NODE_EXTRA_CA_CERTS` on this machine) — so `userSettingsEnv()` passes that block to
+  the drafter process on its own; the process's environment wins a clash.
+- **The drafter's system prompt goes in a file** (`--append-system-prompt-file`, one per run, removed when
+  the run ends — it holds the whole profile). On the command line Windows capped it at 32,767 characters;
+  the 28,000 `PROMPT_BUDGET` that stood in for that cap was exceeded by 165 on 2026-09-26, and `jobs.ts`
+  answers a failed budget by dropping the master CV, so **CV tailoring silently switched off** with one log
+  line. The budget is a sanity bound now (100,000). A probe that hands `runDrafter` a master CV directly
+  skips that gate — verify tailoring through `fitsPromptBudget`, the way `runDraftJob` does.
 
 - **`npm run typecheck`'s coverage boundary is reachability from a typechecked entry point, not a
   directory — and it moves silently as imports are added.** `scraper/run.ts` is still uncovered, verified
@@ -746,8 +758,15 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   named a one-post recruiter's only role. `checkContract` refuses a skip on an already-named role, and a
   follow-up that has one but no body; `persist()` never overwrites the application's own
   `named in application` rows (their reason and draft id). A named role counts only when named in an
-  application **to this address** — a Cc-only match belongs to somebody else's application.
-  Two consequences are pinned in `test/stages.test.ts`: **row 4 keys on the pending draft alone**, so a
+  application **to this address** — a Cc-only match belongs to somebody else's application. And only the
+  application that was **sent**: `named in application` rows are written when the DRAFT is created, so a
+  deleted draft leaves them behind, and a follow-up built on them claims an application never made. Rows
+  written together share a `gmail_draft_id`; the one that went out is the latest drafted at or before the
+  row-6 message. `excluded` posts stay out too — the exclude list is a promise the batch queue keeps.
+  **Row 9**: cached `followed_up`, one email sent and nothing pending means a follow-up was drafted and
+  deleted unsent — it is left alone, where row 6 used to draft it again on every sweep. A follow-up that is
+  not written says why in `contacts.note`, which the Pipeline shows. Stop reaches a running sync.
+  Two consequences are pinned — the first in `test/stages.test.ts`, the second in `test/heal.test.ts`: **row 4 keys on the pending draft alone**, so a
   follow-up the owner drafts by hand beside a cached `contacted` is never doubled; and `isClosed()` treats
   `contacted` as closed, so the no-Gmail cache cannot open the door to a second application.
 - **Gmail is the truth about what was sent; `contacts` only caches the stage.** A draft is not a contact

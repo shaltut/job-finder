@@ -5,8 +5,9 @@
 // (nothing it returns can act on its own) and fast — with the MCP servers on this machine skipped, startup
 // is ~30s rather than the 3-5 minutes the original paid.
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import type { AppConfig } from './config'
@@ -35,7 +36,7 @@ export function readProcedure(): string {
  * `--allowed-tools` and `--disallowed-tools` are variadic: a flag that follows one with no values of its
  * own is swallowed as a tool name. `--allowed-tools` also refuses an empty list. So the allow list names a
  * tool that does not exist, the deny list is explicit, and neither is ever the last flag before a value.
- * Verified: Bash is refused and --append-system-prompt still lands.
+ * Verified: Bash is refused and --append-system-prompt-file still lands.
  */
 const DENY = ['Bash', 'Read', 'Write', 'Edit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Glob', 'Grep', 'Task', 'TodoWrite']
 
@@ -196,11 +197,30 @@ export function candidateBlock(config: AppConfig): string {
 }
 
 /**
- * The longest system prompt allowed. It travels on the command line (`--append-system-prompt`), Windows
- * caps a whole command line at 32,767 characters, and argument escaping inflates the prompt on the way.
- * Measured 2026-09-17: ~17,400 characters before a master CV, ~6,500 more with one.
+ * A sanity bound on the system prompt, no longer a platform limit. It used to travel on the command line,
+ * where Windows caps a whole command line at 32,767 characters, so the budget was 28,000 — and on
+ * 2026-09-26 a procedure edit pushed the real prompt to 28,165, which silently switched CV tailoring off
+ * (jobs.ts drops the master CV when this fails). It now goes in a file (`--append-system-prompt-file`),
+ * so the only reason left to bound it is a runaway setting. Measured then: ~28,000 with a master CV.
  */
-export const PROMPT_BUDGET = 28_000
+export const PROMPT_BUDGET = 100_000
+
+/**
+ * The `env` block of the user's ~/.claude/settings.json. `--setting-sources local` skips that whole file
+ * to keep its CLAUDE.md, hooks and plugins out of the drafter — but the file's `env` is where
+ * certificates, auth and API routing live (this machine's NODE_EXTRA_CA_CERTS is set nowhere else), and
+ * dropping it would break every draft launched from a shell that lacks them. So the env alone is passed
+ * on, the way Claude Code itself applies it; the process's own environment wins on a clash.
+ */
+export function userSettingsEnv(path = join(homedir(), '.claude', 'settings.json')): Record<string, string> {
+  try {
+    const env = (JSON.parse(readFileSync(path, 'utf8')) as { env?: unknown }).env
+    if (!env || typeof env !== 'object') return {}
+    return Object.fromEntries(Object.entries(env).filter(([, v]) => typeof v === 'string')) as Record<string, string>
+  } catch {
+    return {}
+  }
+}
 
 export function buildSystemPrompt(config: AppConfig, master: MasterCv | null = null): string {
   const cv = master ? `\n\n${masterCvBlock(master)}` : ''
@@ -321,6 +341,9 @@ const DRAFTER_MODEL = process.env.JOBFINDER_DRAFTER_MODEL || 'opus'
 
 export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOptions = {}): Promise<DraftResponse> {
   const { onLog = () => {}, timeoutMs = 10 * 60_000 } = opts
+  const cwd = neutralCwd()
+  const promptFile = join(cwd, `prompt-${randomUUID()}.md`)
+  writeFileSync(promptFile, buildSystemPrompt(config, opts.masterCv ?? null))
   const args = [
     '-p',
     // neutralCwd() keeps out the PROJECT CLAUDE.md, but the user-global one and every SessionStart hook
@@ -334,7 +357,9 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
     '--allowed-tools', 'NoToolsPermitted',
     '--disallowed-tools', ...DENY,
-    '--append-system-prompt', buildSystemPrompt(config, opts.masterCv ?? null),
+    // a file, not an argument: see PROMPT_BUDGET. One per run, removed when the run ends — it holds the
+    // owner's whole profile and evidence, so it must not outlive the session that needed it.
+    '--append-system-prompt-file', promptFile,
     '--output-format', 'text'
   ]
 
@@ -350,9 +375,9 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
     }))
   })
 
-  return new Promise((resolvePromise, reject) => {
+  return new Promise<DraftResponse>((resolvePromise, reject) => {
     onLog(`drafting for ${req.recruiterEmail} (${req.posts.length} post(s), mode=${req.mode})`)
-    const child = spawn('claude', args, { cwd: neutralCwd(), env: process.env, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn('claude', args, { cwd, env: { ...userSettingsEnv(), ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] })
 
     let out = ''
     let err = ''
@@ -389,5 +414,5 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
 
     child.stdin.write(payload)
     child.stdin.end()
-  })
+  }).finally(() => rmSync(promptFile, { force: true }))
 }

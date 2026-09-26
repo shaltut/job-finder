@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { patchConfig, readConfigLoose } from '../../utils/config'
+import { enqueue } from '../../utils/jobs'
 
 /**
  * Append one entry to the exclude list, from the Posts view rather than the Settings form.
@@ -21,5 +22,6 @@ export default defineEventHandler(async (event) => {
   const { needle } = await readValidatedBody(event, body.parse)
   const excludes = [...readConfigLoose().excludes, needle]
   const saved = patchConfig({ excludes })
+  enqueue('reflag') // the list changed by definition; server-side for the reason config.put.ts gives
   return { excludes: saved.excludes }
 })

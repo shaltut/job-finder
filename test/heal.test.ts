@@ -148,10 +148,19 @@ test('a follow-up carries the applied role and any newer one — and only what b
   app.run(k('s'), 'drafted', 'named in application; to someone else', 'other@x.example', 'x')
   applyRecord(db, post(k('t'), [rec], 9))
   db.prepare('UPDATE posts SET dismissed_at = 1 WHERE key = ?').run(k('t'))
+  // an application DRAFTED earlier and deleted unsent: its rows remain, but that email never went out
+  applyRecord(db, post(k('u'), [rec], 9))
+  db.prepare(`INSERT INTO applications (key, verdict, reason, recruiter_email, gmail_draft_id, created_at)
+    VALUES (?, 'drafted', 'named in application; deleted unsent', ?, 'draft-old', unixepoch() - 86400)`).run(k('u'), rec)
+  // a post the owner added to the exclude list after applying
+  applyRecord(db, post(k('v'), [rec], 9))
+  db.prepare(`UPDATE posts SET flags = '["excluded"]' WHERE key = ?`).run(k('v'))
 
-  const got = followUpPosts(db, 'FU@Acme.example')
+  const sentAt = Date.now() + 60_000 // the application that went out: draft-app, drafted just before this
+  const got = followUpPosts(db, 'FU@Acme.example', sentAt)
   assert.deepEqual(got.map(p => [p.key[0], p.named]), [['p', true], ['q', false]],
-    'the applied role first, then the newer one; not the followed-up, Cc-only or dismissed posts')
+    'the role of the application that was sent first, then the newer one; not the followed-up, Cc-only, dismissed, '
+    + 'deleted-draft or excluded posts')
 
   // and persisting that follow-up keeps the application's own record, while promoting the recruiter
   db.prepare(`INSERT INTO contacts (email, stage) VALUES (?, 'contacted')`).run(rec)

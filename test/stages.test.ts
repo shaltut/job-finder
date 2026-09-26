@@ -318,3 +318,19 @@ test('a skip reason never starts with "named in": that prefix means an email alr
     if (reason !== false) assert.doesNotMatch(reason, /^named in /, `row ${n} would poison the follow-up query`)
   }
 })
+
+test('row 9: a follow-up drafted and deleted unsent is never drafted again', () => {
+  // The review of 1ae6874 reproduced it: delete a follow-up draft, and every later sweep wrote another.
+  // `followed_up` is cached only once persist() has created one, so this combination means it is gone.
+  const d = decideStage({ ...base, dbStage: 'followed_up', hasPendingDraft: false, messages: [msg({ from: ME, date: NOW - 6 * 86400e3 })] })
+  assert.equal(d.row, 9)
+  assert.equal(d.action, 'none')
+  assert.equal(cachedStage(d).stage, 'followed_up', 'and it stays that way on the next sweep')
+  assert.ok(closedBy(d), 'nor does the draft gate open for a second application')
+})
+
+test('control: a recruiter never followed up still gets the follow-up at row 6', () => {
+  const d = decideStage({ ...base, dbStage: 'contacted', hasPendingDraft: false, messages: [msg({ from: ME, date: NOW - 6 * 86400e3 })] })
+  assert.equal(d.row, 6)
+  assert.equal(d.action, 'draft-the-follow-up')
+})
