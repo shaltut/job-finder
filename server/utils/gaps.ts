@@ -159,15 +159,17 @@ export function verifyRequirements(
  * Application posts not yet read against this CV: drafted by the app, or applied to by hand. Newest
  * application first, so a backfill that is stopped part-way has read the posts that matter most.
  */
-export function pendingApplications(db: Db, cvSha: string): { key: string, text: string }[] {
+export function pendingApplications(db: Db, cvSha: string, keys?: string[]): { key: string, text: string }[] {
+  const only = keys ? `AND p.key IN (${keys.map(() => '?').join(',') || 'NULL'})` : ''
   return db.prepare(`
     SELECT p.key, p.text FROM posts p
     LEFT JOIN applications a ON a.key = p.key
     LEFT JOIN requirement_runs r ON r.key = p.key
     WHERE ${IS_APPLICATION}
       AND (r.key IS NULL OR r.cv_sha <> ?)
+      ${only}
     ORDER BY coalesce(p.applied_at, a.created_at) DESC
-  `).all(cvSha) as { key: string, text: string }[]
+  `).all(cvSha, ...(keys ?? [])) as { key: string, text: string }[]
 }
 
 export interface GapRunMeta { cvSha: string, model: string, dropped: number }
@@ -206,9 +208,9 @@ export interface GapsDeps {
  * again next time — the posture a failed score has. `stored < pending` is how the caller knows to exit 1.
  */
 export async function extractGaps(
-  db: Db, deps: GapsDeps, push: (line: string) => void, signal?: AbortSignal
+  db: Db, deps: GapsDeps, push: (line: string) => void, signal?: AbortSignal, keys?: string[]
 ): Promise<{ stored: number, pending: number }> {
-  const pending = pendingApplications(db, deps.cvSha)
+  const pending = pendingApplications(db, deps.cvSha, keys)
   if (!pending.length) {
     push('gaps: every application is already read against the current CV')
     return { stored: 0, pending: 0 }

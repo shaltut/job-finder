@@ -224,9 +224,11 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   post quote is not in the post, or whose present/partial CV quote is not in the master CV, is never
   stored, and an `absent` row carries no CV quote. `requirement_runs` records which CV (`cv_sha` =
   `pdfSha256`) each post was read against, so uploading a new CV makes every run stale and the next job
-  re-reads them. Triggers: after a draft job that drafted, after Mark applied, daily, and **Extract gaps**
-  in the Run view. `enqueue('gaps')` dedupes against the **queue only** — a running job already chose its
-  posts. The **Gaps** page groups each term: **Learn** when its most frequent status is `absent` (ties go
+  re-reads them. Triggers: after a draft job that drafted and after Mark applied — both **keyed to just
+  those posts** (`args.keys`), so a stale-CV backlog is never read behind a draft — and **Extract gaps** in
+  the Run view, the only full backfill. There is deliberately **no daily run**: it re-read the whole
+  history after every CV upload, for hours, unasked. A queued full run swallows any gaps request; keyed
+  runs queue separately. Dedupe is against the **queue only** — a running job already chose its posts. The **Gaps** page groups each term: **Learn** when its most frequent status is `absent` (ties go
   to the worse), else **On your CV** when `excludeRule([term])` matches the current master CV text, else
   **Add now** — the experience is there, the keyword is not.
   **Analysing it with Claude Code**: the CV to enhance is `data/cv/master.json` (the uploaded PDF, extracted
@@ -246,8 +248,9 @@ Schema in `server/db/schema.ts`; migrations in `server/db/migrations/`, applied 
   Read `importance` loosely too — it defaults to `must` whenever the post does not say, so it mostly means
   "not marked optional," not "a hard requirement." `tailoredCv()` refuses technology the master CV does not
   name, so the base CV is the only place honesty can slip — this is where it is held. A newly uploaded CV
-  re-reads every application at about a minute each on the draft lane (hours for the full history); Stop is
-  safe, the job resumes newest-first.
+  makes every application stale, but nothing re-reads them until **Extract gaps** is pressed — about a
+  minute each on the draft lane (hours for the full history); Stop is safe, the job resumes newest-first.
+  Until then the Gaps page mixes reads from both CVs.
 
 ## Configuration
 

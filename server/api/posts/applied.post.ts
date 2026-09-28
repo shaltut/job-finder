@@ -18,6 +18,6 @@ export default defineEventHandler(async (event) => {
   const a = await readValidatedBody(event, body.parse)
   const updated = setApplied(sqlite, a.keys, a.applied)
   // an application made by hand is still an application: read it for the gap record
-  if (a.applied && updated) enqueue('gaps')
+  if (a.applied && updated) enqueue('gaps', { keys: a.keys })
   return { updated }
 })

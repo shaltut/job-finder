@@ -92,8 +92,9 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
     && (queue.some(q => q.args.key === args.key) || lanes.draft.current?.args?.keys?.includes(args.key))) return null
   if (kind === 'sync' && (queue.some(q => q.kind === 'sync') || lanes.draft.current?.kind === 'sync')) return null
   // Deduped against the QUEUE only, unlike sync: a gaps job already running chose its posts when it
-  // started, so an application that arrives mid-run needs the queued one to pick it up.
-  if (kind === 'gaps' && queue.some(q => q.kind === 'gaps')) return null
+  // started, so an application that arrives mid-run needs the queued one to pick it up. A queued full
+  // run (no keys) covers any keyed one; keyed runs are per draft job and stay separate.
+  if (kind === 'gaps' && queue.some(q => q.kind === 'gaps' && !q.args.keys)) return null
   // The server queues a reflag on every save that changes a flag input, and the page then asks for one
   // too, to report the count; one queued reflag already reads the newest settings when it runs.
   if (kind === 'reflag' && queue.some(q => q.kind === 'reflag')) return null
@@ -179,7 +180,7 @@ function runJob(lane: Lane, item: QueueItem) {
     job.child = { kill: () => abort.abort() } as unknown as ChildProcess
     const work = kind === 'sync'
       ? runSyncJob(push, abort.signal)
-      : (kind === 'gaps' ? runGapsJob(job, push, abort.signal) : runDraftJob(job, args, push, abort.signal))
+      : (kind === 'gaps' ? runGapsJob(job, args.keys, push, abort.signal) : runDraftJob(job, args, push, abort.signal))
     work
       .then(code => finish(code))
       .catch((e) => {
@@ -290,6 +291,7 @@ async function runDraftJob(
   const { db, close } = openWritableDb()
   // launches nothing until the first tailored CV is rendered
   const renderer = createCvRenderer()
+  const draftedKeys: string[] = []
   try {
     // The Posts view's Draft button, not the batch queue: pump() only ever coalesces single-post
     // requests with each other, so a `{ n }` job can never arrive carrying keys and vice versa.
@@ -485,6 +487,7 @@ async function runDraftJob(
 
       const { drafted, skipped } = persist(db, req, res, ref, tailoredPath)
       job.added += drafted
+      if (drafted) draftedKeys.push(...res.results.filter(r => r.verdict === 'drafted').map(r => r.key))
       // "skipped" would be a lie on the manual path: nothing was recorded, so the post is still live
       // and the next bulk run will see it again. Say what actually happened to it.
       const passed = manual ? `${skipped} passed over (no verdict recorded)` : `${skipped} skipped`
@@ -502,9 +505,10 @@ async function runDraftJob(
     const closingBrowser = renderer.close().catch(() => {})
     close()
     await closingBrowser
-    // every drafted post is a new application: read it for the gap record, after this lane frees up —
-    // in finally so a Stop (return 1) or a throw still queues it when a post was drafted before either
-    if (job.added) enqueue('gaps')
+    // every drafted post is a new application: read it — and only it — for the gap record, after this
+    // lane frees up. In finally so a Stop (return 1) or a throw still queues it when a post was drafted
+    // before either. A CV change is NOT re-read here; that backfill is Extract gaps in the Run view.
+    if (draftedKeys.length) enqueue('gaps', { keys: draftedKeys })
   }
 }
 

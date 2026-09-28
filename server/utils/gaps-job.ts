@@ -34,8 +34,11 @@ async function ask(postText: string, cvText: string, signal?: AbortSignal): Prom
   return (JSON.parse(r.output_text) as { requirements: RawRequirement[] }).requirements
 }
 
-/** The `gaps` job. Exit 0 when every pending application was read, 1 otherwise. */
-export async function runGapsJob(job: { added: number }, push: (line: string) => void, signal: AbortSignal): Promise<number> {
+/** The `gaps` job. `keys` limits it to those posts (after a draft); none means every pending application
+ * (Extract gaps). Exit 0 when every pending application was read, 1 otherwise. */
+export async function runGapsJob(
+  job: { added: number }, keys: string[] | undefined, push: (line: string) => void, signal: AbortSignal
+): Promise<number> {
   // loose, not readConfig(): reading gaps needs the CV and nothing a scrape needs
   const config = readConfigLoose()
   if (!config.cv || !cvExists(config.cv)) {
@@ -56,7 +59,7 @@ export async function runGapsJob(job: { added: number }, push: (line: string) =>
       cvText: masterText(master),
       cvSha: pdfSha256(readFileSync(path)),
       model: MODEL
-    }, push, signal)
+    }, push, signal, keys)
     job.added = stored
     return stored === pending ? 0 : 1
   } finally {

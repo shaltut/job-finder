@@ -165,6 +165,15 @@ test('a post read against this CV is done, and a new CV makes it pending again',
   assert.deepEqual(pendingOf('sha-2', [key]), [key], 'a different CV makes it stale')
 })
 
+test('a run after a draft reads only the posts it names, never the stale backlog', () => {
+  const [justDrafted, stale] = [k(25), k(26)]
+  for (const key of [justDrafted, stale]) { addPost(key); draft(key) }
+  const keyed = (keys: string[]) => pendingApplications(db, 'sha-1', keys).map(p => p.key)
+  assert.deepEqual(keyed([justDrafted]), [justDrafted], 'the other pending application is left alone')
+  assert.deepEqual(keyed([]), [], 'an empty key list reads nothing, not everything')
+  assert.ok(pendingOf('sha-1', [justDrafted, stale]).length === 2, 'no keys is still the full backfill')
+})
+
 test('a re-run replaces the post\'s rows and its run, never mixing old and new', () => {
   const key = k(30)
   addPost(key)
