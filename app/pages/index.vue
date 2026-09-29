@@ -421,9 +421,14 @@ const columns: TableColumn<PostRow>[] = [
   {
     accessorKey: 'title',
     header: 'Role',
-    cell: ({ row }) => h('div', { class: 'min-w-0' }, [
-      h('p', { class: 'font-medium text-highlighted truncate' }, row.original.title || 'unknown'),
-      h('p', { class: 'text-xs text-muted truncate' }, [
+    // line-clamp, not truncate, and a max width. `truncate` is nowrap, so a table cell grows to the
+    // whole line: one 275-char "Multiple roles: ..." title widened this column until Contact..Status sat
+    // under the sticky actions, and columns seemed to vanish on whichever page carried such a row.
+    // Clamped text can wrap (whitespace-normal: UTable's td is nowrap), so the table can also shrink this
+    // column to fit a laptop screen.
+    cell: ({ row }) => h('div', { class: 'min-w-48 max-w-md whitespace-normal', title: row.original.title ?? undefined }, [
+      h('p', { class: 'font-medium text-highlighted line-clamp-2' }, row.original.title || 'unknown'),
+      h('p', { class: 'text-xs text-muted line-clamp-1' }, [
         row.original.company,
         row.original.location
       ].filter(Boolean).join(' · ') || '—')

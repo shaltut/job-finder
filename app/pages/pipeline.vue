@@ -1,10 +1,15 @@
 <script setup lang="ts">
+import { STAGE_LABEL, type Stage } from '#shared/recruiter-stage'
+import type { TableColumn } from '@nuxt/ui'
+import type { Column } from '@tanstack/vue-table'
 import type { Contact, GmailStatus, JobState, StoredDraft } from '~/types'
 
 useDashboard()
 useHead({ title: 'Pipeline' })
 
 const toast = useToast()
+const UBadge = resolveComponent('UBadge')
+const UButton = resolveComponent('UButton')
 
 const { data: drafts, refresh: refreshDrafts } = await useFetch<StoredDraft[]>('/api/drafts', { lazy: true, default: () => [] })
 const { data: contacts, refresh: refreshContacts } = await useFetch<Contact[]>('/api/contacts', { lazy: true, default: () => [] })
@@ -54,12 +59,18 @@ async function sync() {
   }
 }
 
+/** When the sweep's note says a follow-up is due, as epoch ms. */
+function dueAt(c: Contact): number | null {
+  const m = c.note?.match(/follow-up due (.+)$/)
+  const t = m ? Date.parse(m[1]!) : NaN
+  return Number.isNaN(t) ? null : t
+}
+
 /** Follow-up countdown, from the note the sweep wrote. */
 function due(c: Contact): string | null {
-  const m = c.note?.match(/follow-up due (.+)$/)
-  if (!m) return null
-  const ms = Date.parse(m[1]!) - Date.now()
-  if (Number.isNaN(ms)) return null
+  const t = dueAt(c)
+  if (t === null) return null
+  const ms = t - Date.now()
   if (ms <= 0) return 'follow-up due now'
   const h = Math.round(ms / 3600e3)
   return h < 24 ? `follow-up in ${h}h` : `follow-up in ${Math.round(h / 24)}d`
@@ -72,6 +83,83 @@ const stageColor = (s: string) => (({
   replied: 'success',
   final: 'neutral'
 } as const)[s] ?? 'neutral')
+
+// Recruiters table. Client-side filter and sort: it is one row per address ever written to, a few
+// hundred at most, and /api/contacts already returns all of them.
+const STAGES = Object.keys(STAGE_LABEL) as Stage[]
+const stageFilter = ref<Stage | null>(null)
+const search = ref('')
+const sorting = ref([{ id: 'updatedAt', desc: true }])
+
+const stageCounts = computed(() => {
+  const n = Object.fromEntries(STAGES.map(s => [s, 0])) as Record<Stage, number>
+  for (const c of contacts.value) n[c.stage]++
+  return n
+})
+const shownContacts = computed(() =>
+  stageFilter.value ? contacts.value.filter(c => c.stage === stageFilter.value) : contacts.value)
+
+const fmtDate = (v: string | null) => v ? new Date(v).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—'
+
+function sortable(label: string) {
+  return ({ column }: { column: Column<Contact> }) => {
+    const s = column.getIsSorted()
+    return h(UButton, {
+      label,
+      color: 'neutral',
+      variant: 'ghost',
+      size: 'xs',
+      class: '-mx-2',
+      icon: s === 'asc' ? 'i-lucide-arrow-up-narrow-wide' : s === 'desc' ? 'i-lucide-arrow-down-wide-narrow' : 'i-lucide-arrow-up-down',
+      onClick: () => column.toggleSorting(s === 'asc')
+    })
+  }
+}
+
+const contactColumns: TableColumn<Contact>[] = [
+  {
+    id: 'stage',
+    // pipeline order, not alphabetical
+    accessorFn: c => STAGES.indexOf(c.stage),
+    header: sortable('Stage'),
+    cell: ({ row }) => h(UBadge, { color: stageColor(row.original.stage), variant: 'subtle' }, () => STAGE_LABEL[row.original.stage])
+  },
+  {
+    accessorKey: 'email',
+    header: sortable('Recruiter'),
+    cell: ({ row }) => h('span', { class: 'font-mono text-xs text-highlighted block max-w-72 truncate', title: row.original.email }, row.original.email)
+  },
+  {
+    id: 'due',
+    // no follow-up due sorts last either way
+    accessorFn: c => dueAt(c) ?? undefined,
+    sortUndefined: 'last',
+    header: sortable('Follow-up'),
+    cell: ({ row }) => {
+      const d = due(row.original)
+      return d ? h(UBadge, { size: 'sm', color: 'info', variant: 'soft' }, () => d) : h('span', { class: 'text-muted' }, '—')
+    }
+  },
+  {
+    id: 'lastSentAt',
+    accessorFn: c => c.lastSentAt ? Date.parse(c.lastSentAt) : undefined,
+    sortUndefined: 'last',
+    header: sortable('Last sent'),
+    cell: ({ row }) => h('span', { class: 'text-xs text-muted whitespace-nowrap' }, fmtDate(row.original.lastSentAt))
+  },
+  {
+    id: 'updatedAt',
+    accessorFn: c => Date.parse(c.updatedAt),
+    header: sortable('Updated'),
+    cell: ({ row }) => h('span', { class: 'text-xs text-muted whitespace-nowrap' }, fmtDate(row.original.updatedAt))
+  },
+  {
+    accessorKey: 'note',
+    header: 'Note',
+    enableSorting: false,
+    cell: ({ row }) => h('span', { class: 'text-xs text-muted block max-w-md truncate', title: row.original.note ?? undefined }, row.original.note ?? '')
+  }
+]
 
 async function draftTop() {
   try {
@@ -168,33 +256,42 @@ function copy(d: StoredDraft) {
         </template>
         <div
           v-if="contacts.length"
-          class="space-y-2"
+          class="space-y-3"
         >
-          <div
-            v-for="c in contacts"
-            :key="c.email"
-            class="flex flex-wrap items-center gap-2 text-sm"
-          >
-            <UBadge
-              :color="stageColor(c.stage)"
-              variant="subtle"
-            >
-              {{ c.stage }}
-            </UBadge>
-            <span class="font-mono text-xs text-highlighted">{{ c.email }}</span>
-            <UBadge
-              v-if="due(c)"
+          <div class="flex flex-wrap items-center gap-2">
+            <UButton
+              :label="`All ${contacts.length}`"
+              size="xs"
+              color="neutral"
+              :variant="stageFilter ? 'outline' : 'solid'"
+              @click="stageFilter = null"
+            />
+            <UButton
+              v-for="s in STAGES"
+              :key="s"
+              :label="`${STAGE_LABEL[s]} ${stageCounts[s]}`"
+              size="xs"
+              :color="stageColor(s)"
+              :variant="stageFilter === s ? 'solid' : 'subtle'"
+              :disabled="!stageCounts[s]"
+              @click="stageFilter = stageFilter === s ? null : s"
+            />
+            <UInput
+              v-model="search"
+              icon="i-lucide-search"
+              placeholder="Search address or note"
               size="sm"
-              color="info"
-              variant="soft"
-            >
-              {{ due(c) }}
-            </UBadge>
-            <span
-              v-if="c.note"
-              class="text-xs text-muted truncate"
-            >{{ c.note }}</span>
+              class="ml-auto w-64"
+            />
           </div>
+          <UTable
+            v-model:sorting="sorting"
+            v-model:global-filter="search"
+            :data="shownContacts"
+            :columns="contactColumns"
+            sticky
+            class="max-h-[32rem]"
+          />
         </div>
         <p
           v-else
