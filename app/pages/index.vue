@@ -210,6 +210,9 @@ const scope = ref<'all' | 'in-scope' | 'remote'>('all')
 const status = ref<'all' | 'unprocessed' | 'drafted' | 'skipped' | 'dismissed' | 'applied'>('unprocessed')
 const channel = ref<'all' | 'email' | 'link' | 'phone'>('all')
 const minScore = ref(0)
+/** within the last N days; 0 = any */
+const posted = ref(0)
+const added = ref(0)
 
 // Seekers carry the `seeking-work` flag, so asking for non-hiring posts under the default 'Unflagged'
 // would return only the unflagged non-jobs and hide the very rows this filter exists to show.
@@ -227,7 +230,7 @@ const page = ref(1)
 const offset = computed(() => (page.value - 1) * PAGE_SIZE)
 
 const { data, status: reqStatus, refresh } = await useFetch<{ rows: PostRow[], total: number }>('/api/posts', {
-  query: { q, flags, scope, status, channel, minScore, type, limit: PAGE_SIZE, offset },
+  query: { q, flags, scope, status, channel, minScore, posted, added, type, limit: PAGE_SIZE, offset },
   lazy: true,
   default: () => ({ rows: [], total: 0 })
 })
@@ -245,7 +248,7 @@ watch(data, () => {
 // watch below is the second line of defence.
 const selectedKeys = computed(() => data.value.rows.filter(r => rowSelection.value[r.key]).map(r => r.key))
 
-watch([q, flags, type, scope, status, channel, minScore], () => {
+watch([q, flags, type, scope, status, channel, minScore, posted, added], () => {
   rowSelection.value = {}
   page.value = 1
 })
@@ -425,8 +428,9 @@ const columns: TableColumn<PostRow>[] = [
     // whole line: one 275-char "Multiple roles: ..." title widened this column until Contact..Status sat
     // under the sticky actions, and columns seemed to vanish on whichever page carried such a row.
     // Clamped text can wrap (whitespace-normal: UTable's td is nowrap), so the table can also shrink this
-    // column to fit a laptop screen.
-    cell: ({ row }) => h('div', { class: 'min-w-48 max-w-md whitespace-normal', title: row.original.title ?? undefined }, [
+    // column to fit a laptop screen. The budget is tight: with Posted and Added as their own columns this
+    // floor (min-w-40) and Contact's max-w-44 together measured 1152px in 1152 at a 1440 viewport.
+    cell: ({ row }) => h('div', { class: 'min-w-40 max-w-md whitespace-normal', title: row.original.title ?? undefined }, [
       h('p', { class: 'font-medium text-highlighted line-clamp-2' }, row.original.title || 'unknown'),
       h('p', { class: 'text-xs text-muted line-clamp-1' }, [
         row.original.company,
@@ -445,21 +449,21 @@ const columns: TableColumn<PostRow>[] = [
       const has = (c: 'email' | 'link' | 'phone') => r.channels.includes(c)
       // Capped and truncated: a long address used to push the row actions off a laptop screen, and the
       // full value is one row-expand away. The title attribute keeps it readable without that.
-      const cls = 'text-xs font-mono block max-w-48 truncate'
+      const cls = 'text-xs font-mono block max-w-44 truncate'
       if (has('email')) return h('span', { class: cls, title: r.emails[0] }, r.emails[0])
       if (has('link')) {
         return h('a', {
           'href': r.links[0],
           'target': '_blank',
           'rel': 'noopener noreferrer',
-          'class': 'text-xs text-primary hover:underline inline-flex items-center gap-1 max-w-48',
+          'class': 'text-xs text-primary hover:underline inline-flex items-center gap-1 max-w-44',
           'title': r.links[0],
           'aria-label': 'Open the application link',
           'onClick': (e: Event) => e.stopPropagation()
         }, [h(UIcon, { name: 'i-lucide-external-link', class: 'size-3 shrink-0' }), 'apply link'])
       }
       if (has('phone')) {
-        return h('span', { class: 'text-xs font-mono inline-flex items-center gap-1 max-w-48', title: r.phones[0] }, [
+        return h('span', { class: 'text-xs font-mono inline-flex items-center gap-1 max-w-44', title: r.phones[0] }, [
           h(UIcon, { name: 'i-lucide-phone', class: 'size-3 shrink-0 text-muted' }),
           r.phones[0]
         ])
@@ -494,9 +498,22 @@ const columns: TableColumn<PostRow>[] = [
     }
   },
   {
-    id: 'age',
-    header: 'Age',
-    cell: ({ row }) => h('span', { class: 'text-xs text-muted' }, age(row.original.postedAge, row.original.postedAt))
+    // posted_at is derived from LinkedIn's relative age ('2d', '3w') at scrape time, so it is only as
+    // precise as that string — the tooltip shows what LinkedIn said. Pasted posts have none.
+    id: 'posted',
+    header: 'Posted',
+    cell: ({ row }) => h('span', {
+      class: 'text-xs text-muted whitespace-nowrap',
+      title: row.original.postedAge ? `LinkedIn said "${row.original.postedAge}" when scraped` : undefined
+    }, fmtDate(row.original.postedAt))
+  },
+  {
+    id: 'added',
+    header: 'Added',
+    cell: ({ row }) => h('span', {
+      class: 'text-xs text-muted whitespace-nowrap',
+      title: row.original.scrapedAt ? new Date(row.original.scrapedAt).toLocaleString() : undefined
+    }, fmtDate(row.original.scrapedAt))
   },
   {
     accessorKey: 'verdict',
@@ -766,6 +783,28 @@ const columns: TableColumn<PostRow>[] = [
             { label: '8+', value: 8 }
           ]"
           class="min-w-32"
+        />
+        <USelect
+          v-model="posted"
+          :items="[
+            { label: 'Posted any time', value: 0 },
+            { label: 'Posted 24h', value: 1 },
+            { label: 'Posted 3 days', value: 3 },
+            { label: 'Posted this week', value: 7 },
+            { label: 'Posted this month', value: 30 }
+          ]"
+          class="min-w-40"
+        />
+        <USelect
+          v-model="added"
+          :items="[
+            { label: 'Added any time', value: 0 },
+            { label: 'Added 24h', value: 1 },
+            { label: 'Added 3 days', value: 3 },
+            { label: 'Added this week', value: 7 },
+            { label: 'Added this month', value: 30 }
+          ]"
+          class="min-w-40"
         />
         <div class="ml-auto flex items-center gap-1.5">
           <template v-if="selectedKeys.length">

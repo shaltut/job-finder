@@ -21,6 +21,9 @@ const query = z.object({
   // carried. A post kept for its email still stores the marketing link beside it.
   channel: z.enum(['all', 'email', 'link', 'phone']).default('all'),
   minScore: z.coerce.number().int().min(0).max(10).default(0),
+  /** Within the last N days; 0 = any. `posted` drops posts with no posted_at (pasted, and the odd undated card). */
+  posted: z.coerce.number().int().min(0).max(365).default(0),
+  added: z.coerce.number().int().min(0).max(365).default(0),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0)
 })
@@ -30,6 +33,9 @@ export default defineEventHandler(async (event) => {
 
   const where = [
     p.minScore > 0 ? sql`${posts.score} >= ${p.minScore}` : undefined,
+    // both columns are epoch seconds
+    p.posted > 0 ? sql`${posts.postedAt} >= unixepoch() - ${p.posted * 86400}` : undefined,
+    p.added > 0 ? sql`${posts.scrapedAt} >= unixepoch() - ${p.added * 86400}` : undefined,
     p.flags === 'clean' ? sql`json_array_length(${posts.flags}) = 0` : undefined,
     p.type === 'hiring' ? sql`coalesce(${posts.postType}, 'hiring') = 'hiring'` : undefined,
     p.type === 'other' ? sql`${posts.postType} in ('seeking', 'other')` : undefined,

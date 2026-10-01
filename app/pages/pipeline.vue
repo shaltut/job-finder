@@ -99,8 +99,6 @@ const stageCounts = computed(() => {
 const shownContacts = computed(() =>
   stageFilter.value ? contacts.value.filter(c => c.stage === stageFilter.value) : contacts.value)
 
-const fmtDate = (v: string | null) => v ? new Date(v).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '—'
-
 function sortable(label: string) {
   return ({ column }: { column: Column<Contact> }) => {
     const s = column.getIsSorted()
