@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { applications, contacts, posts } from '../db/schema'
 import { neverWrittenTo } from '../utils/contacts'
 import { db } from '../utils/db'
-import { orderSql, SORTS } from '../utils/posts-query'
+import { countryClause, orderSql, SORTS } from '../utils/posts-query'
 
 const query = z.object({
   q: z.string().trim().max(200).optional(),
@@ -28,18 +28,29 @@ const query = z.object({
   // .catch, not .default: a junk value from a bookmarked URL falls back instead of answering 400
   sort: z.enum(SORTS).catch('default'),
   dir: z.enum(['asc', 'desc']).catch('desc'),
+  /** repeatable: ?country=India&country=Egypt — names as countriesIn() returns them, or NO_COUNTRY */
+  country: z.union([z.string(), z.array(z.string())]).optional()
+    .transform(v => (v === undefined ? [] : Array.isArray(v) ? v : [v]).map(s => s.trim()).filter(Boolean).slice(0, 50)),
+  countryMode: z.enum(['include', 'exclude']).catch('exclude'),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0)
 })
 
 export default defineEventHandler(async (event) => {
   const p = await getValidatedQuery(event, query.parse)
+  const locs = p.country.length
+    ? (await db.selectDistinct({ l: posts.location }).from(posts)).map(r => r.l)
+    : []
+  const cc = countryClause(locs, p.country, p.countryMode)
+  // the clause text is countryClause's fixed SQL around one placeholder; the locations are the bound value
+  const [before, after] = cc ? cc.sql.split('?') : ['', '']
 
   const where = [
     p.minScore > 0 ? sql`${posts.score} >= ${p.minScore}` : undefined,
     // both columns are epoch seconds
     p.posted > 0 ? sql`${posts.postedAt} >= unixepoch() - ${p.posted * 86400}` : undefined,
     p.added > 0 ? sql`${posts.scrapedAt} >= unixepoch() - ${p.added * 86400}` : undefined,
+    cc ? sql`${sql.raw(before!)}${cc.param}${sql.raw(after!)}` : undefined,
     p.flags === 'clean' ? sql`json_array_length(${posts.flags}) = 0` : undefined,
     p.type === 'hiring' ? sql`coalesce(${posts.postType}, 'hiring') = 'hiring'` : undefined,
     p.type === 'other' ? sql`${posts.postType} in ('seeking', 'other')` : undefined,
