@@ -117,6 +117,9 @@ function emailingQueries(): Record<string, string> {
   const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
   const sync = readFileSync('server/utils/sync.ts', 'utf8')
   const contacts = readFileSync('server/utils/contacts.ts', 'utf8')
+  const draftRows = readFileSync('server/utils/draft-rows.ts', 'utf8')
+  // The keyed draft query moved into keyedDraftRows() for the same reason, and screened bulk Draft with it.
+  assert.match(jobs, /keyedDraftRows\(db, args\.keys, !!args\.screened\)/, 'the keyed draft path must select through keyedDraftRows()')
   // The follow-up's selection moved into followUpPosts() so it could be tested against a real database;
   // pin that the sweep still runs it, or the query below could be dead code carrying the right clauses.
   assert.match(sync, /followUpPosts\(db, email, replyTo\.date\)/, 'the follow-up sweep must select through followUpPosts()')
@@ -129,7 +132,7 @@ function emailingQueries(): Record<string, string> {
   }
   return {
     'the batch drafter queue': between(jobs, 'LEFT JOIN applications a ON a.key = p.key', 'ORDER BY p.score DESC'),
-    'the single-key draft path': between(jobs, 'WHERE p.key IN', '.all(...args.keys)'),
+    'the keyed draft path': between(draftRows, 'WHERE p.key IN', '.all(JSON.stringify(keys))'),
     'the follow-up sweep': between(contacts, 'export function followUpPosts', 'ORDER BY named DESC')
   }
 }

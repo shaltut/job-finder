@@ -16,6 +16,7 @@ import { createCvRenderer } from './cv-render'
 import { fitsPromptBudget, runDrafter, type DraftPost, type DraftRequest, type DraftResponse } from './drafter'
 import { isClosed, persist, signature, writeDraftFile } from './drafts'
 import { ccFrom, createDraft, gmailStatus, renderHtml } from './gmail'
+import { freshKeys, keyedDraftRows } from './draft-rows'
 import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 import { closedInGmail, sweep } from './sync'
 import { runPasteJob } from './paste-job'
@@ -32,6 +33,8 @@ export interface JobArgs {
   key?: string
   keys?: string[]
   n?: number
+  /** draft lane, with `keys`: bulk Draft from the Posts view — the drafter may skip, and it is recorded */
+  screened?: boolean
   /** set on jobs started by the daily tick, so they notify when they finish */
   auto?: boolean
   /** paste lane: the pasted post's text */
@@ -87,6 +90,13 @@ const laneOf = (kind: Kind): Lane =>
 export const busy = () => !!(lanes.scrape.current || lanes.draft.current || lanes.paste.current)
 
 export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
+  // A bulk draft keeps only the keys not already waiting or running; pump() never coalesces a `keys`
+  // item with single-`key` ones, so screened and hand-picked posts cannot share a session.
+  if (kind === 'draft' && args.keys) {
+    const keys = freshKeys(args.keys, queue.filter(q => q.kind === 'draft').map(q => q.args), lanes.draft.current?.args?.keys ?? [])
+    if (!keys.length) return null
+    args = { ...args, keys }
+  }
   // the same post queued twice, or a second sync, is a no-op rather than a duplicate session
   if (kind === 'draft' && args.key
     && (queue.some(q => q.args.key === args.key) || lanes.draft.current?.args?.keys?.includes(args.key))) return null
@@ -294,18 +304,12 @@ async function runDraftJob(
   const draftedKeys: string[] = []
   try {
     // The Posts view's Draft button, not the batch queue: pump() only ever coalesces single-post
-    // requests with each other, so a `{ n }` job can never arrive carrying keys and vice versa.
-    // That makes this the whole discriminator — no flag needs threading through the queue.
-    const manual = !!args.keys?.length
+    // requests with each other, so a `{ n }` job can never arrive carrying keys and vice versa. A bulk
+    // Draft from the Posts view also carries keys, but with `screened`, and is triaged like the batch run.
+    const manual = !!args.keys?.length && !args.screened
 
     const rows = args.keys?.length
-      // dismissed_at and applied_at here too, not just in the batch query below: the Posts view hides the
-      // Draft button on both, but a tab left open beforehand must not be able to email about them.
-      ? db.prepare(
-          `SELECT p.* FROM posts p
-           WHERE p.key IN (${args.keys.map(() => '?').join(',')})
-             AND p.dismissed_at IS NULL AND p.applied_at IS NULL`
-        ).all(...args.keys)
+      ? keyedDraftRows(db, args.keys, !!args.screened)
       // Flags and score exclude here rather than merely sorting last: this query decides who receives an
       // email from a real person's account. It is the 'usable' KPI minus its `(in_scope OR remote)` half —
       // deliberately, because the scorer leaves `location` unknown often enough that including it would
@@ -326,6 +330,10 @@ async function runDraftJob(
           ORDER BY p.score DESC, p.posted_at DESC
           LIMIT ?
         `).all(args.n ?? 10)
+
+    if (args.screened && args.keys && rows.length < args.keys.length) {
+      push(`${args.keys.length - rows.length} selected post(s) left out: already drafted, skipped, dismissed or applied`)
+    }
 
     if (!rows.length) {
       push('nothing to draft: no unprocessed posts with a contact address')
