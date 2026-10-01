@@ -167,3 +167,71 @@ export function nameFormsFor(names: string[]): string[] {
   }
   return [...out].filter(Boolean)
 }
+
+/**
+ * Bare city names, for the Posts view's country filter ONLY — measured 2026-10-01 as the largest share
+ * of locations no country name resolves ("Bangalore", "Pune", "Dubai"). Never fed to withAliases() or
+ * nameFormsFor(): those reach the scoring prompt and the pre-screen, and a city there would widen what
+ * the owner configured as a country.
+ * ponytail: a hand list of the measured top misses; a geocoder if the long tail starts to matter.
+ */
+const CITY_COUNTRY: Record<string, string> = {
+  'bangalore': 'India', 'bengaluru': 'India', 'hyderabad': 'India', 'pune': 'India', 'chennai': 'India',
+  'mumbai': 'India', 'noida': 'India', 'gurugram': 'India', 'gurgaon': 'India', 'indore': 'India',
+  'delhi': 'India', 'kochi': 'India', 'ahmedabad': 'India', 'kolkata': 'India',
+  'dubai': 'UAE', 'abu dhabi': 'UAE', 'sharjah': 'UAE',
+  'riyadh': 'Saudi Arabia', 'jeddah': 'Saudi Arabia', 'dammam': 'Saudi Arabia', 'khobar': 'Saudi Arabia',
+  'cairo': 'Egypt', 'giza': 'Egypt', 'alexandria': 'Egypt',
+  'doha': 'Qatar', 'amman': 'Jordan',
+  'lahore': 'Pakistan', 'karachi': 'Pakistan', 'islamabad': 'Pakistan'
+}
+
+/** ponytail: "Atlanta, Georgia" resolves to the country Georgia; full US state names are not mapped. */
+const US_STATES = new Set(('AK AL AR AZ CA CO CT DC DE FL GA HI IA ID IL IN KS KY LA MA MD ME MI MN MO MS MT '
+  + 'NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY').split(' '))
+
+// A character test rather than a regex word boundary: `\b` is ASCII-only, and backslash escapes have
+// been mangled by the file tools in this repo. A letter is anything with case, plus digits.
+const isWordChar = (ch: string | undefined) =>
+  !!ch && (ch.toLowerCase() !== ch.toUpperCase() || (ch >= '0' && ch <= '9'))
+
+function hasWord(hay: string, needle: string): boolean {
+  const h = hay.toLowerCase()
+  const n = needle.toLowerCase()
+  for (let i = h.indexOf(n); i >= 0; i = h.indexOf(n, i + 1)) {
+    if (!isWordChar(h[i - 1]) && !isWordChar(h[i + n.length])) return true
+  }
+  return false
+}
+
+/**
+ * Every country a free-text location names — for filtering, where a miss shows as "no country" rather
+ * than as a wrong answer. Broader than homeCountryOf(), which must fail open for the pre-screen.
+ */
+export function countriesIn(location: string | null | undefined): string[] {
+  const l = (location ?? '').trim()
+  if (!l) return []
+  const out = new Set<string>()
+  const home = homeCountryOf(l)
+  if (home) out.add(home.name)
+  for (const c of COUNTRIES) {
+    if ([c.name, ...c.aliases].some(f => hasWord(l, f))) out.add(c.name)
+  }
+  for (const [city, country] of Object.entries(CITY_COUNTRY)) {
+    const c = hasWord(l, city) ? resolveCountry(country) : undefined
+    if (c) out.add(c.name)
+  }
+  if (l.split(',').slice(1).some(seg => US_STATES.has(seg.trim().split(' ')[0] ?? ''))) {
+    const us = resolveCountry('USA')
+    if (us) out.add(us.name)
+  }
+  return [...out]
+}
+
+/** The picker's entry for locations that resolve to no country: empty, "unknown", "Remote", or a miss. */
+export const NO_COUNTRY = '(no country)'
+
+export function locationMatches(location: string | null, picked: string[]): boolean {
+  const cs = countriesIn(location)
+  return picked.some(p => (p === NO_COUNTRY ? cs.length === 0 : cs.includes(p)))
+}

@@ -136,6 +136,7 @@ Unchanged endpoints; faster only through range selection.
 | resolved by `homeCountryOf()` (comma segments) | 680 |
 | + any country name/alias as a whole word, + US `City, ST` → USA | 369 |
 | still unresolved — mostly bare city names | 318 |
+| **with the filter-only city table (`countriesIn`, measured after Task 1)** | **1,256 of 1,367 located = 92%** (was 77%) |
 
 - New `countriesIn(location): string[]` in `shared/countries.ts`: `homeCountryOf`, then a whole-word
   scan for every country name and alias, then a US-state suffix → USA. A location can name several
