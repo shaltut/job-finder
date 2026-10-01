@@ -65,7 +65,14 @@ npm run dev ──► http://127.0.0.1:3939
 3. **Drafter** `server/prompts/drafter-procedure.md` + `server/utils/drafter.ts`: the server picks
    the posts, groups them by recruiter, and runs one `claude -p` session per recruiter with **no tools at
    all**. The skill returns JSON only. The server validates it, writes the email, and records the verdicts.
-4. **UI** `app/`: Nuxt UI v4 dashboard — Posts, Pipeline, Run, Settings.
+4. **UI** `app/`: Nuxt UI v4 dashboard — Posts, Pipeline, Run, Settings. The Posts view is a grid: sort and
+   filters live in the column headers (`PostsHeaderCell`), the whole view is in the URL
+   (`shared/posts-view.ts`, so refresh and back keep it), sorting is server-side (`orderSql()` in
+   `server/utils/posts-query.ts`, flagged last under every sort), and shift-click selects a range for the
+   bulk bar (`PostsBulkBar`: Draft, Applied, Dismiss, Exclude…). The country filter maps the model's
+   free-text `location` through `countriesIn()` in `shared/countries.ts` — 92% of located posts resolve
+   (measured 2026-10-01) — and its city table is **filter-only**: it must never reach `withAliases()` or a
+   prompt.
 5. **Paste intake** `server/api/posts/paste.post.ts` + `server/utils/paste.ts` / `paste-job.ts`: a post that
    arrived by email or WhatsApp, pasted into the Posts view (`app/pages/index.vue`). The endpoint runs the
    same extraction and contact-route gate a scrape runs — pure regex, so a refusal is immediate — and queues
@@ -491,7 +498,12 @@ drafts keep arguing from a stale CV.
   currently reachable — but it is a gap, not a decision.
 - **Pressing Draft on one post is the owner overruling the fit screen, and it never writes a `skipped`
   row.** `const manual = !!args.keys?.length` in `runDraftJob` is the whole discriminator: `pump()` only
-  coalesces single-post requests with each other, so a `{ n }` job can never arrive carrying keys. In that
+  coalesces single-post requests with each other, so a `{ n }` job can never arrive carrying keys.
+  **Bulk Draft is the exception:** the Posts view's bulk bar sends `{ keys }`, which `draft.post.ts` always
+  enqueues with `screened: true`, and the discriminator is `!!args.keys?.length && !args.screened`. A
+  screened run is triaged like the batch run — skips are recorded — and `keyedDraftRows()`
+  (`server/utils/draft-rows.ts`) gives it only posts with no `applications` row, because `persist()` would
+  otherwise rewrite a `drafted` verdict as `skipped`. Pinned by `test/draft-rows.test.ts`. In hand-picked
   mode the Gmail gate and `persist()` both refuse to record a skip — they write nothing, which leaves
   whatever was already there. **Two different outcomes, and the distinction matters when reading a row:**
   a post with no prior row stays unprocessed and the next bulk run re-triages it; a post carrying an
@@ -565,10 +577,14 @@ drafts keep arguing from a stale CV.
 
 ### The server and the UI
 
-- **Nitro's dev HMR reloads server modules on every edit**, which would forget a running job: the scraper kept
-  writing rows while the UI showed an idle lane and Stop had nothing to kill. Job lane state lives on
-  `globalThis` (`__jobfinderRunner`) so it outlives module reloads. **Any long-lived server state needs the
-  same treatment.**
+- **A server edit drops every running and queued job.** Nitro 2.13's dev server runs the app in a
+  `worker_thread` and replaces it on every server rebuild (`nitropack/dist/core/index.mjs`: `new Worker`,
+  then `terminate()` on the old one). `globalThis` is per thread, so `__jobfinderRunner` does **not** survive
+  that — measured 2026-10-01: one edit to `server/api/posts.get.ts` lost a running draft and 18 queued ones.
+  The `globalThis` placement still matters for module-level HMR inside one worker (the scraper once kept
+  writing rows while the UI showed an idle lane), so any long-lived server state needs it — but it is no
+  protection against a rebuild. **Check `curl -s http://127.0.0.1:3939/api/job` before editing anything
+  under `server/`** (or a `shared/` / `scraper/` file the server imports).
 - **Port 3939 is pinned** in `nuxt.config.ts`. Port 3000 is taken on this machine, and Nuxt silently drifting
   to 3001 would invalidate the Gmail OAuth redirect URI.
 - **The server is the sole writer of the database.** The scraper opens it read-only and streams rows back.

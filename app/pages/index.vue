@@ -535,8 +535,9 @@ const columns: TableColumn<PostRow>[] = [
     // whole line: one 275-char "Multiple roles: ..." title widened this column until Contact..Status sat
     // under the sticky actions, and columns seemed to vanish on whichever page carried such a row.
     // Clamped text can wrap (whitespace-normal: UTable's td is nowrap), so the table can also shrink this
-    // column to fit a laptop screen. The budget is tight: with Posted and Added as their own columns this
-    // floor (min-w-40) and Contact's max-w-40 together measured 1152px in 1152 at a 1440 viewport.
+    // column to fit a laptop screen. The budget is tight: this floor (min-w-40) and Contact's max-w-40 hold
+    // the grid at 1152px in 1152 at a 1440 viewport, sorted and filtered (header filter buttons take no
+    // width — see PostsHeaderCell). 1280 overflows by ~120px, as the pre-grid table did.
     cell: ({ row }) => h('div', { class: 'min-w-40 max-w-md whitespace-normal', title: row.original.title ?? undefined }, [
       h('p', { class: 'font-medium text-highlighted line-clamp-2' }, row.original.title || 'unknown'),
       h('p', { class: 'text-xs text-muted line-clamp-1' }, [

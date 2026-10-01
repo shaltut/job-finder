@@ -1,6 +1,6 @@
 # Posts view as a grid: column sort, header filters, bulk triage
 
-Date: 2026-10-01 · Branch: `posts-grid` · Status: approved design, not yet implemented
+Date: 2026-10-01 · Branch: `posts-grid` · Status: implemented on posts-grid
 
 ## Why
 
@@ -95,8 +95,8 @@ Applied in the Dismissed and Applied views, as today.)
 
 ### Bulk Draft — screened
 
-`POST /api/run/draft` accepts `{ keys: string[] (1..100, sha1 each), screened: true }` beside the
-existing `{ key }` and `{ n }`.
+`POST /api/run/draft` accepts `{ keys: string[] (1..100, sha1 each) }` beside the existing `{ key }` and
+`{ n }`; the endpoint always enqueues it with `screened: true` — hand-picked bulk is not a mode the UI offers.
 
 - `JobArgs` gains `screened?: boolean`. In `runDraftJob`:
   `const manual = !!args.keys?.length && !args.screened`. Screened means the drafter may skip, and the
@@ -173,4 +173,4 @@ Unchanged endpoints; faster only through range selection.
 a `worker_thread` and replaces it on every server rebuild; `globalThis.__jobfinderRunner` is
 per-thread and does not survive. Measured 2026-10-01: one edit to `server/api/posts.get.ts` dropped a
 running draft and 18 queued ones. Check `curl -s http://127.0.0.1:3939/api/job` before each server
-edit. (CLAUDE.md still says lane state survives HMR — that claim needs correcting.)
+edit. (CLAUDE.md's old "lane state survives HMR" claim is corrected on this branch.)
