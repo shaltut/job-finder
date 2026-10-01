@@ -18,7 +18,7 @@ const body = z.object({
   // instead of inside parseSettings, where the error is a field path the dialog cannot render
   needle: needle.optional(),
   // the Posts view's bulk Exclude: every company and recruiter of the selection, in one save
-  needles: z.array(needle).min(1).max(50).optional()
+  needles: z.array(needle).min(1).max(200).optional() // a full page: a company and a recruiter per row
 }).refine(b => b.needle || b.needles, 'needle or needles is required')
 
 export default defineEventHandler(async (event) => {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { findFinishedMatch, stalePastes, type FinishedPasteJob } from '#shared/paste-poll'
-import { activeChips, apiQuery, DEFAULT_VIEW, nextSort, OPTIONS, parseView, rangeKeys, viewQuery, type PostsView } from '#shared/posts-view'
+import { activeChips, apiQuery, clampPage, DEFAULT_VIEW, nextSort, OPTIONS, parseView, rangeKeys, viewQuery, type PostsView } from '#shared/posts-view'
 import { sentTo, STAGE_LABEL } from '#shared/recruiter-stage'
 import type { TableColumn } from '@nuxt/ui'
 import type { JobState, PostRow } from '~/types'
@@ -49,8 +49,10 @@ async function draftSelected(keys: string[]) {
     const r = await $fetch<{ queued: boolean, note?: string }>('/api/run/draft', { method: 'POST', body: { keys } })
     rowSelection.value = {}
     toast.add({
-      title: r.queued ? `Drafting ${keys.length} post${keys.length > 1 ? 's' : ''}` : 'Already queued',
-      description: r.queued ? 'Screened like the batch run: posts that fail a hard rule are skipped with a reason.' : r.note,
+      title: r.queued ? `Queued ${keys.length} selected post${keys.length > 1 ? 's' : ''}` : 'Already queued',
+      description: r.queued
+        ? 'Screened like the batch run: only unprocessed, unflagged hiring posts scoring 6+ with an address are drafted. The job log says how many.'
+        : r.note,
       icon: 'i-lucide-pen-line'
     })
     keys.forEach(k => drafting.add(k))
@@ -311,10 +313,15 @@ watch(() => route.fullPath, () => {
 
 // Dismissing or marking applied every row on the last page leaves it past the end: step back a page
 // rather than show an empty table under a count that says the posts exist.
-watch(() => data.value.total, (total) => {
-  const last = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  if (page.value > last) page.value = last
-})
+// Also once on mount: the first page load is server-rendered, so `total` arrives already set and the
+// watch alone never fires — a bookmarked ?page=2 after the list shrank stranded the owner on an empty
+// table with the pager hidden. On the client only, where router.replace belongs.
+function clampToTotal() {
+  const p = clampPage(page.value, data.value.total, PAGE_SIZE)
+  if (data.value.total > 0 && p !== page.value) page.value = p
+}
+watch(() => data.value.total, clampToTotal)
+onMounted(clampToTotal)
 
 const rangeLabel = computed(() => {
   const total = data.value.total

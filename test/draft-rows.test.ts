@@ -48,6 +48,11 @@ before(() => {
   db = new Database(join(dir, 'test.db'))
   db.pragma('foreign_keys = ON')
   for (const c of ['a', 'b', 'c', 'd']) applyRecord(db, post(K(c)))
+  // e-i: unprocessed, but each fails one batch-queue predicate
+  applyRecord(db, { ...post(K('e')), flags: ['excluded'] } as ScraperRecord)
+  applyRecord(db, { ...post(K('f')), score: 5 } as ScraperRecord)
+  applyRecord(db, { ...post(K('g')), postType: 'seeking' } as ScraperRecord)
+  applyRecord(db, { ...post(K('h')), emails: [], channels: ['link'], links: ['https://lnkd.in/x'] } as ScraperRecord)
   db.prepare(`INSERT INTO applications (key, verdict, reason) VALUES (?, 'drafted', 'named in application')`).run(K('b'))
   db.prepare(`INSERT INTO applications (key, verdict, reason) VALUES (?, 'skipped', 'not hiring')`).run(K('c'))
   db.prepare('UPDATE posts SET dismissed_at = unixepoch() WHERE key = ?').run(K('d'))
@@ -76,4 +81,14 @@ test('freshKeys drops keys already queued (single or bulk) or running', () => {
     freshKeys([K('a'), K('b'), K('c'), K('d')], [{ key: K('a') }, { keys: [K('b')] }], [K('c')]),
     [K('d')]
   )
+})
+
+test('screened takes the batch-queue predicates too: excluded, flagged, low-score, not hiring, no address', () => {
+  // The exclude list is a promise the batch queue keeps (CLAUDE.md, posts.flags); bulk Draft is
+  // "screened like the batch run", so it keeps it as well — selecting under Flags: Excluded must not draft.
+  assert.deepEqual(keysOf(keyedDraftRows(db, ['a', 'e', 'f', 'g', 'h'].map(K), true)), [K('a')])
+})
+
+test('control: hand-picked still reaches them — the row Draft button is the owner overruling the screen', () => {
+  assert.deepEqual(keysOf(keyedDraftRows(db, ['e', 'f', 'g'].map(K), false)), ['e', 'f', 'g'].map(K))
 })

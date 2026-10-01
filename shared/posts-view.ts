@@ -155,3 +155,16 @@ export function rangeKeys(keys: string[], anchor: string | null, target: string)
   if (a < 0 || t < 0) return [target]
   return keys.slice(Math.min(a, t), Math.max(a, t) + 1)
 }
+
+/** The page to show for `total` rows: a page past the end (a stale bookmark, a list that shrank) is the last one. */
+export function clampPage(page: number, total: number, pageSize: number): number {
+  return Math.min(page, Math.max(1, Math.ceil(total / pageSize)))
+}
+
+/**
+ * Whether bulk Draft belongs in this view. It is screened — only posts with no verdict are drafted — so
+ * in Skipped or Drafted every selected row would be left out, and Dismissed / Applied undo instead.
+ */
+export function bulkDraftable(status: Status): boolean {
+  return status === 'unprocessed' || status === 'all'
+}

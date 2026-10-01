@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { SORTS as SERVER_SORTS } from '../server/utils/posts-query.ts'
-import { activeChips, apiQuery, DEFAULT_VIEW, nextSort, parseView, rangeKeys, SORTS, viewQuery } from '../shared/posts-view.ts'
+import { activeChips, apiQuery, bulkDraftable, clampPage, DEFAULT_VIEW, nextSort, parseView, rangeKeys, SORTS, viewQuery } from '../shared/posts-view.ts'
 
 test('the client sort list matches the server allowlist', () => {
   assert.deepEqual([...SORTS], [...SERVER_SORTS])
@@ -67,4 +67,21 @@ test('rangeKeys: the inclusive span either direction; a missing anchor is a sing
   assert.deepEqual(rangeKeys(keys, 'd', 'b'), ['b', 'c', 'd'])
   assert.deepEqual(rangeKeys(keys, 'gone', 'c'), ['c']) // anchor left the page
   assert.deepEqual(rangeKeys(keys, null, 'c'), ['c'])
+})
+
+test('clampPage: a page past the end falls back to the last page, never below 1', () => {
+  // A bookmark or reload of ?page=2 after the list shrank otherwise strands the owner on an empty table
+  // with the pager hidden (it renders only when total > page size).
+  assert.equal(clampPage(99, 1004, 100), 11)
+  assert.equal(clampPage(2, 40, 100), 1)
+  assert.equal(clampPage(3, 1004, 100), 3)
+  assert.equal(clampPage(2, 0, 100), 1)
+})
+
+test('bulkDraftable: only views that can hold unprocessed posts offer bulk Draft', () => {
+  // Screened bulk Draft drafts only posts with no verdict, so in Skipped or Drafted it would queue a job
+  // that does nothing under a toast saying it drafts N posts.
+  assert.equal(bulkDraftable('unprocessed'), true)
+  assert.equal(bulkDraftable('all'), true)
+  for (const s of ['skipped', 'drafted', 'dismissed', 'applied'] as const) assert.equal(bulkDraftable(s), false, s)
 })

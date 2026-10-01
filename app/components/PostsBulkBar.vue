@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Status } from '#shared/posts-view'
+import { bulkDraftable, type Status } from '#shared/posts-view'
 
 defineProps<{ count: number, status: Status, busy: boolean }>()
 const emit = defineEmits<{ draft: [], dismiss: [], restore: [], applied: [], unapplied: [], exclude: [], clear: [] }>()
@@ -31,11 +31,12 @@ const emit = defineEmits<{ draft: [], dismiss: [], restore: [], applied: [], una
     />
     <template v-else>
       <UButton
+        v-if="bulkDraftable(status)"
         label="Draft"
         icon="i-lucide-pen-line"
         size="xs"
         color="primary"
-        title="Screened like the batch run: posts that fail a hard rule are skipped with a reason"
+        title="Screened like the batch run: only unprocessed, unflagged hiring posts scoring 6+ with an address are drafted"
         :loading="busy"
         @click="emit('draft')"
       />

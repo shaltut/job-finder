@@ -327,3 +327,11 @@ test('the excludes endpoint takes a list and still queues exactly one reflag', (
   assert.match(src, /needles:/, 'a bulk Exclude posts several names in one request')
   assert.equal(src.split(`enqueue('reflag')`).length - 1, 1, 'one reflag per request, however many needles')
 })
+
+test('a bulk Exclude of a full page fits the endpoint cap', () => {
+  // The bulk dialog offers each selected row's company and recruiter: up to 2 x 100 rows. A lower cap
+  // rejected the whole request with a validation blob the toast could not explain.
+  const src = readFileSync('server/api/settings/excludes.post.ts', 'utf8')
+  const cap = Number(src.match(/needles: z\.array\(needle\)\.min\(1\)\.max\(([0-9]+)\)/)?.[1])
+  assert.ok(cap >= 200, `needles cap is ${cap}, a full page can need 200`)
+})

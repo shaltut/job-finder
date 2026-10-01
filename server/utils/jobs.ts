@@ -332,7 +332,7 @@ async function runDraftJob(
         `).all(args.n ?? 10)
 
     if (args.screened && args.keys && rows.length < args.keys.length) {
-      push(`${args.keys.length - rows.length} selected post(s) left out: already drafted, skipped, dismissed or applied`)
+      push(`${args.keys.length - rows.length} selected post(s) left out by the screen: already processed, flagged or excluded, below 6, not hiring, no address, dismissed or applied`)
     }
 
     if (!rows.length) {

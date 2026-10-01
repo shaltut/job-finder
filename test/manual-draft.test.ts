@@ -178,3 +178,16 @@ test('the Posts view keeps the Draft button on a skipped post', () => {
   assert.doesNotMatch(gate, /\|\|\s*r\.verdict\s*\|\|/, 'a bare `r.verdict` here hides the button on skipped posts too')
   assert.match(gate, /sentTo\(r\.stage\)/, 'sentTo() is only tested above; this pins that the button actually uses it')
 })
+
+test('bulk Draft is screened, the row button is hand-picked — both halves of the split', () => {
+  // Source-level, like the Gmail-gate test above: runDraftJob and the endpoint cannot be imported. The
+  // older pin is a prefix match and passes whatever follows `args.keys?.length`; these pin the whole line.
+  const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
+  assert.match(jobs, /const manual = !!args\.keys\?\.length && !args\.screened$/m,
+    'a keyed job is hand-picked unless it carries `screened`')
+  const endpoint = readFileSync('server/api/run/draft.post.ts', 'utf8')
+  assert.match(endpoint, /a\.keys \? \{ keys: a\.keys, screened: true \}/,
+    'a bulk selection ({ keys }) is always enqueued screened')
+  assert.match(endpoint, /a\.key \? \{ key: a\.key \}/,
+    'a single post ({ key }) is enqueued without `screened`, so it stays hand-picked')
+})
