@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { findFinishedMatch, stalePastes, type FinishedPasteJob } from '#shared/paste-poll'
-import { activeChips, apiQuery, DEFAULT_VIEW, nextSort, OPTIONS, parseView, viewQuery, type PostsView } from '#shared/posts-view'
+import { activeChips, apiQuery, DEFAULT_VIEW, nextSort, OPTIONS, parseView, rangeKeys, viewQuery, type PostsView } from '#shared/posts-view'
 import { sentTo, STAGE_LABEL } from '#shared/recruiter-stage'
 import type { TableColumn } from '@nuxt/ui'
 import type { JobState, PostRow } from '~/types'
@@ -41,10 +41,32 @@ async function draft(key: string) {
   }
 }
 
+/** Bulk Draft: screened, like the batch run — the drafter may skip, and the skip is recorded. */
+async function draftSelected(keys: string[]) {
+  if (!keys.length || busy.value) return
+  busy.value = true
+  try {
+    const r = await $fetch<{ queued: boolean, note?: string }>('/api/run/draft', { method: 'POST', body: { keys } })
+    rowSelection.value = {}
+    toast.add({
+      title: r.queued ? `Drafting ${keys.length} post${keys.length > 1 ? 's' : ''}` : 'Already queued',
+      description: r.queued ? 'Screened like the batch run: posts that fail a hard rule are skipped with a reason.' : r.note,
+      icon: 'i-lucide-pen-line'
+    })
+    keys.forEach(k => drafting.add(k))
+    draftTimer ??= setInterval(pollDraftLane, 3000)
+  } catch (e) {
+    toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
+  } finally {
+    busy.value = false
+  }
+}
+
 // Keys pressed here whose draft job has not finished. What the job leaves behind — a verdict, or the
 // stage the Gmail gate wrote into `contacts` — only reaches the row when the list is fetched again, so
 // refresh once a key is neither queued nor in the running job. A queued request carries `args.key`;
-// pump() moves it into `args.keys` when the job starts, so both are checked. A separate set from
+// pump() moves it into `args.keys` when the job starts, and a bulk Draft is queued with `args.keys`
+// from the start, so both are checked. A separate set from
 // `queued`, which any refresh clears (a filter change included) and would stop this poll early.
 const drafting = new Set<string>()
 let draftTimer: ReturnType<typeof setInterval> | null = null
@@ -52,7 +74,8 @@ let draftTimer: ReturnType<typeof setInterval> | null = null
 async function pollDraftLane() {
   const s = await $fetch<JobState>('/api/job')
   const running = (s.lanes.draft.current?.args.keys ?? []) as string[]
-  const done = [...drafting].filter(k => !running.includes(k) && !s.queue.some(q => q.args.key === k))
+  const done = [...drafting].filter(k => !running.includes(k)
+    && !s.queue.some(q => q.args.key === k || (q.args.keys as string[] | undefined)?.includes(k)))
   if (!done.length) return
   done.forEach(k => drafting.delete(k))
   if (!drafting.size && draftTimer) {
@@ -252,6 +275,7 @@ const { data: countryOptions } = await useFetch<{ name: string, count: number }[
 const expanded = ref<Record<string, boolean>>({})
 const rowSelection = ref<Record<string, boolean>>({})
 const anchorKey = ref<string | null>(null) // the last row clicked, for shift-click ranges
+let shiftHeld = false
 
 // Paged, because the server returns at most `limit` rows while reporting the full count: without this
 // the header read "834 posts" over the top 100 by score, and nothing said the rest existed.
@@ -365,6 +389,8 @@ async function setDismissed(keys: string[], dismissed: boolean, undoable = true)
 const excludeOpen = ref(false)
 const excludeNeedle = ref('')
 const excludeRow = ref<PostRow | null>(null)
+/** bulk mode: the selection's distinct companies and recruiters, each ticked; excludeRow is null then */
+const bulkNeedles = ref<{ value: string, on: boolean }[]>([])
 
 /**
  * What the owner might plausibly mean by "never again", read off the row itself.
@@ -383,20 +409,39 @@ const excludeSuggestions = computed(() => {
   return [...new Set(out.map(v => (v ?? '').trim()).filter(v => v.length >= 2))].slice(0, 6)
 })
 
+/** Bulk Exclude: every distinct company and recruiter name on the selection, each ticked. */
+function openBulkExclude() {
+  const rows = data.value.rows.filter(r => rowSelection.value[r.key])
+  const names = rows.flatMap(r => [r.company, r.author])
+    .map(v => (v ?? '').trim())
+    .filter(v => v.length >= 2 && v.toLowerCase() !== 'unknown')
+  bulkNeedles.value = [...new Set(names)].map(value => ({ value, on: true }))
+  excludeRow.value = null
+  excludeOpen.value = true
+}
+
+/** The dialog's confirm: one typed needle from a row, or the ticked names from a selection. */
+function confirmExclude() {
+  return addExclude(excludeRow.value
+    ? [excludeNeedle.value.trim()]
+    : bulkNeedles.value.filter(n => n.on).map(n => n.value))
+}
+
 function openExclude(r: PostRow) {
   excludeRow.value = r
   excludeNeedle.value = r.author ?? ''
   excludeOpen.value = true
 }
 
-/** Save one rule, then wait for the re-flag before refreshing — see useReflag for why. */
-async function addExclude() {
-  const needle = excludeNeedle.value.trim()
-  if (needle.length < 2 || busy.value) return
+/** Save the rules in one request, then wait for the re-flag before refreshing — see useReflag for why. */
+async function addExclude(needles: string[]) {
+  needles = needles.filter(n => n.length >= 2)
+  if (!needles.length || busy.value) return
+  const what = needles.length === 1 ? `"${needles[0]}"` : `${needles.length} names`
   busy.value = true
   excludeOpen.value = false
   try {
-    await $fetch('/api/settings/excludes', { method: 'POST', body: { needle } })
+    await $fetch('/api/settings/excludes', { method: 'POST', body: { needles } })
   } catch (e) {
     busy.value = false
     toast.add({ title: 'Not excluded', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
@@ -415,14 +460,14 @@ async function addExclude() {
     rowSelection.value = {}
     await Promise.all([refresh(), refreshNuxtData('stats')])
     toast.add({
-      title: `Excluding "${needle}"`,
+      title: `Excluding ${what}`,
       description: `${excluded} post${excluded === 1 ? '' : 's'} now excluded. Edit the list in Settings.`,
       icon: 'i-lucide-filter',
       color: 'success'
     })
   } catch {
     toast.add({
-      title: `Excluding "${needle}"`,
+      title: `Excluding ${what}`,
       description: 'Saved, but stored posts were not re-checked. Press Reflag in the Run view.',
       color: 'warning',
       duration: 8000
@@ -460,11 +505,20 @@ const columns: TableColumn<PostRow>[] = [
       'onUpdate:modelValue': (v: boolean | 'indeterminate') => table.toggleAllPageRowsSelected(!!v),
       'aria-label': 'Select all'
     }),
-    cell: ({ row }) => h(UCheckbox, {
-      'modelValue': row.getIsSelected(),
-      'onUpdate:modelValue': (v: boolean | 'indeterminate') => row.toggleSelected(!!v),
-      'aria-label': 'Select row'
-    })
+    // Shift-click selects from the last row clicked. The capture handler runs before the checkbox's
+    // update, so it records the modifier the update then reads.
+    cell: ({ row }) => h('div', { onClickCapture: (e: MouseEvent) => { shiftHeld = e.shiftKey } }, [
+      h(UCheckbox, {
+        'modelValue': row.getIsSelected(),
+        'onUpdate:modelValue': (v: boolean | 'indeterminate') => {
+          const span = shiftHeld ? rangeKeys(data.value.rows.map(r => r.key), anchorKey.value, row.id) : [row.id]
+          rowSelection.value = { ...rowSelection.value, ...Object.fromEntries(span.map(k => [k, !!v])) }
+          anchorKey.value = row.id
+          shiftHeld = false
+        },
+        'aria-label': 'Select row (shift-click for a range)'
+      })
+    ])
   },
   {
     accessorKey: 'score',
@@ -834,49 +888,19 @@ const columns: TableColumn<PostRow>[] = [
           @click="resetFilters"
         />
         <div class="ml-auto flex items-center gap-1.5">
-          <template v-if="selectedKeys.length">
-            <span class="text-sm text-muted">{{ selectedKeys.length }} selected</span>
-            <UButton
-              v-if="view.status === 'dismissed'"
-              label="Restore"
-              icon="i-lucide-undo-2"
-              size="xs"
-              color="neutral"
-              variant="outline"
-              :loading="busy"
-              @click="setDismissed(selectedKeys, false)"
-            />
-            <UButton
-              v-else-if="view.status === 'applied'"
-              label="Un-mark"
-              icon="i-lucide-undo-2"
-              size="xs"
-              color="neutral"
-              variant="outline"
-              :loading="busy"
-              @click="setApplied(selectedKeys, false)"
-            />
-            <UButton
-              v-else
-              label="Applied"
-              icon="i-lucide-check"
-              size="xs"
-              color="neutral"
-              variant="outline"
-              :loading="busy"
-              @click="setApplied(selectedKeys, true)"
-            />
-            <UButton
-              v-if="view.status !== 'dismissed' && view.status !== 'applied'"
-              label="Dismiss"
-              icon="i-lucide-x"
-              size="xs"
-              color="neutral"
-              variant="outline"
-              :loading="busy"
-              @click="setDismissed(selectedKeys, true)"
-            />
-          </template>
+          <PostsBulkBar
+            v-if="selectedKeys.length"
+            :count="selectedKeys.length"
+            :status="view.status"
+            :busy="busy"
+            @draft="draftSelected(selectedKeys)"
+            @dismiss="setDismissed(selectedKeys, true)"
+            @restore="setDismissed(selectedKeys, false)"
+            @applied="setApplied(selectedKeys, true)"
+            @unapplied="setApplied(selectedKeys, false)"
+            @exclude="openBulkExclude"
+            @clear="rowSelection = {}"
+          />
           <span class="text-sm text-muted">{{ rangeLabel }}</span>
         </div>
       </div>
@@ -991,27 +1015,48 @@ const columns: TableColumn<PostRow>[] = [
         description="Matched against the whole post — a domain, a company, or a person's name. Whole words only, so &quot;ai&quot; will not match &quot;email&quot;."
       >
         <template #body>
-          <UInput
-            v-model="excludeNeedle"
-            placeholder="e.g. example.com"
-            autofocus
-            class="w-full"
-            @keyup.enter="addExclude"
-          />
-          <div
-            v-if="excludeSuggestions.length"
-            class="mt-3 flex flex-wrap gap-1.5"
-          >
-            <UButton
-              v-for="sug in excludeSuggestions"
-              :key="sug"
-              :label="sug"
-              color="neutral"
-              variant="soft"
-              size="xs"
-              @click="excludeNeedle = sug"
+          <template v-if="excludeRow">
+            <UInput
+              v-model="excludeNeedle"
+              placeholder="e.g. example.com"
+              autofocus
+              class="w-full"
+              @keyup.enter="confirmExclude"
             />
-          </div>
+            <div
+              v-if="excludeSuggestions.length"
+              class="mt-3 flex flex-wrap gap-1.5"
+            >
+              <UButton
+                v-for="sug in excludeSuggestions"
+                :key="sug"
+                :label="sug"
+                color="neutral"
+                variant="soft"
+                size="xs"
+                @click="excludeNeedle = sug"
+              />
+            </div>
+          </template>
+          <template v-else>
+            <UCheckbox
+              v-for="n in bulkNeedles"
+              :key="n.value"
+              v-model="n.on"
+              :label="n.value"
+              class="py-0.5"
+            />
+            <p
+              v-if="!bulkNeedles.length"
+              class="text-sm text-muted"
+            >
+              The selected rows name no company or recruiter to exclude.
+            </p>
+            <p class="mt-3 text-xs text-muted">
+              Each name matches anywhere in a post's text, as a whole word — a company name also hides posts
+              that merely mention it.
+            </p>
+          </template>
           <p class="mt-3 text-xs text-muted">
             Excluded posts stay in the database and are hidden, not deleted. Remove the rule in Settings to
             bring them back.
@@ -1029,8 +1074,8 @@ const columns: TableColumn<PostRow>[] = [
               label="Exclude"
               color="primary"
               icon="i-lucide-ban"
-              :disabled="excludeNeedle.trim().length < 2 || busy"
-              @click="addExclude"
+              :disabled="busy || (excludeRow ? excludeNeedle.trim().length < 2 : !bulkNeedles.some(n => n.on))"
+              @click="confirmExclude"
             />
           </div>
         </template>
