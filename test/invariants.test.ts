@@ -320,3 +320,10 @@ test('a settings save that changes a flag input re-flags from the server, whiche
   assert.match(read('server/api/settings/excludes.post.ts'), /enqueue\('reflag'\)/)
   assert.match(read('server/utils/jobs.ts'), /kind === 'reflag' && queue\.some\(q => q\.kind === 'reflag'\)/, 'and a second request while one is queued is a no-op')
 })
+
+test('the excludes endpoint takes a list and still queues exactly one reflag', () => {
+  // Source-level: the handler is a Nitro event handler no test here can import.
+  const src = readFileSync('server/api/settings/excludes.post.ts', 'utf8')
+  assert.match(src, /needles:/, 'a bulk Exclude posts several names in one request')
+  assert.equal(src.split(`enqueue('reflag')`).length - 1, 1, 'one reflag per request, however many needles')
+})
