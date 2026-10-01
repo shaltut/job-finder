@@ -1,8 +1,9 @@
-import { and, desc, eq, isNotNull, isNull, like, or, sql } from 'drizzle-orm'
+import { and, eq, isNotNull, isNull, like, or, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { applications, contacts, posts } from '../db/schema'
 import { neverWrittenTo } from '../utils/contacts'
 import { db } from '../utils/db'
+import { orderSql, SORTS } from '../utils/posts-query'
 
 const query = z.object({
   q: z.string().trim().max(200).optional(),
@@ -24,6 +25,9 @@ const query = z.object({
   /** Within the last N days; 0 = any. `posted` drops posts with no posted_at (pasted, and the odd undated card). */
   posted: z.coerce.number().int().min(0).max(365).default(0),
   added: z.coerce.number().int().min(0).max(365).default(0),
+  // .catch, not .default: a junk value from a bookmarked URL falls back instead of answering 400
+  sort: z.enum(SORTS).catch('default'),
+  dir: z.enum(['asc', 'desc']).catch('desc'),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0)
 })
@@ -107,8 +111,8 @@ export default defineEventHandler(async (event) => {
     // count below needs no such join.
     .leftJoin(contacts, sql`${contacts.email} = json_extract(${posts.emails}, '$[0]')`)
     .where(where.length ? and(...where) : undefined)
-    // flagged posts sort last, then best score, then most recently posted — the original's ordering
-    .orderBy(sql`json_array_length(${posts.flags}) > 0`, desc(posts.score), desc(posts.postedAt))
+    // flagged last under every sort — see orderSql
+    .orderBy(sql.raw(orderSql(p.sort, p.dir)))
     .limit(p.limit)
     .offset(p.offset)
 
