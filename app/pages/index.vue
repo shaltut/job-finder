@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { findFinishedMatch, stalePastes, type FinishedPasteJob } from '#shared/paste-poll'
+import { activeChips, apiQuery, DEFAULT_VIEW, nextSort, OPTIONS, parseView, viewQuery, type PostsView } from '#shared/posts-view'
 import { sentTo, STAGE_LABEL } from '#shared/recruiter-stage'
 import type { TableColumn } from '@nuxt/ui'
 import type { JobState, PostRow } from '~/types'
@@ -14,6 +15,10 @@ const UButton = resolveComponent('UButton')
 const UCheckbox = resolveComponent('UCheckbox')
 const UDropdownMenu = resolveComponent('UDropdownMenu')
 const UIcon = resolveComponent('UIcon')
+const PostsHeaderCell = resolveComponent('PostsHeaderCell')
+const URadioGroup = resolveComponent('URadioGroup')
+const USelectMenu = resolveComponent('USelectMenu')
+const USwitch = resolveComponent('USwitch')
 
 const toast = useToast()
 const queued = ref<Set<string>>(new Set())
@@ -203,34 +208,59 @@ async function pollPasteLane() {
 
 onUnmounted(stopPastePolling)
 
-const q = ref('')
-const flags = ref<'all' | 'clean' | 'flagged'>('clean')
-const type = ref<'hiring' | 'all' | 'other'>('hiring')
-const scope = ref<'all' | 'in-scope' | 'remote'>('all')
-const status = ref<'all' | 'unprocessed' | 'drafted' | 'skipped' | 'dismissed' | 'applied'>('unprocessed')
-const channel = ref<'all' | 'email' | 'link' | 'phone'>('all')
-const minScore = ref(0)
-/** within the last N days; 0 = any */
-const posted = ref(0)
-const added = ref(0)
+// The whole view — filters, sort, page — lives in the URL (shared/posts-view.ts), so a refresh, the back
+// button or a bookmark lands on the same list. A bare `/` is the pre-grid default.
+const route = useRoute()
+const router = useRouter()
+const view = computed(() => parseView(route.query))
 
-// Seekers carry the `seeking-work` flag, so asking for non-hiring posts under the default 'Unflagged'
-// would return only the unflagged non-jobs and hide the very rows this filter exists to show.
-watch(type, (t) => {
-  if (t === 'other') flags.value = 'all'
+/** Every view change goes through here. Any change but the page itself returns to page 1. */
+function setView(patch: Partial<PostsView>) {
+  const next = { ...view.value, ...patch }
+  if (!('page' in patch)) next.page = 1
+  // Seekers carry the `seeking-work` flag, so asking for non-hiring posts under the default 'Unflagged'
+  // would return only the unflagged non-jobs and hide the very rows this filter exists to show.
+  if (patch.type === 'other') next.flags = 'all'
+  router.replace({ query: viewQuery(next) })
+}
+
+// The search box types fast; the URL and the fetch follow 300ms behind.
+const qInput = ref(view.value.q)
+let qTimer: ReturnType<typeof setTimeout> | undefined
+watch(qInput, (v) => {
+  clearTimeout(qTimer)
+  qTimer = setTimeout(() => setView({ q: v.trim() }), 300)
+})
+watch(() => view.value.q, (v) => {
+  if (v !== qInput.value.trim()) qInput.value = v
+})
+
+const chips = computed(() => activeChips(view.value))
+function clearChip(key: keyof PostsView) {
+  setView(key === 'country' ? { country: [], countryMode: 'exclude' } : { [key]: DEFAULT_VIEW[key] })
+}
+/** Reset clears the filters; the search text and the sort are not filters and stay. */
+function resetFilters() {
+  router.replace({ query: viewQuery({ ...DEFAULT_VIEW, q: view.value.q, sort: view.value.sort, dir: view.value.dir }) })
+}
+
+const { data: countryOptions } = await useFetch<{ name: string, count: number }[]>('/api/posts/countries', {
+  lazy: true,
+  default: () => []
 })
 
 const expanded = ref<Record<string, boolean>>({})
 const rowSelection = ref<Record<string, boolean>>({})
+const anchorKey = ref<string | null>(null) // the last row clicked, for shift-click ranges
 
 // Paged, because the server returns at most `limit` rows while reporting the full count: without this
 // the header read "834 posts" over the top 100 by score, and nothing said the rest existed.
 const PAGE_SIZE = 100
-const page = ref(1)
-const offset = computed(() => (page.value - 1) * PAGE_SIZE)
+const page = computed({ get: () => view.value.page, set: (p: number) => setView({ page: p }) })
+const offset = computed(() => (view.value.page - 1) * PAGE_SIZE)
 
 const { data, status: reqStatus, refresh } = await useFetch<{ rows: PostRow[], total: number }>('/api/posts', {
-  query: { q, flags, scope, status, channel, minScore, posted, added, type, limit: PAGE_SIZE, offset },
+  query: computed(() => apiQuery(view.value, PAGE_SIZE)),
   lazy: true,
   default: () => ({ rows: [], total: 0 })
 })
@@ -248,15 +278,18 @@ watch(data, () => {
 // watch below is the second line of defence.
 const selectedKeys = computed(() => data.value.rows.filter(r => rowSelection.value[r.key]).map(r => r.key))
 
-watch([q, flags, type, scope, status, channel, minScore, posted, added], () => {
+// Any view change — filter, sort or page — drops the selection: a bulk action must never point at
+// posts nobody can see.
+watch(() => route.fullPath, () => {
   rowSelection.value = {}
-  page.value = 1
+  anchorKey.value = null
 })
 
 // Dismissing or marking applied every row on the last page leaves it past the end: step back a page
 // rather than show an empty table under a count that says the posts exist.
 watch(() => data.value.total, (total) => {
-  page.value = Math.min(page.value, Math.max(1, Math.ceil(total / PAGE_SIZE)))
+  const last = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  if (page.value > last) page.value = last
 })
 
 const rangeLabel = computed(() => {
@@ -399,6 +432,26 @@ async function addExclude() {
   }
 }
 
+/** A header cell: the label, an optional sort, and an optional one-field radio filter behind its button. */
+function header(label: string, sortCol?: 'score' | 'title' | 'posted' | 'added', field?: keyof typeof OPTIONS) {
+  return () => h(PostsHeaderCell, {
+    label,
+    sortCol,
+    sort: view.value.sort,
+    dir: view.value.dir,
+    active: !!field && view.value[field] !== DEFAULT_VIEW[field],
+    onSort: () => sortCol && setView(nextSort(view.value, sortCol))
+  }, field
+    ? {
+        default: () => h(URadioGroup, {
+          'modelValue': view.value[field],
+          'items': OPTIONS[field],
+          'onUpdate:modelValue': (v: string | number) => setView({ [field]: v } as Partial<PostsView>)
+        })
+      }
+    : undefined)
+}
+
 const columns: TableColumn<PostRow>[] = [
   {
     id: 'select',
@@ -415,7 +468,7 @@ const columns: TableColumn<PostRow>[] = [
   },
   {
     accessorKey: 'score',
-    header: 'Score',
+    header: header('Score', 'score', 'minScore'),
     cell: ({ row }) => h(UBadge, {
       variant: 'subtle',
       color: scoreColor(row.original.score)
@@ -423,13 +476,13 @@ const columns: TableColumn<PostRow>[] = [
   },
   {
     accessorKey: 'title',
-    header: 'Role',
+    header: header('Role', 'title', 'type'),
     // line-clamp, not truncate, and a max width. `truncate` is nowrap, so a table cell grows to the
     // whole line: one 275-char "Multiple roles: ..." title widened this column until Contact..Status sat
     // under the sticky actions, and columns seemed to vanish on whichever page carried such a row.
     // Clamped text can wrap (whitespace-normal: UTable's td is nowrap), so the table can also shrink this
     // column to fit a laptop screen. The budget is tight: with Posted and Added as their own columns this
-    // floor (min-w-40) and Contact's max-w-44 together measured 1152px in 1152 at a 1440 viewport.
+    // floor (min-w-40) and Contact's max-w-40 together measured 1152px in 1152 at a 1440 viewport.
     cell: ({ row }) => h('div', { class: 'min-w-40 max-w-md whitespace-normal', title: row.original.title ?? undefined }, [
       h('p', { class: 'font-medium text-highlighted line-clamp-2' }, row.original.title || 'unknown'),
       h('p', { class: 'text-xs text-muted line-clamp-1' }, [
@@ -440,7 +493,7 @@ const columns: TableColumn<PostRow>[] = [
   },
   {
     accessorKey: 'emails',
-    header: 'Contact',
+    header: header('Contact', undefined, 'channel'),
     // The route the owner would actually use, best first. A post can carry all three, and `channels` is
     // the scraper's judgement of which are usable — so the marketing link stored beside an address never
     // shows up here, and a link that is shown is one the post invited an application through.
@@ -449,21 +502,21 @@ const columns: TableColumn<PostRow>[] = [
       const has = (c: 'email' | 'link' | 'phone') => r.channels.includes(c)
       // Capped and truncated: a long address used to push the row actions off a laptop screen, and the
       // full value is one row-expand away. The title attribute keeps it readable without that.
-      const cls = 'text-xs font-mono block max-w-44 truncate'
+      const cls = 'text-xs font-mono block max-w-40 truncate'
       if (has('email')) return h('span', { class: cls, title: r.emails[0] }, r.emails[0])
       if (has('link')) {
         return h('a', {
           'href': r.links[0],
           'target': '_blank',
           'rel': 'noopener noreferrer',
-          'class': 'text-xs text-primary hover:underline inline-flex items-center gap-1 max-w-44',
+          'class': 'text-xs text-primary hover:underline inline-flex items-center gap-1 max-w-40',
           'title': r.links[0],
           'aria-label': 'Open the application link',
           'onClick': (e: Event) => e.stopPropagation()
         }, [h(UIcon, { name: 'i-lucide-external-link', class: 'size-3 shrink-0' }), 'apply link'])
       }
       if (has('phone')) {
-        return h('span', { class: 'text-xs font-mono inline-flex items-center gap-1 max-w-44', title: r.phones[0] }, [
+        return h('span', { class: 'text-xs font-mono inline-flex items-center gap-1 max-w-40', title: r.phones[0] }, [
           h(UIcon, { name: 'i-lucide-phone', class: 'size-3 shrink-0 text-muted' }),
           r.phones[0]
         ])
@@ -473,7 +526,36 @@ const columns: TableColumn<PostRow>[] = [
   },
   {
     id: 'where',
-    header: 'Where',
+    // scope and country together: both answer "where is this job"
+    header: () => h(PostsHeaderCell, {
+      label: 'Where',
+      sort: view.value.sort,
+      dir: view.value.dir,
+      active: view.value.scope !== 'all' || view.value.country.length > 0
+    }, {
+      default: () => [
+        h(URadioGroup, {
+          'modelValue': view.value.scope,
+          'items': OPTIONS.scope,
+          'onUpdate:modelValue': (v: PostsView['scope']) => setView({ scope: v })
+        }),
+        h(USelectMenu, {
+          'modelValue': view.value.country,
+          'items': countryOptions.value.map(c => ({ label: `${c.name} (${c.count})`, value: c.name })),
+          'valueKey': 'value',
+          'multiple': true,
+          'placeholder': 'Country',
+          'class': 'w-56',
+          'onUpdate:modelValue': (v: string[]) => setView({ country: v })
+        }),
+        h(USwitch, {
+          'modelValue': view.value.countryMode === 'exclude',
+          'label': 'Exclude these countries',
+          'disabled': !view.value.country.length,
+          'onUpdate:modelValue': (v: boolean) => setView({ countryMode: v ? 'exclude' : 'include' })
+        })
+      ]
+    }),
     cell: ({ row }) => h('div', { class: 'flex gap-1' }, [
       row.original.remote && h(UBadge, { variant: 'soft', color: 'info', size: 'sm' }, () => 'remote'),
       row.original.inScope && h(UBadge, { variant: 'soft', color: 'success', size: 'sm' }, () => 'in scope')
@@ -481,7 +563,7 @@ const columns: TableColumn<PostRow>[] = [
   },
   {
     accessorKey: 'flags',
-    header: 'Flags',
+    header: header('Flags', undefined, 'flags'),
     cell: ({ row }) => {
       const badges = [
         // why a row is excluded: the model's call first, then the regex pre-screen's
@@ -501,7 +583,7 @@ const columns: TableColumn<PostRow>[] = [
     // posted_at is derived from LinkedIn's relative age ('2d', '3w') at scrape time, so it is only as
     // precise as that string — the tooltip shows what LinkedIn said. Pasted posts have none.
     id: 'posted',
-    header: 'Posted',
+    header: header('Posted', 'posted', 'posted'),
     cell: ({ row }) => h('span', {
       class: 'text-xs text-muted whitespace-nowrap',
       title: row.original.postedAge ? `LinkedIn said "${row.original.postedAge}" when scraped` : undefined
@@ -509,7 +591,7 @@ const columns: TableColumn<PostRow>[] = [
   },
   {
     id: 'added',
-    header: 'Added',
+    header: header('Added', 'added', 'added'),
     cell: ({ row }) => h('span', {
       class: 'text-xs text-muted whitespace-nowrap',
       title: row.original.scrapedAt ? new Date(row.original.scrapedAt).toLocaleString() : undefined
@@ -517,7 +599,7 @@ const columns: TableColumn<PostRow>[] = [
   },
   {
     accessorKey: 'verdict',
-    header: 'Status',
+    header: header('Status', undefined, 'status'),
     // the owner's own triage outranks the drafter's verdict: a drafted post can be dismissed too.
     // The recruiter's stage outranks the verdict in turn — `drafted` is only where a post starts, and
     // a post whose recruiter was written to about another role has no verdict at all. The verdict's
@@ -720,97 +802,42 @@ const columns: TableColumn<PostRow>[] = [
         class="flex flex-wrap items-center gap-1.5"
       >
         <UInput
-          v-model="q"
+          v-model="qInput"
           class="max-w-sm"
           icon="i-lucide-search"
           placeholder="Search role, company, author, text..."
         />
-        <USelect
-          v-model="status"
-          :items="[
-            { label: 'Unprocessed', value: 'unprocessed' },
-            { label: 'All active', value: 'all' },
-            { label: 'Drafted', value: 'drafted' },
-            { label: 'Skipped', value: 'skipped' },
-            { label: 'Applied by hand', value: 'applied' },
-            { label: 'Dismissed', value: 'dismissed' }
-          ]"
-          class="min-w-36"
-        />
-        <USelect
-          v-model="type"
-          :items="[
-            { label: 'Hiring only', value: 'hiring' },
-            { label: 'Any post type', value: 'all' },
-            { label: 'Not hiring', value: 'other' }
-          ]"
-          class="min-w-36"
-        />
-        <USelect
-          v-model="flags"
-          :items="[
-            { label: 'Unflagged', value: 'clean' },
-            { label: 'Any flags', value: 'all' },
-            { label: 'Flagged only', value: 'flagged' },
-            { label: 'Excluded', value: 'excluded' }
-          ]"
-          class="min-w-36"
-        />
-        <USelect
-          v-model="scope"
-          :items="[
-            { label: 'Anywhere', value: 'all' },
-            { label: 'In scope', value: 'in-scope' },
-            { label: 'Remote', value: 'remote' }
-          ]"
-          class="min-w-32"
-        />
-        <USelect
-          v-model="channel"
-          :items="[
-            { label: 'Any contact', value: 'all' },
-            { label: 'By email', value: 'email' },
-            { label: 'By link', value: 'link' },
-            { label: 'By phone', value: 'phone' }
-          ]"
-          class="min-w-32"
-        />
-        <USelect
-          v-model="minScore"
-          :items="[
-            { label: 'Any score', value: 0 },
-            { label: '6+', value: 6 },
-            { label: '8+', value: 8 }
-          ]"
-          class="min-w-32"
-        />
-        <USelect
-          v-model="posted"
-          :items="[
-            { label: 'Posted any time', value: 0 },
-            { label: 'Posted 24h', value: 1 },
-            { label: 'Posted 3 days', value: 3 },
-            { label: 'Posted this week', value: 7 },
-            { label: 'Posted this month', value: 30 }
-          ]"
-          class="min-w-40"
-        />
-        <USelect
-          v-model="added"
-          :items="[
-            { label: 'Added any time', value: 0 },
-            { label: 'Added 24h', value: 1 },
-            { label: 'Added 3 days', value: 3 },
-            { label: 'Added this week', value: 7 },
-            { label: 'Added this month', value: 30 }
-          ]"
-          class="min-w-40"
+        <UBadge
+          v-for="c in chips"
+          :key="c.key"
+          color="neutral"
+          variant="soft"
+          class="gap-1"
+        >
+          {{ c.label }}
+          <UButton
+            icon="i-lucide-x"
+            size="xs"
+            color="neutral"
+            variant="link"
+            class="p-0"
+            :aria-label="`Clear ${c.label}`"
+            @click="clearChip(c.key)"
+          />
+        </UBadge>
+        <UButton
+          v-if="chips.length"
+          label="Reset"
+          size="xs"
+          color="neutral"
+          variant="ghost"
+          @click="resetFilters"
         />
         <div class="ml-auto flex items-center gap-1.5">
           <template v-if="selectedKeys.length">
             <span class="text-sm text-muted">{{ selectedKeys.length }} selected</span>
             <UButton
-              v-if="status === 'dismissed'"
+              v-if="view.status === 'dismissed'"
               label="Restore"
               icon="i-lucide-undo-2"
               size="xs"
@@ -820,7 +847,7 @@ const columns: TableColumn<PostRow>[] = [
               @click="setDismissed(selectedKeys, false)"
             />
             <UButton
-              v-else-if="status === 'applied'"
+              v-else-if="view.status === 'applied'"
               label="Un-mark"
               icon="i-lucide-undo-2"
               size="xs"
@@ -840,7 +867,7 @@ const columns: TableColumn<PostRow>[] = [
               @click="setApplied(selectedKeys, true)"
             />
             <UButton
-              v-if="status !== 'dismissed' && status !== 'applied'"
+              v-if="view.status !== 'dismissed' && view.status !== 'applied'"
               label="Dismiss"
               icon="i-lucide-x"
               size="xs"
@@ -857,6 +884,7 @@ const columns: TableColumn<PostRow>[] = [
       <UTable
         v-model:expanded="expanded"
         v-model:row-selection="rowSelection"
+        sticky="header"
         :data="data.rows"
         :columns="columns"
         :get-row-id="(row: PostRow) => row.key"
