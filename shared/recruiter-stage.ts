@@ -5,11 +5,11 @@
 export type Stage = 'drafted' | 'contacted' | 'followed_up' | 'replied' | 'final'
 
 export const STAGE_LABEL: Record<Stage, string> = {
-  drafted: 'draft pending',
-  contacted: 'contacted',
-  followed_up: 'followed up',
-  replied: 'replied',
-  final: 'final'
+  drafted: 'Draft pending',
+  contacted: 'Contacted',
+  followed_up: 'Followed up',
+  replied: 'Replied',
+  final: 'Final'
 }
 
 /**

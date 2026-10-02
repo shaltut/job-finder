@@ -504,6 +504,9 @@ function header(label: string, sortCol?: 'score' | 'title' | 'posted' | 'added',
     : undefined)
 }
 
+/** What the Status badge reads — the codes are API values, not words for the owner. */
+const STATUS_LABEL = { unprocessed: 'Unprocessed', drafted: 'Drafted', skipped: 'Skipped', applied: 'Applied', dismissed: 'Dismissed' }
+
 const columns: TableColumn<PostRow>[] = [
   {
     id: 'select',
@@ -669,9 +672,9 @@ const columns: TableColumn<PostRow>[] = [
     cell: ({ row }) => {
       const r = row.original
       return r.dismissedAt
-        ? h(UBadge, { variant: 'subtle', color: 'neutral' }, () => 'dismissed')
+        ? h(UBadge, { variant: 'subtle', color: 'neutral' }, () => STATUS_LABEL.dismissed)
         : r.appliedAt
-          ? h(UBadge, { variant: 'subtle', color: 'success' }, () => 'applied')
+          ? h(UBadge, { variant: 'subtle', color: 'success' }, () => STATUS_LABEL.applied)
           : r.stage
             ? h(UBadge, {
                 variant: 'subtle',
@@ -682,8 +685,8 @@ const columns: TableColumn<PostRow>[] = [
               ? h(UBadge, {
                   variant: 'subtle',
                   color: r.verdict === 'drafted' ? 'primary' : 'neutral'
-                }, () => r.verdict)
-              : h('span', { class: 'text-xs text-muted' }, 'unprocessed')
+                }, () => STATUS_LABEL[r.verdict!])
+              : h('span', { class: 'text-xs text-muted' }, STATUS_LABEL.unprocessed)
     }
   },
   {
