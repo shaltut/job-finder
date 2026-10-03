@@ -531,6 +531,98 @@ const columns: TableColumn<PostRow>[] = [
     ])
   },
   {
+    id: 'actions',
+    // Next to the checkbox, beside what the owner is reading. At the right edge the eye had to travel the
+    // whole row from the title to Draft and back, and it was easy to press the button of the row above or
+    // below. The left edge also never scrolls off-screen, which is what the old right-edge pinning was
+    // for — and that pinning floated over Status at laptop widths.
+    cell: ({ row }) => {
+      const r = row.original
+      return h('div', { class: 'flex items-center gap-1' }, [
+        r.dismissedAt
+          ? h(UButton, {
+              label: 'Restore',
+              icon: 'i-lucide-undo-2',
+              size: 'xs',
+              color: 'neutral',
+              variant: 'outline',
+              disabled: busy.value,
+              onClick: () => setDismissed([r.key], false)
+            })
+          : null,
+        // no second email to a recruiter already handled, nothing to draft without an address, and
+        // nothing to draft for a role the owner has already applied to themselves.
+        // `verdict === 'drafted'`, not `verdict`: a *skipped* post must keep its button. A skip is
+        // the model's opinion, and pressing Draft again is how the owner overrules it — the recovery
+        // path this file has always been documented as providing and never did, because 'skipped' is
+        // as truthy as 'drafted'. The post is out of the batch queue for good by then, so hiding the
+        // button was the whole of what buried it.
+        // sentTo(): Gmail already holds mail for this recruiter, so the gate could only refuse.
+        r.dismissedAt || r.appliedAt || r.verdict === 'drafted' || sentTo(r.stage) || !r.emails.length
+          ? null
+          : h(UButton, {
+              label: 'Draft',
+              icon: 'i-lucide-pen-line',
+              size: 'xs',
+              color: 'neutral',
+              variant: 'outline',
+              disabled: queued.value.has(r.key),
+              // why the model passed on it, so the owner can judge before overruling
+              title: r.verdict === 'skipped' && r.verdictReason
+                ? `Skipped: ${r.verdictReason}\n\nDraft anyway — you chose it, so the fit screen is relaxed.`
+                : undefined,
+              onClick: () => draft(r.key)
+            }),
+        // Every per-row verdict lives behind one trigger, leaving Draft as the only button. Keeping
+        // them as separate buttons squeezed the Status column until 'unprocessed' truncated to
+        // 'unproce', and this column is already the first thing to go off-screen on a laptop.
+        // Ordered by how far each one reaches: this post, this post for good, this source forever.
+        h(UDropdownMenu, {
+          items: [
+            r.dismissedAt
+              ? null
+              // The way a link-only or phone-only post leaves the queue: nothing here can draft it,
+              // so the owner applies through the post itself and records that they did.
+              : {
+                  label: r.appliedAt ? 'Un-mark applied' : 'Mark applied',
+                  icon: r.appliedAt ? 'i-lucide-undo-2' : 'i-lucide-check',
+                  disabled: busy.value,
+                  onSelect: () => setApplied([r.key], !r.appliedAt)
+                },
+            r.dismissedAt
+              ? null
+              : {
+                  label: 'Dismiss',
+                  icon: 'i-lucide-x',
+                  disabled: busy.value,
+                  onSelect: () => setDismissed([r.key], true)
+                },
+            {
+              label: 'Exclude…',
+              icon: 'i-lucide-ban',
+              disabled: busy.value,
+              onSelect: () => openExclude(r)
+            }
+          ].filter(Boolean)
+        }, () => h(UButton, {
+          'icon': 'i-lucide-ellipsis',
+          'color': 'neutral',
+          'variant': 'ghost',
+          'size': 'sm',
+          'title': 'More actions',
+          'aria-label': 'More actions'
+        })),
+        h(UButton, {
+          icon: row.getIsExpanded() ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down',
+          color: 'neutral',
+          variant: 'ghost',
+          size: 'sm',
+          onClick: () => row.toggleExpanded()
+        })
+      ].filter(Boolean))
+    }
+  },
+  {
     accessorKey: 'score',
     header: header('Score', 'score', 'minScore'),
     cell: ({ row }) => h(UBadge, {
@@ -687,100 +779,6 @@ const columns: TableColumn<PostRow>[] = [
                   color: r.verdict === 'drafted' ? 'primary' : 'neutral'
                 }, () => STATUS_LABEL[r.verdict!])
               : h('span', { class: 'text-xs text-muted' }, STATUS_LABEL.unprocessed)
-    }
-  },
-  {
-    id: 'actions',
-    // Pinned to the right edge. The table scrolls horizontally below about 1500px and these buttons were
-    // the first thing to go off-screen — Dismiss on a laptop was unreachable without scrolling sideways
-    // through a table whose scrollbar is at the bottom of a long page.
-    // bg-elevated on the header rather than bg-default: the header row is tinted and semi-transparent,
-    // so an opaque white cell reads as a hole punched in it.
-    meta: { class: { th: 'sticky right-0 bg-elevated', td: 'sticky right-0 bg-default' } },
-    cell: ({ row }) => {
-      const r = row.original
-      return h('div', { class: 'flex items-center justify-end gap-1' }, [
-        r.dismissedAt
-          ? h(UButton, {
-              label: 'Restore',
-              icon: 'i-lucide-undo-2',
-              size: 'xs',
-              color: 'neutral',
-              variant: 'outline',
-              disabled: busy.value,
-              onClick: () => setDismissed([r.key], false)
-            })
-          : null,
-        // no second email to a recruiter already handled, nothing to draft without an address, and
-        // nothing to draft for a role the owner has already applied to themselves.
-        // `verdict === 'drafted'`, not `verdict`: a *skipped* post must keep its button. A skip is
-        // the model's opinion, and pressing Draft again is how the owner overrules it — the recovery
-        // path this file has always been documented as providing and never did, because 'skipped' is
-        // as truthy as 'drafted'. The post is out of the batch queue for good by then, so hiding the
-        // button was the whole of what buried it.
-        // sentTo(): Gmail already holds mail for this recruiter, so the gate could only refuse.
-        r.dismissedAt || r.appliedAt || r.verdict === 'drafted' || sentTo(r.stage) || !r.emails.length
-          ? null
-          : h(UButton, {
-              label: 'Draft',
-              icon: 'i-lucide-pen-line',
-              size: 'xs',
-              color: 'neutral',
-              variant: 'outline',
-              disabled: queued.value.has(r.key),
-              // why the model passed on it, so the owner can judge before overruling
-              title: r.verdict === 'skipped' && r.verdictReason
-                ? `Skipped: ${r.verdictReason}\n\nDraft anyway — you chose it, so the fit screen is relaxed.`
-                : undefined,
-              onClick: () => draft(r.key)
-            }),
-        // Every per-row verdict lives behind one trigger, leaving Draft as the only button. Keeping
-        // them as separate buttons squeezed the Status column until 'unprocessed' truncated to
-        // 'unproce', and this column is already the first thing to go off-screen on a laptop.
-        // Ordered by how far each one reaches: this post, this post for good, this source forever.
-        h(UDropdownMenu, {
-          items: [
-            r.dismissedAt
-              ? null
-              // The way a link-only or phone-only post leaves the queue: nothing here can draft it,
-              // so the owner applies through the post itself and records that they did.
-              : {
-                  label: r.appliedAt ? 'Un-mark applied' : 'Mark applied',
-                  icon: r.appliedAt ? 'i-lucide-undo-2' : 'i-lucide-check',
-                  disabled: busy.value,
-                  onSelect: () => setApplied([r.key], !r.appliedAt)
-                },
-            r.dismissedAt
-              ? null
-              : {
-                  label: 'Dismiss',
-                  icon: 'i-lucide-x',
-                  disabled: busy.value,
-                  onSelect: () => setDismissed([r.key], true)
-                },
-            {
-              label: 'Exclude…',
-              icon: 'i-lucide-ban',
-              disabled: busy.value,
-              onSelect: () => openExclude(r)
-            }
-          ].filter(Boolean)
-        }, () => h(UButton, {
-          'icon': 'i-lucide-ellipsis',
-          'color': 'neutral',
-          'variant': 'ghost',
-          'size': 'sm',
-          'title': 'More actions',
-          'aria-label': 'More actions'
-        })),
-        h(UButton, {
-          icon: row.getIsExpanded() ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down',
-          color: 'neutral',
-          variant: 'ghost',
-          size: 'sm',
-          onClick: () => row.toggleExpanded()
-        })
-      ].filter(Boolean))
     }
   }
 ]
