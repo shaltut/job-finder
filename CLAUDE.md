@@ -638,8 +638,13 @@ drafts keep arguing from a stale CV.
   `createDraft`, where a retry could leave two Gmail drafts. **The queue is mirrored into `job_queue`**
   (`saved.add/start/drop`) and `restoreQueue()`, called from `server/plugins/migrate.ts`, puts it back
   in a fresh worker: interrupted non-scrape jobs at the front, interrupted scrape-lane jobs dropped (a
-  re-run scrape on every edit would spend the LinkedIn rate limit). The table rides in the cross-machine
-  snapshot, so queued work moves to the other machine. `queue-core.ts` holds every queue decision as a
+  re-run scrape on every edit would spend the LinkedIn rate limit). **A resumed draft writes no skip rows**
+  (`resumedArgs`): if the dead run got as far as `createDraft`, the gate now sees that pending draft and
+  would write `skipped` over posts it names, losing the `named in` prefix. **The `close` hook stops every
+  running job** (`stopForShutdown`) so no `claude`/Chrome child is orphaned, keeping its row for the
+  resume. **The queue is never resumed after a hand-off pull or while the other machine looks active**
+  (`shouldRestore`): those rows are the other machine's, possibly already done — resuming them drafted the
+  same recruiters twice in review. They are cleared and logged instead. `queue-core.ts` holds every queue decision as a
   pure function, because no test can import `jobs.ts`. Stop sends SIGTERM; Playwright's own handler only
   closes Chrome, so the scraper keeps a `stopping` flag and throws at the next loop check (exit 1).
   `pump()` iterates `Object.keys(lanes)`, but the `Lane` union (now in `queue-core.ts`), the `Kind`

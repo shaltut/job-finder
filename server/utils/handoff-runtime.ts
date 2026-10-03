@@ -9,6 +9,8 @@ export interface HandoffState {
   enabled: boolean
   host: string
   gen: number
+  /** this boot replaced the database with the other machine's — its queued jobs are not resumed here */
+  pulled: boolean
   /** null while the folder holds no sync.json — then only an explicit init seeds it */
   remoteGen: number | null
   pushDisabled: string | null
@@ -37,7 +39,7 @@ export function handoffPaths(): HandoffPaths | null {
 
 export function handoffState(): HandoffState {
   g.__jobfinderHandoff ??= {
-    enabled: !!handoffPaths(), host: hostname(), gen: 0, remoteGen: null, pushDisabled: null, conflict: null,
+    enabled: !!handoffPaths(), host: hostname(), gen: 0, pulled: false, remoteGen: null, pushDisabled: null, conflict: null,
     otherActive: false, lastPushAt: null, lastError: null, lastSig: ''
   }
   const s = g.__jobfinderHandoff
@@ -60,6 +62,7 @@ export function bootPull() {
     s.pushDisabled = `boot pull failed: ${r.error} — restart once OneDrive has finished syncing`
     console.error(`[sync] ${s.pushDisabled}`)
   } else if (r.pulled) {
+    s.pulled = true
     console.log(`[sync] pulled gen ${r.gen} from ${p.syncDir}`)
   }
   if (r.warning) {

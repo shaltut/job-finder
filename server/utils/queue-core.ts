@@ -66,10 +66,34 @@ export async function withRetry<T>(fn: () => Promise<T>, o: { signal?: AbortSign
   } catch (e) {
     if (o.signal?.aborted) throw e
     o.onRetry?.(e as Error)
-    await new Promise(r => setTimeout(r, o.waitMs ?? 10_000))
+    // the back-off ends early on Stop, so Stop never waits out the 10s
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, o.waitMs ?? 10_000)
+      o.signal?.addEventListener('abort', () => {
+        clearTimeout(t)
+        resolve()
+      }, { once: true })
+    })
     if (o.signal?.aborted) throw e
     return await fn()
   }
+}
+
+/**
+ * Whether a fresh worker resumes the persisted queue. Not after a hand-off pull: those rows are the other
+ * machine's, and it may have finished them after its last push (or still be running them) — resuming would
+ * draft the same recruiters twice. Not while the other machine looks active, for the same reason.
+ */
+export const shouldRestore = (o: { pulled: boolean, otherActive: boolean }) => !o.pulled && !o.otherActive
+
+/**
+ * A draft that was running when its worker died is marked `resumed`: it may have been cut down inside
+ * createDraft, so the Gmail gate would now see its own pending draft and write `skipped` over posts that
+ * draft names — losing the `named in application` prefix the follow-up depends on. A resumed run writes
+ * no skip rows, exactly like a hand-picked one.
+ */
+export function resumedArgs<A extends QArgs>(kind: string, args: A, started: boolean): A & { resumed?: true } {
+  return kind === 'draft' && started ? { ...args, resumed: true } : args
 }
 
 /** JOBFINDER_DRAFT_CONCURRENCY: default 2 — a higher value can meet the Claude plan's rate limit. */

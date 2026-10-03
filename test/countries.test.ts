@@ -63,3 +63,12 @@ test('the display-only tables never reach a prompt', async () => {
   assert.equal(withAliases(['Saudi Arabia']), 'Saudi Arabia (KSA, Kingdom of Saudi Arabia)')
   assert.equal(nameFormsFor(['India']).some(f => /jaipur|bengaluru/i.test(f)), false)
 })
+
+test('Georgia the state, however the location is decorated (review 2026-10-03, two stored rows)', () => {
+  assert.deepEqual(countriesIn('Alpharetta, Georgia (United States)'), ['USA'])
+  assert.deepEqual(countriesIn('Georgia, USA'), ['USA'])
+  assert.deepEqual(countriesIn('Atlanta, Georgia (Hybrid)'), ['USA'])
+  assert.deepEqual(countriesIn('Atlanta, Georgia - Remote'), ['USA'])
+  assert.deepEqual(countriesIn('Tbilisi, Georgia (Hybrid)'), ['Georgia'])
+  assert.deepEqual(countriesIn('Amsterdam, NL'), [], 'NL is the Netherlands code, not a Canadian province here')
+})

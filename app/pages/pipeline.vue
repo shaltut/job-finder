@@ -26,13 +26,8 @@ const { data: job, refresh: refreshJob } = await useFetch<JobState>('/api/job', 
   })
 })
 
-// A gaps job runs on this same lane (jobs.ts queues it from runDraftJob's finally), and it is not
-// drafting: it emails nobody, and treating it as "drafting" would hide Draft top 10 / Sync with Gmail and
-// stall the drafts/contacts refresh below for as long as the gaps job runs (up to hours on a new CV).
-const drafting = computed(() => {
-  const cur = job.value.lanes.draft.current
-  return !!cur && cur.kind !== 'gaps'
-})
+// gaps has its own lane since 2026-10-03, so anything on the draft lane is drafting or syncing
+const drafting = computed(() => !!job.value.lanes.draft.current)
 
 let timer: ReturnType<typeof setInterval> | undefined
 onMounted(() => {

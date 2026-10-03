@@ -2,7 +2,7 @@
 // the drafter, Gmail, sync and the CV modules). See docs/superpowers/specs/2026-10-03-job-queue-design.md.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { concurrency, draftPriority, pickNext, pool, restorePlan, withRetry, type QItem } from '../server/utils/queue-core.ts'
+import { concurrency, draftPriority, pickNext, pool, restorePlan, resumedArgs, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
 
 const item = (id: number, kind: string, args: QItem['args'] = {}, lane: QItem['lane'] = 'draft'): QItem =>
   ({ id, lane, kind, args, queuedAt: '' })
@@ -95,4 +95,27 @@ test('concurrency: default 2, clamped 1-4', () => {
   assert.equal(concurrency('0'), 1)
   assert.equal(concurrency('9'), 4)
   assert.equal(concurrency('abc'), 2)
+})
+
+test('withRetry: Stop during the back-off ends it at once', async () => {
+  const ac = new AbortController()
+  const t0 = Date.now()
+  const p = withRetry(async () => {
+    throw new Error('timeout')
+  }, { waitMs: 5_000, signal: ac.signal })
+  setTimeout(() => ac.abort(), 20)
+  await assert.rejects(p)
+  assert.ok(Date.now() - t0 < 1_000, `took ${Date.now() - t0}ms`)
+})
+
+test('restore: never after a hand-off pull or while the other machine is active', () => {
+  assert.equal(shouldRestore({ pulled: false, otherActive: false }), true)
+  assert.equal(shouldRestore({ pulled: true, otherActive: false }), false, 'the rows are the other machine\'s')
+  assert.equal(shouldRestore({ pulled: false, otherActive: true }), false)
+})
+
+test('a resumed draft is marked so it writes no skip rows', () => {
+  assert.deepEqual(resumedArgs('draft', { n: 10 } as QItem['args'], true), { n: 10, resumed: true })
+  assert.deepEqual(resumedArgs('draft', { key: 'a' }, false), { key: 'a' }, 'never started: an ordinary run')
+  assert.deepEqual(resumedArgs('gaps', {}, true), {}, 'only drafts write skips')
 })

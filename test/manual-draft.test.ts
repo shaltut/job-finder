@@ -146,9 +146,10 @@ test('the Gmail gate writes no row for a chosen post either', () => {
   // not a fit judgement — but it must not bury the post, since the follow-up carries the role instead.
   const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
   const gate = jobs.slice(jobs.indexOf('if (closed) {'), jobs.indexOf('const cc = ccFrom'))
-  assert.match(gate, /if \(!manual\) \{/, 'the closed-recruiter skip insert must be guarded by !manual')
+  // !manual, and since 2026-10-03 also !args.resumed (a draft resumed after a restart — queue-core resumedArgs)
+  assert.match(gate, /const writeSkips = !manual && !args\.resumed/, 'the closed-recruiter skip insert must be guarded by !manual')
   assert.ok(
-    gate.indexOf('if (!manual) {') < gate.indexOf('INSERT INTO applications'),
+    gate.indexOf('if (writeSkips) {') >= 0 && gate.indexOf('if (writeSkips) {') < gate.indexOf('INSERT INTO applications'),
     'the guard must come before the insert, not after it'
   )
   assert.match(

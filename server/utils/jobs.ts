@@ -1,11 +1,12 @@
-// Job runner: three lanes, each sequential, fed by one queue.
+// Job runner: four lanes, each sequential, fed by one durable queue (job_queue; decisions in queue-core.ts).
 //
 //   scrape lane — Chrome holds a lock on ./profile, so one scrape at a time.
-//   draft  lane — `claude -p` sessions (drafts, syncs) and the gaps extraction job, one at a time.
-//   paste  lane — one OpenAI score call at a time; separate from the other two so a pasted post never
+//   draft  lane — `claude -p` sessions (drafts, syncs), hand-picked drafts first.
+//   paste  lane — one OpenAI score call at a time; separate so a pasted post never
 //                 waits behind a scrape or a draft, and never makes one wait behind it.
+//   gaps   lane — the OpenAI gap extraction, so an hours-long backfill never blocks drafting.
 //
-// The three lanes run concurrently; everything else queues, so POST /api/run/* returns 202 and never 409.
+// The lanes run concurrently; everything else queues, so POST /api/run/* returns 202 and never 409.
 // Single-post draft requests waiting in the queue are batched into one claude session, because every
 // session pays 3-5 minutes of setup regardless of how many posts it handles.
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -22,7 +23,8 @@ import { closedInGmail, sweep } from './sync'
 import { runPasteJob } from './paste-job'
 import { runGapsJob } from './gaps-job'
 import { sqlite } from './db'
-import { concurrency, pickNext, pool, restorePlan, withRetry, type Lane } from './queue-core'
+import { concurrency, pickNext, pool, restorePlan, resumedArgs, shouldRestore, withRetry, type Lane } from './queue-core'
+import { handoffState } from './handoff-runtime'
 
 export type { Lane }
 export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps'
@@ -39,6 +41,8 @@ export interface JobArgs {
   screened?: boolean
   /** set on jobs started by the daily tick, so they notify when they finish */
   auto?: boolean
+  /** draft lane: this run was cut off by a restart and resumed — it writes no skip rows (queue-core resumedArgs) */
+  resumed?: boolean
   /** paste lane: the pasted post's text */
   text?: string
 }
@@ -64,6 +68,8 @@ interface RunnerState {
   lanes: Record<Lane, { current: Job | null, last: Job | null }>
   queue: QueueItem[]
   seq: number
+  /** set by stopForShutdown(): a job that ends now keeps its job_queue row, so the next worker resumes it */
+  shuttingDown?: boolean
 }
 
 // Held on globalThis, not in module scope. Nitro's dev server hot-reloads this module whenever any
@@ -109,17 +115,25 @@ const saved = {
 }
 
 /**
- * At boot (server/plugins/queue.ts): put back what the previous worker left. Jobs it was running go to the
- * front of their lane — a re-run draft is safe, drafted posts are out of its query and the Gmail gate
- * refuses a recruiter with a pending draft — except scrape-lane jobs, which are dropped: re-running a
- * scrape on every server edit would spend the LinkedIn rate limit. Only into an empty runner, so a
- * module reload inside a live worker cannot double the queue.
+ * At boot (server/plugins/migrate.ts): put back what the previous worker left. Jobs it was running go to
+ * the front of their lane — except scrape-lane jobs, which are dropped: re-running a scrape on every server
+ * edit would spend the LinkedIn rate limit. A resumed draft is marked so it writes no skip rows: the Gmail
+ * gate refuses a recruiter whose draft the dead run already created, and that refusal would otherwise be
+ * written as `skipped` over posts the draft names. Only into an empty runner, so a module reload inside a
+ * live worker cannot double the queue — and never after a hand-off pull, whose rows are the other
+ * machine's (queue-core shouldRestore).
  */
 export function restoreQueue(log: (line: string) => void = console.log) {
   if (queue.length || busy()) return
   const rows = sqlite.prepare('SELECT id, lane, kind, args, queued_at, started_at FROM job_queue').all() as
     { id: number, lane: Lane, kind: Kind, args: string, queued_at: string, started_at: string | null }[]
   if (!rows.length) return
+  const h = handoffState()
+  if (!shouldRestore({ pulled: h.pulled, otherActive: h.otherActive })) {
+    sqlite.prepare('DELETE FROM job_queue').run()
+    log(`[queue] ${rows.length} job(s) came with the other machine's data (${rows.map(r => r.kind).join(', ')}) — not resumed here; queue them again if still wanted`)
+    return
+  }
   const plan = restorePlan(rows.map(r => ({ id: r.id, lane: r.lane, kind: r.kind, started: !!r.started_at })))
   for (const id of plan.drop) {
     const r = rows.find(x => x.id === id)!
@@ -128,7 +142,7 @@ export function restoreQueue(log: (line: string) => void = console.log) {
   }
   for (const id of plan.order) {
     const r = rows.find(x => x.id === id)!
-    const item: QueueItem = { id, lane: laneOf(r.kind), kind: r.kind, args: JSON.parse(r.args) as JobArgs, queuedAt: r.queued_at }
+    const item: QueueItem = { id, lane: laneOf(r.kind), kind: r.kind, args: resumedArgs(r.kind, JSON.parse(r.args) as JobArgs, !!r.started_at), queuedAt: r.queued_at }
     queue.push(item)
     saved.add(item) // clears started_at, and fixes the lane of a row written before gaps had its own
     if (r.started_at) log(`[queue] ${r.kind} #${id} was interrupted by a restart — resumed`)
@@ -224,7 +238,8 @@ function runJob(lane: Lane, item: QueueItem) {
     job.child = null
     lanes[lane].current = null
     lanes[lane].last = job
-    saved.drop(job.id)
+    // a job ended by the worker shutting down keeps its row, so the next worker resumes it
+    if (!state.shuttingDown) saved.drop(job.id)
     if (args.auto) notify(job.log.at(-1) || `${kind} finished, exit ${code}`)
     pump()
   }
@@ -301,6 +316,16 @@ function runJob(lane: Lane, item: QueueItem) {
     push(`${job.added} row(s) written`)
     finish(code)
   })
+}
+
+/**
+ * The worker is going away (Nitro `close` hook — a dev rebuild or a stop). Its jobs would otherwise keep
+ * their `claude -p` / scraper / Chrome children running as orphans while the next worker resumes them, which
+ * doubles every session. Stops them all while keeping their job_queue rows for the resume.
+ */
+export function stopForShutdown() {
+  state.shuttingDown = true
+  for (const lane of Object.keys(lanes) as Lane[]) lanes[lane].current?.child?.kill('SIGTERM')
 }
 
 export function stopLane(lane: Lane): boolean {
@@ -466,8 +491,9 @@ async function runDraftJob(
         // Still a refusal when the owner chose the post — this is the two-emails-ever ceiling, not a
         // fit judgement, and the role rides in the follow-up instead. But it writes no row, so the
         // post stays live and visible rather than being buried by a decision the owner did not make.
-        push(`${email}: ${closed}${manual ? ' — no email, and no row: the post stays live' : ' — skipping'}`)
-        if (!manual) {
+        const writeSkips = !manual && !args.resumed
+        push(`${email}: ${closed}${writeSkips ? ' — skipping' : ' — no email, and no row: the post stays live'}`)
+        if (writeSkips) {
           for (const p of posts) {
             // A skip must never downgrade a post that an email already names: the M4 follow-up query finds
             // unmentioned posts by the `named in ...` prefix, so losing it would name the role twice.
@@ -495,7 +521,7 @@ async function runDraftJob(
         // One retry after 10s, around the claude call only — never around createDraft below, where a
         // retry could leave two drafts in Gmail. A contract rejection is retried too: the model is not
         // deterministic and a second answer often passes. Stop is never retried.
-        res = await withRetry(() => runDrafter(req, config, { onLog: push, signal, masterCv: master }), {
+        res = await withRetry(() => runDrafter(req, config, { onLog: line => push(`${email}: ${line}`), signal, masterCv: master }), {
           signal,
           onRetry: e => push(`${email}: retry 1/1 in 10s: ${e.message.slice(0, 200)}`)
         })

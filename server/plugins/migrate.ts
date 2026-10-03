@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { importLegacy, readSettingsFrom, seedDefaults, writeSettingsTo } from '../../shared/settings.ts'
 import { migrateDb, sqlite } from '../utils/db'
-import { restoreQueue } from '../utils/jobs'
+import { restoreQueue, stopForShutdown } from '../utils/jobs'
 
 const LEGACY_PATH = resolve(process.cwd(), 'config.json')
 const SEED_PATH = resolve(process.cwd(), 'data/seed-background.json')
@@ -56,7 +56,9 @@ function importSeedBackground() {
   }
 }
 
-export default defineNitroPlugin(() => {
+export default defineNitroPlugin((nitroApp) => {
+  // a rebuild ends this worker: stop its jobs (no orphan claude/Chrome) and leave their rows to resume
+  nitroApp.hooks.hook('close', stopForShutdown)
   try {
     const r = migrateDb()
     if (r.migrated) console.log('[db] schema up to date')

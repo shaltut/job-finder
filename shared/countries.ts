@@ -214,7 +214,8 @@ const US_STATE_NAMES = new Set(['alabama', 'alaska', 'arizona', 'arkansas', 'cal
   'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania', 'rhode island',
   'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont', 'virginia', 'washington',
   'west virginia', 'wisconsin', 'wyoming', 'district of columbia'])
-const CA_PROVINCES = new Set('ON BC AB QC MB SK NS NB NL PE'.split(' '))
+// NL, PE and SK are left out: they are also the Netherlands, Peru and Slovakia ("Amsterdam, NL")
+const CA_PROVINCES = new Set('ON BC AB QC MB NS NB'.split(' '))
 /** Georgia the country, told apart from Georgia the US state by its own cities. */
 const GEORGIA_CITIES = ['tbilisi', 'batumi', 'kutaisi']
 
@@ -258,13 +259,14 @@ export function countriesIn(location: string | null | undefined): string[] {
     if (c) out.add(c.name)
   }
   const georgiaCountry = GEORGIA_CITIES.some(c => hasWord(l, c))
-  const later = l.split(',').slice(1).map(seg => seg.trim())
+  // "Georgia (United States)", "Georgia - Remote": the decoration is not part of the state's name
+  const later = l.split(',').slice(1).map(seg => seg.replace(/\(.*?\)/g, '').split(' - ')[0]!.trim())
   const usState = later.some(seg => US_STATES.has(seg.split(' ')[0] ?? '')
     || (US_STATE_NAMES.has(seg.toLowerCase()) && !(seg.toLowerCase() === 'georgia' && georgiaCountry)))
-  if (usState) {
-    out.add('USA')
-    if (!georgiaCountry) out.delete('Georgia') // "Atlanta, Georgia" is the state
-  }
+  if (usState) out.add('USA')
+  // Any US signal — a state, "USA", "United States" — makes "Georgia" the state, unless a Georgian city
+  // says otherwise ("Georgia, USA", "Alpharetta, Georgia (United States)").
+  if (out.has('USA') && !georgiaCountry) out.delete('Georgia')
   if (later.some(seg => CA_PROVINCES.has(seg.split(' ')[0] ?? ''))) out.add('Canada')
   return [...out]
 }
