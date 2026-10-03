@@ -32,7 +32,7 @@ export function mergeInto(target: Database.Database, sourceFile: string): Record
 }
 
 if (process.argv[1]?.endsWith('merge-db.ts')) { // run directly, not imported by the test
-  const [source, targetFile = 'data/jobfinder.db'] = process.argv.slice(2)
+  const [source, targetFile = process.env.JOBFINDER_DB || 'data/jobfinder.db'] = process.argv.slice(2)
   if (!source) {
     console.error('usage: node scripts/merge-db.ts <source.db> [target.db]')
     process.exit(1)

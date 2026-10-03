@@ -134,3 +134,14 @@ test('restore: this machine\'s own queue survives the other machine merely being
   assert.equal(shouldRestore({ pulled: false }), true)
   assert.equal(shouldRestore({ pulled: true }), false)
 })
+
+test('withRetry: a failure that cannot pass a second time is not retried', async () => {
+  for (const msg of ['could not start claude: spawn ENOENT', 'claude exited 1: You have reached your usage limit', 'Claude AI usage limit reached']) {
+    let calls = 0
+    await assert.rejects(withRetry(async () => {
+      calls++
+      throw new Error(msg)
+    }, { waitMs: 0 }))
+    assert.equal(calls, 1, msg)
+  }
+})

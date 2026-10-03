@@ -69,6 +69,9 @@ export async function pool<T>(items: T[], n: number, fn: (t: T) => Promise<void>
   if (failed) throw (failed as { error: unknown }).error
 }
 
+/** Failures a second try cannot fix: claude would not start, or the plan's usage limit is spent. */
+const PERMANENT = /could not start claude|usage limit/i
+
 /**
  * One retry after `waitMs`. Not after an abort: Stop means stop. The second failure is the one that
  * surfaces, so the log says what happened last.
@@ -77,7 +80,7 @@ export async function withRetry<T>(fn: () => Promise<T>, o: { signal?: AbortSign
   try {
     return await fn()
   } catch (e) {
-    if (o.signal?.aborted) throw e
+    if (o.signal?.aborted || PERMANENT.test((e as Error).message ?? '')) throw e
     o.onRetry?.(e as Error)
     // the back-off ends early on Stop, so Stop never waits out the 10s
     await new Promise<void>((resolve) => {
