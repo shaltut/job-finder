@@ -396,3 +396,10 @@ test('a real-sized prompt with a master CV fits the budget, with room to grow', 
   const big = assignIds({ ...cvContent, summary: 'y'.repeat(30_000) })
   assert.equal(fitsPromptBudget(config, big), true)
 })
+
+test('only the Windows deny-Bash notice is dropped from the job log', async () => {
+  const { CLI_NOTICE } = await import('../server/utils/drafter.ts')
+  assert.ok(CLI_NOTICE.test('Denying Bash also turns off the PowerShell tool, so Claude has neither. To use PowerShell, set CLAUDE_CODE_USE_POWERSHELL_TOOL=1.'))
+  assert.equal(CLI_NOTICE.test('claude exited 1: Bash denied'), false)
+  assert.equal(CLI_NOTICE.test('Error: Denying Bash also turns off the PowerShell tool'), false, 'anchored: a wrapped error still shows')
+})

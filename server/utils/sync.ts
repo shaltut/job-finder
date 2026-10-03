@@ -220,7 +220,9 @@ async function draftFollowUp(
   const res = await runDrafter(req, config, { onLog, signal })
   const carrier = res.results.find(r => r.body)
   if (!carrier?.body) {
-    onLog(`${email}: the drafter returned no follow-up body`)
+    // the why is in each skipped result's reason; without it this line reads like a failure
+    const why = res.results.map(r => `${r.key.slice(0, 8)} ${r.verdict}: ${r.reason}`).join('; ')
+    onLog(`${email}: the drafter returned no follow-up body${why ? ` — ${why}` : ''}`)
     return
   }
 

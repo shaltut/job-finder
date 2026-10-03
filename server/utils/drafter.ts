@@ -38,6 +38,13 @@ export function readProcedure(): string {
  * tool that does not exist, the deny list is explicit, and neither is ever the last flag before a value.
  * Verified: Bash is refused and --append-system-prompt-file still lands.
  */
+/**
+ * Claude Code on Windows prints this to stderr whenever Bash is denied. It only confirms what DENY wants
+ * (no shell of any kind) and repeated once per recruiter it buried the real log lines. Still kept in
+ * `err`, so a failed run reports it.
+ */
+export const CLI_NOTICE = /^Denying Bash also turns off the PowerShell tool/
+
 const DENY = ['Bash', 'Read', 'Write', 'Edit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Glob', 'Grep', 'Task', 'TodoWrite']
 
 /**
@@ -393,7 +400,7 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
     })
     child.stderr.on('data', (c: Buffer) => {
       err += c.toString()
-      c.toString().split('\n').filter(Boolean).forEach(onLog)
+      c.toString().split('\n').filter(l => l && !CLI_NOTICE.test(l)).forEach(onLog)
     })
     child.on('error', (e) => {
       clearTimeout(timer)
