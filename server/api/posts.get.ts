@@ -4,6 +4,7 @@ import { applications, contacts, posts } from '../db/schema'
 import { neverWrittenTo } from '../utils/contacts'
 import { db } from '../utils/db'
 import { countryClause, orderSql, SORTS } from '../utils/posts-query'
+import { placeOf } from '../../shared/place'
 
 const query = z.object({
   q: z.string().trim().max(200).optional(),
@@ -133,5 +134,10 @@ export default defineEventHandler(async (event) => {
     .leftJoin(applications, eq(applications.key, posts.key))
     .where(where.length ? and(...where) : undefined)
 
-  return { rows, total: counted[0]?.total ?? 0 }
+  return {
+    // computed per page (≤ limit rows), never stored: the rules live in shared/place.ts and change
+    // without a migration or a rescore
+    rows: rows.map(r => ({ ...r, place: placeOf(r.location, r.text, r.remote) })),
+    total: counted[0]?.total ?? 0
+  }
 })

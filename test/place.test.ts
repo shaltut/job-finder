@@ -48,6 +48,10 @@ test('the body supplies hybrid / on-site only, and the location always wins', ()
   assert.equal(placeOf('Clevedon, hybrid (3 days onsite)', '', false).mode, 'hybrid', 'first mentioned wins')
 })
 
+test('"anywhere" is not a city', () => {
+  for (const l of ['Any Location', 'Anywhere', 'Worldwide', 'Global']) assert.equal(placeOf(l, '', true).city, null, l)
+})
+
 test('regions, several countries, nothing at all', () => {
   const r = placeOf('Middle East', '', false)
   assert.deepEqual(r.countries, [])

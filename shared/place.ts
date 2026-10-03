@@ -26,6 +26,7 @@ export interface Place {
 export const flagOf = (code: string): string =>
   String.fromCodePoint(...[...code.toUpperCase()].map(ch => 0x1F1E6 + ch.charCodeAt(0) - 65))
 
+const ANYWHERE = new Set(['any location', 'anywhere', 'worldwide', 'global', 'globally', 'location independent'])
 const UNSTATED = new Set(['', 'unknown', 'n/a', 'na', 'not specified', 'not stated', 'unspecified', 'tbd', 'none', '-'])
 
 // earliest mention wins: "Clevedon, hybrid (3 days onsite)" is hybrid
@@ -57,7 +58,7 @@ const titleCase = (s: string) => s.replace(/(^|[\s-])(\p{L})/gu, (_, sep: string
 /** The first comma segment, when it is a place rather than a country, a region, a mode or "unknown". */
 function cityOf(location: string): string | null {
   const seg = (location.split(/[,،/|]/)[0] ?? '').replace(/\(.*?\)/g, '').trim()
-  if (!seg || UNSTATED.has(seg.toLowerCase())) return null
+  if (!seg || UNSTATED.has(seg.toLowerCase()) || ANYWHERE.has(seg.toLowerCase())) return null
   if (resolveCountry(seg) || regionIn(seg) || firstMode(seg, MODE_WORDS)) return null
   if (COUNTRIES.some(c => [c.name, ...c.aliases].some(f => hasWord(seg, f)))) return null
   const canon = CITY_CANON[seg.toLowerCase()]

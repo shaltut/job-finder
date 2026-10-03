@@ -1,3 +1,5 @@
+import type { Place } from '../../shared/place'
+
 export type Verdict = 'drafted' | 'skipped'
 export type Stage = 'drafted' | 'contacted' | 'followed_up' | 'replied' | 'final'
 
@@ -18,6 +20,8 @@ export interface PostRow {
   location: string | null
   remote: boolean | null
   inScope: boolean | null
+  /** The standardized location (shared/place.ts), computed per page by the API. */
+  place: Place
   emails: string[]
   /** External links on the card. An opaque `lnkd.in` hash, usually — see `channels` for what is usable. */
   links: string[]

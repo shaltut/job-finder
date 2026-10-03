@@ -507,6 +507,34 @@ function header(label: string, sortCol?: 'score' | 'title' | 'posted' | 'added',
 /** What the Status badge reads — the codes are API values, not words for the owner. */
 const STATUS_LABEL = { unprocessed: 'Unprocessed', drafted: 'Drafted', skipped: 'Skipped', applied: 'Applied', dismissed: 'Dismissed' }
 
+const MODE_LABEL = { remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site' } as const
+const MODE_COLOR = { remote: 'info', hybrid: 'warning', onsite: 'neutral' } as const
+
+/**
+ * Where the job is, one way for every post (shared/place.ts). Line 1 answers "which country";
+ * line 2 the city and how it is worked. A remote job tied to a country says so — for an owner who
+ * cannot work from that country it is closer to an on-site job there than to remote work.
+ */
+function locationCell(r: PostRow) {
+  const p = r.place
+  const [first, ...rest] = p.countries
+  const line1 = first
+    ? `${first.flag} ${first.name}${rest.length ? ` +${rest.length}` : ''}`
+    : p.region
+      ? `🌍 ${p.region}`
+      : p.mode === 'remote' ? '🌐 Remote · anywhere' : '❔ Not stated'
+  const mode = p.mode && (p.mode === 'remote' && first ? `Remote (${first.name} only)` : MODE_LABEL[p.mode])
+  return h('div', { class: 'min-w-36 space-y-1', title: [p.countries.map(c => c.name).join(', '), r.location].filter(Boolean).join(' — ') || undefined }, [
+    h('p', { class: first ? 'text-sm text-highlighted whitespace-nowrap' : 'text-sm text-muted whitespace-nowrap' }, line1),
+    h('div', { class: 'flex flex-wrap items-center gap-1 text-xs text-muted' }, [
+      p.city && h('span', p.city),
+      mode && !(p.mode === 'remote' && !first) && h(UBadge, { variant: 'soft', color: MODE_COLOR[p.mode!], size: 'sm' },
+        () => p.modeFromText ? `${mode} (from post text)` : mode),
+      r.inScope && h(UBadge, { variant: 'soft', color: 'success', size: 'sm' }, () => 'in scope')
+    ].filter(Boolean))
+  ])
+}
+
 const columns: TableColumn<PostRow>[] = [
   {
     id: 'select',
@@ -642,10 +670,8 @@ const columns: TableColumn<PostRow>[] = [
     // width — see PostsHeaderCell). 1280 overflows by ~120px, as the pre-grid table did.
     cell: ({ row }) => h('div', { class: 'min-w-40 max-w-md whitespace-normal', title: row.original.title ?? undefined }, [
       h('p', { class: 'font-medium text-highlighted line-clamp-2' }, row.original.title || 'unknown'),
-      h('p', { class: 'text-xs text-muted line-clamp-1' }, [
-        row.original.company,
-        row.original.location
-      ].filter(Boolean).join(' · ') || '—')
+      // the location has its own column now; the raw text stays one hover away
+      h('p', { class: 'text-xs text-muted line-clamp-1', title: row.original.location ?? undefined }, row.original.company || '—')
     ])
   },
   {
@@ -685,7 +711,7 @@ const columns: TableColumn<PostRow>[] = [
     id: 'where',
     // scope and country together: both answer "where is this job"
     header: () => h(PostsHeaderCell, {
-      label: 'Where',
+      label: 'Location',
       sort: view.value.sort,
       dir: view.value.dir,
       active: view.value.scope !== 'all' || view.value.country.length > 0
@@ -713,10 +739,7 @@ const columns: TableColumn<PostRow>[] = [
         })
       ]
     }),
-    cell: ({ row }) => h('div', { class: 'flex gap-1' }, [
-      row.original.remote && h(UBadge, { variant: 'soft', color: 'info', size: 'sm' }, () => 'remote'),
-      row.original.inScope && h(UBadge, { variant: 'soft', color: 'success', size: 'sm' }, () => 'in scope')
-    ].filter(Boolean))
+    cell: ({ row }) => locationCell(row.original)
   },
   {
     accessorKey: 'flags',
