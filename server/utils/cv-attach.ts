@@ -52,5 +52,7 @@ export function followUpAttachment(
   cvPath: string,
   exists: (path: string) => boolean = existsSync
 ): string {
-  return stored && exists(stored) ? stored : cvPath
+  // rows written on Windows before 2026-10-03 carry `\`, which macOS reads as part of a file name
+  const path = stored?.replaceAll(String.fromCharCode(92), '/')
+  return path && exists(path) ? path : cvPath
 }

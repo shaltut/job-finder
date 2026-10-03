@@ -3,7 +3,7 @@
 // See docs/superpowers/specs/2026-09-17-tailored-cv-design.md, section 4.
 import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, posix } from 'node:path'
 import type { Browser } from 'playwright-core'
 import type { Profile } from '../../shared/settings.ts'
 import type { CvContent } from './cv-master.ts'
@@ -131,5 +131,7 @@ export function createCvRenderer(
 const folderFor = (email: string): string =>
   `${slug(email)}-${createHash('sha1').update(email.toLowerCase()).digest('hex').slice(0, 8)}`
 
+// posix: this path is stored on contacts.cv_path and read back on the other machine, which may be a Mac,
+// where `\` is part of a file name. Node on Windows accepts `/`.
 export const tailoredCvPath = (cvPath: string, recruiterEmail: string): string =>
-  join('data', 'cv', 'tailored', folderFor(recruiterEmail), basename(cvPath))
+  posix.join('data', 'cv', 'tailored', folderFor(recruiterEmail), basename(cvPath))

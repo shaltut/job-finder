@@ -89,3 +89,19 @@ test('a re-drafted application that fell back records null, not the stale tailor
   persist(db, request('apply'), drafted('apply'), 'draft-3', null)
   assert.equal(cvPathOnFile(), null)
 })
+
+// The other machine may be a Mac, where `\` is part of a file name: a tailored path written on Windows
+// with `\` fails existsSync there, and the follow-up silently attaches the uploaded CV instead.
+test('tailored CV paths are stored with / and old backslash rows still resolve', async () => {
+  const { tailoredCvPath } = await import('../server/utils/cv-render.ts')
+  const { followUpAttachment } = await import('../server/utils/cv-attach.ts')
+  const BS = String.fromCharCode(92) // a backslash, spelled so no editor or shell can unescape it
+  assert.equal(tailoredCvPath('data/cv/CV.pdf', 'a.b@x.com').includes(BS), false)
+  const seen: string[] = []
+  const got = followUpAttachment(['data', 'cv', 'tailored', 'x', 'CV.pdf'].join(BS), 'data/cv/CV.pdf', (p) => {
+    seen.push(p)
+    return true
+  })
+  assert.equal(got, 'data/cv/tailored/x/CV.pdf')
+  assert.deepEqual(seen, ['data/cv/tailored/x/CV.pdf'])
+})

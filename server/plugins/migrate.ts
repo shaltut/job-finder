@@ -64,6 +64,10 @@ export default defineNitroPlugin(() => {
     console.error(`[db] migration failed: ${(e as Error).message}`)
     throw e
   }
+  // Windows wrote tailored-CV paths with `\`; macOS cannot open them. Idempotent, so it runs every boot.
+  // char(92) rather than a literal backslash, which editors and shells keep unescaping.
+  const fixed = sqlite.prepare(`UPDATE contacts SET cv_path = replace(cv_path, char(92), '/') WHERE instr(cv_path, char(92)) > 0`).run().changes
+  if (fixed) console.log(`[db] normalised ${fixed} tailored-CV path(s) to /`)
   importLegacyConfig() // may create the row
   importSeedBackground() // then fills what the skill file used to hold
 })
