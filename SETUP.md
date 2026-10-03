@@ -196,6 +196,43 @@ call exists anywhere under `server/`, and `npm test` fails if one is ever added.
 Each recruiter gets **at most two emails, ever**: the application and one follow-up after three days of
 silence. Then the address is closed and the database refuses to reopen it.
 
+## Two machines
+
+One history across two computers (say a Windows PC and a Mac) that **never run the app at the same
+time**. The database is handed between them through a folder both sync — OneDrive here. It is a hand-off,
+not a live share: running both at once forks the data.
+
+1. **Create the folder once**, on the machine that holds the history you want to keep:
+   `mkdir C:\Users\<you>\OneDrive\job-finder-sync`.
+2. **Point both machines at it** in `.env`:
+   - Windows: `JOBFINDER_SYNC_DIR=C:\Users\<you>\OneDrive\job-finder-sync`
+   - macOS: `JOBFINDER_SYNC_DIR=/Users/<you>/Library/CloudStorage/OneDrive-Personal/job-finder-sync`
+3. **Copy the secrets by hand, once** — `.env`, `google-oauth.json`, `gmail-token.json` — by USB or a
+   password manager, never through the synced folder.
+4. **On the second machine**: `npm install` under the Volta-pinned Node (`better-sqlite3` is native),
+   then `npm run login` — a live browser profile does not survive file sync.
+5. **First start on the second machine**: wait until Finder or Explorer shows the folder **and its
+   `sync.json`**, then `npm run dev`. It pulls the shared database; its own old one lands in
+   `backups/pre-pull-*.db`. To keep that old history, stop the server and merge it once:
+   `node scripts/merge-db.ts backups/pre-pull-<stamp>.db`, start again, then **Sync with Gmail** in
+   Pipeline so recruiter stages are re-read from your mail.
+6. **Before you leave a machine**: Run → **Sync now**, then **wait for OneDrive's synced checkmark** on the
+   folder before closing the lid. The app also pushes every 2 minutes after a change, which covers a
+   forgotten button but not an upload that never finished.
+
+What the app does about mistakes:
+- Starting the second machine before the first one's upload arrived: when the newer snapshot shows up,
+  this machine **refuses to push over it**, saves its own work to `backups/conflict-*.db` and asks you to
+  restart.
+- Both machines pushed anyway (the lid closed mid-upload): OneDrive leaves a conflict copy such as
+  `sync-<machine>.json` in the folder. Both machines then refuse to sync and name the file. Merge the
+  other side's database with `scripts/merge-db.ts`, delete the stray file, restart.
+- The other machine sent a heartbeat in the last 5 minutes: a warning on the Run view. A warning only, so
+  a machine that crashed cannot lock you out.
+
+The synced folder holds your posts, recruiter names and addresses, and your CV. It is your own data in
+your own account, but it no longer lives on one disk only.
+
 ## Be a good citizen of LinkedIn
 
 The scraper drives a real headed Chrome with randomised pauses and a 40-card ceiling per term, because

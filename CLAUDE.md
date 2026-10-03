@@ -312,7 +312,7 @@ and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
   (`scraper/lib.ts` re-exports it — it imports `node:crypto` and cannot be what a browser bundle reads).
   `parseSettings` orders and dedupes it, so the order the Settings dirty check depends on is a property of
   the stored row. Empty saves but `missingFields()` refuses to run: the usual two-schema split.
-- **`.env`** — `OPENAI_API_KEY`; optionally `JOBFINDER_DB`, `JOBFINDER_MODEL`, `JOBFINDER_DRAFTER_MODEL` (default `opus`), `PROFILE_DIR`. Loaded with
+- **`.env`** — `OPENAI_API_KEY`; optionally `JOBFINDER_DB`, `JOBFINDER_MODEL`, `JOBFINDER_DRAFTER_MODEL` (default `opus`), `PROFILE_DIR`, `JOBFINDER_SYNC_DIR` (the two-machine hand-off; unset = off). Loaded with
   Node's `--env-file-if-exists`. Never write the key into a tracked file.
 
 **Two schemas, not one, and the split is load-bearing.** `settingsSchema` checks shape and format only and
@@ -585,6 +585,20 @@ drafts keep arguing from a stale CV.
   writing rows while the UI showed an idle lane), so any long-lived server state needs it — but it is no
   protection against a rebuild. **Check `curl -s http://127.0.0.1:3939/api/job` before editing anything
   under `server/`** (or a `shared/` / `scraper/` file the server imports).
+- **Two machines hand off, never share.** The owner alternates a Windows PC and a Mac, never running both.
+  `server/utils/handoff.ts` pulls a newer `VACUUM INTO` snapshot from `JOBFINDER_SYNC_DIR` at boot —
+  inside `db.ts`'s `open()`, before any connection exists — and `server/plugins/handoff.ts` pushes one
+  every 2 minutes when `changeSig()` moved. **That signature is `data_version` plus `total_changes()`,
+  and both halves are load-bearing**: `total_changes()` counts the server connection only, while the job
+  runners write through their own `openWritableDb()` connections, which only `data_version` sees. `gen`
+  in `sync.json` makes each push a compare-and-swap, so a machine that booted before OneDrive delivered
+  the newer snapshot is refused (banner + `backups/conflict-*.db`) instead of overwriting it; any other
+  file in the folder is a sync-client conflict copy and stops both pull and push. **Never move `data/`
+  itself into OneDrive** — a file sync of a WAL database is the 2026-09-25 backup bug. **Paths written to
+  the database use `/`** (`tailoredCvPath` is `posix.join`; `migrate.ts` rewrites old rows each boot),
+  because `\` is a filename character on the Mac. `scripts/merge-db.ts` is the one-time, insert-only merge
+  of a machine's pre-sync history. Setup: SETUP.md, "Two machines". Spec:
+  `docs/superpowers/specs/2026-10-03-cross-machine-sync-design.md`.
 - **Port 3939 is pinned** in `nuxt.config.ts`. Port 3000 is taken on this machine, and Nuxt silently drifting
   to 3001 would invalidate the Gmail OAuth redirect URI.
 - **The server is the sole writer of the database.** The scraper opens it read-only and streams rows back.
