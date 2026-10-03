@@ -642,9 +642,13 @@ drafts keep arguing from a stale CV.
   (`resumedArgs`): if the dead run got as far as `createDraft`, the gate now sees that pending draft and
   would write `skipped` over posts it names, losing the `named in` prefix. **The `close` hook stops every
   running job** (`stopForShutdown`) so no `claude`/Chrome child is orphaned, keeping its row for the
-  resume. **The queue is never resumed after a hand-off pull or while the other machine looks active**
-  (`shouldRestore`): those rows are the other machine's, possibly already done — resuming them drafted the
-  same recruiters twice in review. They are cleared and logged instead. `queue-core.ts` holds every queue decision as a
+  resume, and **a closing worker's `pump()` starts nothing**. **The queue is never resumed after a hand-off
+  pull** (`shouldRestore`): those rows are the other machine's, possibly already done — resuming them
+  drafted the same recruiters twice in review. They are cleared and logged instead; without a pull the rows
+  are this machine's own and are always restored. **`pool()` lets in-flight recruiters finish before it
+  rethrows a failure**, because `runDraftJob` closes the database and the CV browser when it returns.
+  **The boot pull runs once per OS process** (`data/.boot-pid`): a dev rebuild starts the new worker before
+  the old one closes its connection. `queue-core.ts` holds every queue decision as a
   pure function, because no test can import `jobs.ts`. Stop sends SIGTERM; Playwright's own handler only
   closes Chrome, so the scraper keeps a `stopping` flag and throws at the next loop check (exit 1).
   `pump()` iterates `Object.keys(lanes)`, but the `Lane` union (now in `queue-core.ts`), the `Kind`
