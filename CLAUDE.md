@@ -69,10 +69,16 @@ npm run dev ──► http://127.0.0.1:3939
    filters live in the column headers (`PostsHeaderCell`), the whole view is in the URL
    (`shared/posts-view.ts`, so refresh and back keep it), sorting is server-side (`orderSql()` in
    `server/utils/posts-query.ts`, flagged last under every sort), and shift-click selects a range for the
-   bulk bar (`PostsBulkBar`: Draft, Applied, Dismiss, Exclude…). The country filter maps the model's
-   free-text `location` through `countriesIn()` in `shared/countries.ts` — 92% of located posts resolve
-   (measured 2026-10-01) — and its city table is **filter-only**: it must never reach `withAliases()` or a
-   prompt.
+   bulk bar (`PostsBulkBar`: Draft, Applied, Dismiss, Exclude…). Row actions sit **beside the checkbox**,
+   not at the right edge — the owner reads the title and acts on the same row. The country filter maps the
+   model's free-text `location` through `countriesIn()` in `shared/countries.ts`, and the **Location**
+   column shows `placeOf()` from `shared/place.ts` (country + flag, one-spelling city, region, and the work
+   model from the location, then the `remote` flag, then the body — hybrid/on-site only, marked "from post
+   text"), computed per page in `posts.get.ts`, never stored. Measured 2026-10-03 over 2,037 hiring posts:
+   1,703 resolve to one country and 315 to none, 238 of which say only remote/unknown/nothing. Its city,
+   region and **Arabic-name** tables are **filter/display-only**: they must never reach `withAliases()` or
+   a prompt (Arabic names are deliberately not aliases for that reason). Never infer a country from an
+   email domain or phone code — measured, they named the agency's country in 20 posts.
 5. **Paste intake** `server/api/posts/paste.post.ts` + `server/utils/paste.ts` / `paste-job.ts`: a post that
    arrived by email or WhatsApp, pasted into the Posts view (`app/pages/index.vue`). The endpoint runs the
    same extraction and contact-route gate a scrape runs — pure regex, so a refusal is immediate — and queues
@@ -583,8 +589,13 @@ drafts keep arguing from a stale CV.
   that — measured 2026-10-01: one edit to `server/api/posts.get.ts` lost a running draft and 18 queued ones.
   The `globalThis` placement still matters for module-level HMR inside one worker (the scraper once kept
   writing rows while the UI showed an idle lane), so any long-lived server state needs it — but it is no
-  protection against a rebuild. **Check `curl -s http://127.0.0.1:3939/api/job` before editing anything
-  under `server/`** (or a `shared/` / `scraper/` file the server imports).
+  protection against a rebuild. **Since 2026-10-03 the queue survives it** (`job_queue`, below): a
+  rebuild still kills the running job, but `restoreQueue()` puts it back at the front of its lane —
+  except a scrape-lane job, which is dropped. So **still check `curl -s http://127.0.0.1:3939/api/job`
+  before editing anything under `server/`** (or a `shared/` / `scraper/` file the server imports): an
+  interrupted draft re-runs from the start of its recruiter list, and an interrupted scrape is lost.
+  **A new file under `server/plugins/` is not loaded by a running dev server** until a full restart —
+  measured: a new plugin never ran across a rebuild — so boot-time work goes into an existing plugin.
 - **Two machines hand off, never share.** The owner alternates a Windows PC and a Mac, never running both.
   `server/utils/handoff.ts` pulls a newer `VACUUM INTO` snapshot from `JOBFINDER_SYNC_DIR` at boot —
   inside `db.ts`'s `open()`, before any connection exists — and `server/plugins/handoff.ts` pushes one
@@ -614,20 +625,30 @@ drafts keep arguing from a stale CV.
   instead of scrolling.
 - **The Claude-in-Chrome extension cannot open localhost.** Verify the UI with `node scripts/screenshot.mjs`,
   which drives headless Chrome through `playwright-core`.
-- **Three job lanes and a queue** in `server/utils/jobs.ts`: `scrape` (one at a time, Chrome profile lock),
-  `draft` and `paste` all run concurrently; everything else queues, so `POST /api/run/*` returns 202 and
-  never 409. Single-post draft requests waiting in the queue are batched into one `claude` session. Stop
-  sends SIGTERM; Playwright's own handler only closes Chrome, so the scraper keeps a `stopping` flag and
-  throws at the next loop check (exit 1). `pump()` iterates `Object.keys(lanes)`, so it needed no change
-  when `paste` was added, but the `Lane` union, the `Kind` union, the state initialiser, `laneOf()`,
-  `busy()`, `runJob`'s own `if (lane === 'paste')` dispatch branch and `stateView()` all name every lane
-  explicitly, so a fourth lane touches seven places in this file alone — plus its mirrors outside it:
-  `Lane` and `JobKind` in `app/types/index.d.ts`, and the `lanes` object `run.vue` and `pipeline.vue` each
-  seed their polling state with, or the UI never compiles or never shows the new lane running.
-  **`state.lanes.paste ??=` right after the initialiser is load-bearing**: `__jobfinderRunner` lives on
-  `globalThis` to survive Nitro's dev HMR (see above), so a dev server already running from before the
-  paste lane existed holds a state object missing that key, and `??=` on the whole object will not add a
-  key to an object that is already there.
+- **Four job lanes and a durable queue** in `server/utils/jobs.ts`: `scrape` (one at a time, Chrome profile
+  lock), `draft` (draft + Gmail `sync`), `paste` and `gaps` all run concurrently; everything else queues,
+  so `POST /api/run/*` returns 202 and never 409. **`gaps` has its own lane** because it is OpenAI, not
+  `claude`, and an hours-long backfill used to hold every Draft press and the sync behind it; **`sync`
+  stays on the draft lane** because beside drafting it could write an application and a follow-up to the
+  same recruiter at once. **The draft lane is priority-ordered** (`pickNext()` in
+  `server/utils/queue-core.ts`): hand-picked drafts (`key`, or `keys` without `screened`), then `sync`,
+  then bulk/batch, FIFO within each. Single-post draft requests waiting in the queue are batched into
+  one session. **Within a draft job, recruiters run `JOBFINDER_DRAFT_CONCURRENCY` at a time** (default 2,
+  clamped 1-4, `pool()`), and **`runDrafter` is retried once after 10 s** (`withRetry()`) — never
+  `createDraft`, where a retry could leave two Gmail drafts. **The queue is mirrored into `job_queue`**
+  (`saved.add/start/drop`) and `restoreQueue()`, called from `server/plugins/migrate.ts`, puts it back
+  in a fresh worker: interrupted non-scrape jobs at the front, interrupted scrape-lane jobs dropped (a
+  re-run scrape on every edit would spend the LinkedIn rate limit). The table rides in the cross-machine
+  snapshot, so queued work moves to the other machine. `queue-core.ts` holds every queue decision as a
+  pure function, because no test can import `jobs.ts`. Stop sends SIGTERM; Playwright's own handler only
+  closes Chrome, so the scraper keeps a `stopping` flag and throws at the next loop check (exit 1).
+  `pump()` iterates `Object.keys(lanes)`, but the `Lane` union (now in `queue-core.ts`), the `Kind`
+  union, the state initialiser, `laneOf()`, `busy()`, `runJob`'s dispatch branches and `stateView()` all
+  name every lane explicitly — plus `Lane` in `app/types/index.d.ts`, the `lanes` seeds in `run.vue` and
+  `pipeline.vue`, and the Stop endpoint's lane enum. **`state.lanes.paste ??=` / `gaps ??=` right after the
+  initialiser are load-bearing**: `__jobfinderRunner` lives on `globalThis` to survive module HMR inside
+  a worker, so a state object from before a lane existed is missing that key, and `??=` on the whole
+  object will not add a key to an object that is already there.
 - **`shared/paste-poll.ts`** matches the paste card's poll response to the local entry it belongs to, kept
   out of `app/pages/index.vue` and Vue entirely so `test/paste-poll.test.ts` can exercise it under
   `node --test` (there is no Vue test setup here). The paste lane's `/api/job` view exposes only the one
