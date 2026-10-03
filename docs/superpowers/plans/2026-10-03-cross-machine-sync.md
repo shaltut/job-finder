@@ -28,7 +28,7 @@
 2. **OneDrive has not finished downloading when the Mac boots** (remote gen still old) → the Mac starts on local data; its first push must be refused once the newer `sync.json` arrives, not overwrite it. Pinned in Task 1 (`stale push refused`).
 3. **Snapshot is a truncated/partial file (OneDrive mid-download)** → pull must fail closed: local DB kept, pushing disabled. Pinned in Task 1 (`corrupt snapshot`).
 4. **Old `contacts.cv_path` rows with backslashes on the Mac** → follow-up attaches the tailored CV, not the uploaded one. Pinned in Task 3.
-5. **Sync dir set but folder missing** (OneDrive not signed in yet) → first push creates it; pull treats it as nothing to pull. Pinned in Task 1 (`missing remote`).
+5. **Sync folder missing** (OneDrive not signed in, or the Mac boots before OneDrive has created it) → pull treats it as nothing to pull, and push **refuses** (`sync folder missing`) rather than publishing this machine's old DB as gen 1 and forking `sync.json`. The folder is created once by hand on the first machine. Pinned in Task 1 (`missing folder`).
 
 ---
 
@@ -59,7 +59,7 @@
 // Two temp dirs stand in for two machines sharing one OneDrive folder. The machines never run at once,
 // which is the only reason a whole-file hand-off is enough.
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -102,12 +102,15 @@ test('decisions', () => {
 
 test('round trip: A pushes, B pulls, B pushes, a stale A push is refused', () => {
   const root = mkdtempSync(join(tmpdir(), 'jobfinder-handoff-'))
-  const sync = join(root, 'onedrive', 'job-finder-sync') // does not exist yet
+  const sync = join(root, 'onedrive', 'job-finder-sync')
   const a = machine(root, 'a', sync)
   const b = machine(root, 'b', sync)
 
   insert(a.db, 'from-a')
   writeFileSync(join(a.cvDir, 'cv.pdf'), 'pdf')
+  assert.throws(() => push(a, 'pc'), /sync folder missing/, 'missing folder: never seed a fork')
+  assert.equal(pull(a).pulled, false)
+  mkdirSync(sync, { recursive: true }) // created once by hand on the first machine
   assert.deepEqual(push(a, 'pc'), { ok: true, gen: 1 })
   assert.equal(readMeta(sync)?.gen, 1)
 
@@ -126,6 +129,7 @@ test('round trip: A pushes, B pulls, B pushes, a stale A push is refused', () =>
   const stale = push(a, 'pc')
   assert.equal(stale.ok, false, 'stale push refused')
   assert.equal(readMeta(sync)?.gen, 2, 'remote untouched')
+  assert.ok(readdirSync(a.backupsDir).some(f => f.startsWith('conflict-')), 'stale work kept')
 
   assert.equal(pull(a).pulled, true)
   assert.deepEqual(keys(a.db), ['from-a', 'from-b'])
@@ -285,6 +289,9 @@ export function pull(p: HandoffPaths, now = new Date()): { pulled: boolean, gen:
 }
 
 export function push(p: HandoffPaths, host: string, now = new Date()): { ok: true, gen: number } | { ok: false, conflict: SyncMeta } {
+  // A missing folder means OneDrive has not delivered it yet (or is not signed in). Seeding it from here
+  // would publish this machine's old DB as gen 1 beside the real history and fork sync.json.
+  if (!existsSync(p.syncDir)) throw new Error(`sync folder missing: ${p.syncDir} — create it once on the first machine`)
   const remote = readMeta(p.syncDir)
   const local = readLocalGen(p.stateFile)
   if (!canPush(remote, local)) {
@@ -312,7 +319,7 @@ export function heartbeat(p: HandoffPaths, host: string, now = new Date()) {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/handoff.test.ts`
-Expected: PASS, 4 tests. If the round-trip `stale push refused` passes, also confirm `backups/conflict-*.db` exists under `a` (add `assert.ok(readdirSync(a.backupsDir).some(f => f.startsWith('conflict-')))` if missing).
+Expected: PASS, 4 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -472,7 +479,7 @@ export default defineNitroPlugin((nitro) => {
 })
 ```
 
-Note: `lastChanges` starts at 0 and a fresh connection's `total_changes()` is non-zero after migrations write, so the first tick after boot pushes once. That is intended — it publishes this machine's heartbeat and gen.
+Note: `lastChanges` starts at 0, so the first tick after any boot-time write (a migration, the cv_path normalisation) pushes once; with no writes it only heartbeats. Both are fine.
 
 - [ ] **Step 4: Write the endpoints**
 
@@ -625,7 +632,7 @@ async function syncNow() {
 }
 ```
 
-and add `SyncState` to the `~/types` import. Call `refreshSync()` in the existing `onMounted` interval body unconditionally every tick is too chatty — instead refresh it once when `running` flips to false (add `watch(running, r => { if (!r) refreshSync() })`).
+and add `SyncState` to the `~/types` import. Refresh it when a job finishes, not on every poll tick: `watch(running, r => { if (!r) refreshSync() })`.
 
 - [ ] **Step 3: Template** — before the Yield `UCard`:
 
@@ -784,7 +791,7 @@ export function mergeInto(target: Database.Database, sourceFile: string): Record
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]?.replaceAll('\\', '/')}` || process.argv[1]?.endsWith('merge-db.ts')) {
+if (process.argv[1]?.endsWith('merge-db.ts')) { // run directly, not imported by the test
   const [source, targetFile = 'data/jobfinder.db'] = process.argv.slice(2)
   if (!source) {
     console.error('usage: node scripts/merge-db.ts <source.db> [target.db]')
@@ -818,7 +825,7 @@ git commit -m "scripts/merge-db.ts: one-time insert-only merge of a second machi
 
 - [ ] **Step 1: `SETUP.md` — "Two machines"** covering, in order:
   1. Both machines must never run `npm run dev` at the same time — sync is a hand-off, not a live share.
-  2. `.env`: set `JOBFINDER_SYNC_DIR` (paths for Windows and macOS above).
+  2. Create the folder once on Windows (`mkdir C:\Users\<you>\OneDrive\job-finder-sync`) and set `JOBFINDER_SYNC_DIR` in `.env` on both machines. On the Mac, start the app only after Finder shows that folder **and its `sync.json`** — a push refuses while the folder is missing, but a folder delivered without its files would look like a fresh start.
   3. Copy `.env`, `google-oauth.json`, `gmail-token.json` by hand once (USB / password manager — not OneDrive).
   4. On the Mac: `npm install` under the Volta-pinned Node, then `npm run login`.
   5. First Mac boot pulls the shared DB; its old DB lands in `backups/pre-pull-*.db`. Merge it once with the server stopped: `node scripts/merge-db.ts backups/pre-pull-<stamp>.db`, start the server, Pipeline → run a sweep.
@@ -835,7 +842,7 @@ git commit -m "scripts/merge-db.ts: one-time insert-only merge of a second machi
   3. Mac: `npm run dev` → log shows `[sync] pulled gen N`; post count matches; `curl -s http://127.0.0.1:3939/api/sync` shows the same gen.
   4. Mac: merge its old DB (SETUP step 5), dismiss one post, Sync now → gen N+1.
   5. Windows: start → `[sync] pulled gen N+1`; the dismissed post is dismissed.
-  6. Negative check: with Windows at gen N+1 and the Mac closed, hand-edit `sync.json` `gen` to N+5 on Windows' copy, press Sync now → conflict banner, `backups/conflict-*.db` exists, `sync.json` still says N+5. Restore by restarting (pull fails integrity? no — it pulls the same snapshot) and re-setting gen.
+  6. Negative check (Mac closed): on Windows, edit `sync.json` `gen` to N+5, press Sync now → conflict banner, a new `backups/conflict-*.db`, `sync.json` still N+5. Then set `gen` back to N+1 and restart — no pull (equal gen), pushing resumes.
 
 - [ ] **Step 4: Commit**
 
