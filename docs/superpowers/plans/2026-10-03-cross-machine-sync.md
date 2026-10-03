@@ -51,6 +51,7 @@
   - `heartbeat(p: HandoffPaths, host: string, now?: Date): void`
   - `otherActive(remote: SyncMeta | null, host: string, now?: Date): boolean`
   - `mirror(from: string, to: string): number` (files copied)
+  - `strays(syncDir: string): string[]` — sync-client conflict copies; `pull` returns an error and `push` throws while any exist
 
 - [ ] **Step 1: Write the failing test**
 
@@ -64,7 +65,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import Database from 'better-sqlite3'
-import { canPush, mirror, otherActive, pull, push, readLocalGen, readMeta, shouldPull, type HandoffPaths } from '../server/utils/handoff.ts'
+import { canPush, mirror, otherActive, pull, push, readLocalGen, readMeta, shouldPull, strays, type HandoffPaths } from '../server/utils/handoff.ts'
 
 function machine(root: string, name: string, syncDir: string): HandoffPaths {
   const base = join(root, name)
@@ -148,6 +149,22 @@ test('corrupt snapshot: pull fails closed and keeps the local DB', () => {
   assert.ok(r.error)
   assert.deepEqual(keys(b.db), ['local'])
   assert.equal(readLocalGen(b.stateFile), 0)
+})
+
+test('a OneDrive conflict copy stops both pull and push', () => {
+  const root = mkdtempSync(join(tmpdir(), 'jobfinder-handoff-'))
+  const sync = join(root, 'sync')
+  mkdirSync(sync)
+  const a = machine(root, 'a', sync)
+  insert(a.db, 'x')
+  assert.deepEqual(push(a, 'pc'), { ok: true, gen: 1 })
+  writeFileSync(join(sync, 'sync-Mac.json'), JSON.stringify({ gen: 1, host: 'mac', pushedAt: '', heartbeatAt: '' }))
+  assert.deepEqual(strays(sync), ['sync-Mac.json'])
+  assert.throws(() => push(a, 'pc'), /conflict copy.*sync-Mac\.json/)
+  writeFileSync(join(sync, 'sync.json'), JSON.stringify({ gen: 2, host: 'mac', pushedAt: '', heartbeatAt: '' }))
+  const r = pull(a)
+  assert.equal(r.pulled, false)
+  assert.match(r.error ?? '', /conflict copy/)
 })
 
 test('mirror copies new and changed files, never deletes', () => {
@@ -238,6 +255,29 @@ function vacuumInto(src: string, target: string) {
   renameSync(tmp, target)
 }
 
+/** A safety copy in backups/, keeping the newest 5 of its kind — backup.ts prunes only jobfinder-*.db. */
+function safetyCopy(p: HandoffPaths, kind: 'pre-pull' | 'conflict', now: Date) {
+  vacuumInto(p.db, join(p.backupsDir, `${kind}-${stamp(now)}.db`))
+  const old = readdirSync(p.backupsDir).filter(f => f.startsWith(`${kind}-`) && f.endsWith('.db')).sort().slice(0, -5)
+  old.forEach(f => rmSync(join(p.backupsDir, f)))
+}
+
+const OWN = new Set(['jobfinder.db', 'jobfinder.db.tmp', 'sync.json', 'sync.json.tmp', 'cv'])
+
+/**
+ * Anything else in the folder is a sync client's conflict copy (`sync-<machine>.json`,
+ * `jobfinder-<machine>.db`): both machines pushed the same generation — e.g. Sync now, then the laptop
+ * closed before OneDrive finished uploading. The data has forked; neither side may pull or push until
+ * the owner picks one (merge the other with scripts/merge-db.ts) and deletes the stray.
+ */
+export function strays(syncDir: string): string[] {
+  return existsSync(syncDir) ? readdirSync(syncDir).filter(f => !OWN.has(f)) : []
+}
+function assertNoStrays(syncDir: string) {
+  const s = strays(syncDir)
+  if (s.length) throw new Error(`conflict copy in the sync folder: ${s.join(', ')} — merge it with scripts/merge-db.ts, delete it, restart`)
+}
+
 /** Copies files that are missing or differ in size/mtime. Never deletes: a mirror is not a sync. */
 export function mirror(from: string, to: string): number {
   if (!existsSync(from)) return 0
@@ -267,6 +307,7 @@ export function pull(p: HandoffPaths, now = new Date()): { pulled: boolean, gen:
   if (!shouldPull(remote, local)) return { pulled: false, gen: local }
   const tmp = `${p.db}.pull.tmp`
   try {
+    assertNoStrays(p.syncDir)
     copyFileSync(snapFile(p), tmp)
     const check = new Database(tmp, { readonly: true, fileMustExist: true })
     try {
@@ -275,7 +316,7 @@ export function pull(p: HandoffPaths, now = new Date()): { pulled: boolean, gen:
     } finally {
       check.close()
     }
-    if (existsSync(p.db)) vacuumInto(p.db, join(p.backupsDir, `pre-pull-${stamp(now)}.db`))
+    if (existsSync(p.db)) safetyCopy(p, 'pre-pull', now)
     rmSync(`${p.db}-wal`, { force: true })
     rmSync(`${p.db}-shm`, { force: true })
     renameSync(tmp, p.db)
@@ -292,11 +333,12 @@ export function push(p: HandoffPaths, host: string, now = new Date()): { ok: tru
   // A missing folder means OneDrive has not delivered it yet (or is not signed in). Seeding it from here
   // would publish this machine's old DB as gen 1 beside the real history and fork sync.json.
   if (!existsSync(p.syncDir)) throw new Error(`sync folder missing: ${p.syncDir} — create it once on the first machine`)
+  assertNoStrays(p.syncDir)
   const remote = readMeta(p.syncDir)
   const local = readLocalGen(p.stateFile)
   if (!canPush(remote, local)) {
     // keep this machine's work recoverable before it stops publishing
-    vacuumInto(p.db, join(p.backupsDir, `conflict-${stamp(now)}.db`))
+    safetyCopy(p, 'conflict', now)
     return { ok: false, conflict: remote! }
   }
   vacuumInto(p.db, snapFile(p))
@@ -319,7 +361,7 @@ export function heartbeat(p: HandoffPaths, host: string, now = new Date()) {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/handoff.test.ts`
-Expected: PASS, 4 tests.
+Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -339,9 +381,10 @@ git commit -m "handoff: pull/push a VACUUM INTO snapshot through a synced folder
 **Interfaces:**
 - Consumes: everything Task 1 produces.
 - Produces:
-  - `handoffState(): HandoffState` where `HandoffState = { enabled: boolean, host: string, gen: number, pushDisabled: string | null, conflict: SyncMeta | null, otherActive: boolean, lastPushAt: string | null, lastError: string | null, lastChanges: number }`
+  - `handoffState(): HandoffState` where `HandoffState = { enabled: boolean, host: string, gen: number, pushDisabled: string | null, conflict: SyncMeta | null, otherActive: boolean, lastPushAt: string | null, lastError: string | null, lastSig: string }`
+  - `changeSig(): string` exported from `server/utils/db.ts`
   - `bootPull(): void` — no-op when disabled.
-  - `pushNow(changes: number): HandoffState`
+  - `pushNow(sig: string): HandoffState`
   - `GET /api/sync` → `HandoffState`; `POST /api/sync/push` → `HandoffState`
 
 - [ ] **Step 0: Check no job is running**
@@ -368,7 +411,8 @@ export interface HandoffState {
   otherActive: boolean
   lastPushAt: string | null
   lastError: string | null
-  lastChanges: number
+  /** `data_version:total_changes` at the last push — see the plugin for why both. */
+  lastSig: string
 }
 
 const g = globalThis as { __jobfinderHandoff?: HandoffState }
@@ -389,7 +433,7 @@ export function handoffPaths(): HandoffPaths | null {
 export function handoffState(): HandoffState {
   g.__jobfinderHandoff ??= {
     enabled: !!handoffPaths(), host: hostname(), gen: 0, pushDisabled: null, conflict: null,
-    otherActive: false, lastPushAt: null, lastError: null, lastChanges: 0
+    otherActive: false, lastPushAt: null, lastError: null, lastSig: ''
   }
   const s = g.__jobfinderHandoff
   const p = handoffPaths()
@@ -415,7 +459,7 @@ export function bootPull() {
   if (s.otherActive) console.warn('[sync] the other machine looks active — close it before working here')
 }
 
-export function pushNow(changes: number): HandoffState {
+export function pushNow(sig: string): HandoffState {
   const s = handoffState()
   const p = handoffPaths()
   if (!p || s.pushDisabled || s.conflict) return s
@@ -423,14 +467,18 @@ export function pushNow(changes: number): HandoffState {
     const r = push(p, s.host)
     if (r.ok) {
       s.lastPushAt = new Date().toISOString()
-      s.lastChanges = changes
+      s.lastSig = sig
       s.lastError = null
     } else {
       s.conflict = r.conflict
       console.error(`[sync] ${r.conflict.host} pushed gen ${r.conflict.gen} since this machine pulled — not pushing; restart to pull it`)
     }
   } catch (e) {
-    s.lastError = (e as Error).message
+    const msg = (e as Error).message
+    // a forked folder is sticky (heartbeats stop too); a missing folder or an I/O error retries next tick
+    if (msg.startsWith('conflict copy')) s.pushDisabled = msg
+    else s.lastError = msg
+    console.error(`[sync] ${msg}`)
   }
   return handoffState()
 }
@@ -456,30 +504,43 @@ function open() {
   mkdirSync(dirname(DB_PATH), { recursive: true })
 ```
 
+and, after `export { sqlite }`:
+
+```ts
+/**
+ * Moves on any commit to the file. Both halves are needed: total_changes() counts this connection
+ * only, and the job runners (scrape ingest, drafts, gaps, paste) write through their own
+ * openWritableDb() connections — which data_version sees, because it moves on commits by OTHER
+ * connections. Either alone misses a class of writes.
+ */
+export const changeSig = (): string =>
+  `${sqlite.pragma('data_version', { simple: true })}:${(sqlite.prepare('SELECT total_changes() n').get() as { n: number }).n}`
+```
+
 - [ ] **Step 3: Write `server/plugins/handoff.ts`**
 
 ```ts
-// Pushes a snapshot every 2 minutes when this server's connection has written anything. total_changes()
-// counts this connection only, which is every write: the server is the sole writer.
+// Pushes a snapshot every 2 minutes when anything committed to the database (changeSig in db.ts).
 // ponytail: whole-file snapshot (~8 MB); switch to session changesets if the DB passes ~100 MB.
-import { sqlite } from '../utils/db'
+import { changeSig } from '../utils/db'
 import { beat, handoffState, pushNow } from '../utils/handoff-runtime'
 
 const EVERY_MS = 2 * 60_000
 
 export default defineNitroPlugin((nitro) => {
   if (!handoffState().enabled) return
-  const changes = () => (sqlite.prepare('SELECT total_changes() n').get() as { n: number }).n
   const timer = setInterval(() => {
-    const n = changes()
-    if (n !== handoffState().lastChanges) pushNow(n)
+    const sig = changeSig()
+    if (sig !== handoffState().lastSig) pushNow(sig)
     else beat()
   }, EVERY_MS)
   nitro.hooks.hook('close', () => clearInterval(timer))
 })
 ```
 
-Note: `lastChanges` starts at 0, so the first tick after any boot-time write (a migration, the cv_path normalisation) pushes once; with no writes it only heartbeats. Both are fine.
+Note: `lastSig` starts empty, so the first tick after boot always pushes once — publishing this machine's gen and heartbeat. Intended.
+
+Verify the job-runner half before trusting it: with sync on, run a paste (Posts view) or a short scrape, wait 2 minutes, and confirm `gen` in `sync.json` moved. That is the write path `total_changes()` alone missed.
 
 - [ ] **Step 4: Write the endpoints**
 
@@ -491,10 +552,9 @@ export default defineEventHandler(() => handoffState())
 
 ```ts
 // server/api/sync/push.post.ts
-import { sqlite } from '../../utils/db'
+import { changeSig } from '../../utils/db'
 import { pushNow } from '../../utils/handoff-runtime'
-export default defineEventHandler(() =>
-  pushNow((sqlite.prepare('SELECT total_changes() n').get() as { n: number }).n))
+export default defineEventHandler(() => pushNow(changeSig()))
 ```
 
 - [ ] **Step 5: Document the variable in `.env.example`**
@@ -780,7 +840,7 @@ export function mergeInto(target: Database.Database, sourceFile: string): Record
     target.transaction(() => {
       for (const t of TABLES) {
         const cols = (target.prepare(`SELECT name FROM pragma_table_info('${t}')`).all() as { name: string }[]).map(c => c.name)
-        const srcCols = new Set((target.prepare(`SELECT name FROM src.pragma_table_info('${t}')`).all() as { name: string }[]).map(c => c.name))
+        const srcCols = new Set((target.prepare(`SELECT name FROM pragma_table_info('${t}', 'src')`).all() as { name: string }[]).map(c => c.name))
         const shared = cols.filter(c => srcCols.has(c)).map(c => `"${c}"`).join(', ')
         out[t] = target.prepare(`INSERT OR IGNORE INTO main."${t}" (${shared}) SELECT ${shared} FROM src."${t}"`).run().changes
       }
@@ -803,7 +863,7 @@ if (process.argv[1]?.endsWith('merge-db.ts')) { // run directly, not imported by
 }
 ```
 
-(`src.pragma_table_info` handles a source one migration behind: only shared columns are copied. Adjust per the Step 1 schema check if `post_requirements` needs natural-key dedupe.)
+(`pragma_table_info(t, 'src')` — schema as the last argument, the documented form — handles a source one migration behind: only shared columns are copied. Adjust per the Step 1 schema check if `post_requirements` needs natural-key dedupe.)
 
 - [ ] **Step 4: Run test — expect PASS**
 
@@ -829,7 +889,7 @@ git commit -m "scripts/merge-db.ts: one-time insert-only merge of a second machi
   3. Copy `.env`, `google-oauth.json`, `gmail-token.json` by hand once (USB / password manager — not OneDrive).
   4. On the Mac: `npm install` under the Volta-pinned Node, then `npm run login`.
   5. First Mac boot pulls the shared DB; its old DB lands in `backups/pre-pull-*.db`. Merge it once with the server stopped: `node scripts/merge-db.ts backups/pre-pull-<stamp>.db`, start the server, Pipeline → run a sweep.
-  6. Before closing a machine: Run view → **Sync now** (the 2-minute push covers you if you forget).
+  6. Before closing a machine: Run view → **Sync now**, then **wait for OneDrive's synced checkmark on the folder** before closing the lid (the 2-minute push covers a forgotten button, not an unfinished upload). If the upload had not finished and both machines pushed, OneDrive leaves a conflict copy (`sync-<machine>.json`); both machines then refuse to sync and name the file. Fix: merge the other DB with `scripts/merge-db.ts`, delete the stray, restart.
   7. The OneDrive copy holds recruiter names/addresses and the CV.
 
 - [ ] **Step 2: `CLAUDE.md`** — add `JOBFINDER_SYNC_DIR` to the `.env` bullet, and under Gotchas → The server and the UI:
