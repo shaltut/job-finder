@@ -579,6 +579,7 @@ async function disconnectGmail() {
           >
             <UInputTags
               v-model="form.scope.primarySkills"
+              add-on-blur
               class="w-full"
             />
           </UFormField>
@@ -589,6 +590,7 @@ async function disconnectGmail() {
           >
             <UInputTags
               v-model="form.scope.secondarySkills"
+              add-on-blur
               class="w-full"
             />
           </UFormField>
@@ -599,6 +601,7 @@ async function disconnectGmail() {
           >
             <UInputTags
               v-model="form.scope.excludedRoles"
+              add-on-blur
               class="w-full"
             />
           </UFormField>
@@ -652,6 +655,7 @@ async function disconnectGmail() {
           >
             <UInputTags
               v-model="form.background.gaps"
+              add-on-blur
               class="w-full"
             />
           </UFormField>
@@ -663,6 +667,7 @@ async function disconnectGmail() {
             >
               <UInputTags
                 v-model="form.background.strengths"
+                add-on-blur
                 class="w-full"
               />
             </UFormField>
@@ -672,6 +677,7 @@ async function disconnectGmail() {
             >
               <UInputTags
                 v-model="form.background.neverClaim"
+                add-on-blur
                 class="w-full"
               />
             </UFormField>
@@ -761,6 +767,7 @@ async function disconnectGmail() {
           >
             <UInputTags
               v-model="form.terms"
+              add-on-blur
               placeholder="e.g. senior &lt;your role&gt; hiring"
               class="w-full"
             />
@@ -772,6 +779,7 @@ async function disconnectGmail() {
           >
             <UInputTags
               v-model="form.titles"
+              add-on-blur
               placeholder="e.g. Senior &lt;Your Title&gt;"
               class="w-full"
             />
@@ -783,6 +791,7 @@ async function disconnectGmail() {
           >
             <UInputTags
               v-model="form.excludes"
+              add-on-blur
               placeholder="e.g. example.com"
               class="w-full"
             />

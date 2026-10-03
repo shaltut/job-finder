@@ -338,3 +338,12 @@ test('a bulk Exclude of a full page fits the endpoint cap', () => {
   const cap = Number(src.match(/needles: z\.array\(needle\)\.min\(1\)\.max\(([0-9]+)\)/)?.[1])
   assert.ok(cap >= 200, `needles cap is ${cap}, a full page can need 200`)
 })
+
+test('every tags field on Settings commits what was typed when it loses focus', () => {
+  // UInputTags adds a tag only on Enter by default. Typed text left in the box was silently dropped by
+  // Save — measured 2026-10-03: the exclude list stayed [] however often the owner "saved" it.
+  const src = readFileSync('app/pages/settings.vue', 'utf8')
+  const tags = src.split('<UInputTags').slice(1).map(s => s.slice(0, s.indexOf('/>')))
+  assert.ok(tags.length >= 9, `anchor: found ${tags.length} UInputTags`)
+  for (const t of tags) assert.match(t, /add-on-blur/, `a UInputTags without add-on-blur: ${t.trim().split('\n')[0]}`)
+})
