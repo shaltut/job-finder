@@ -4,7 +4,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { importLegacy, readSettingsFrom, seedDefaults, writeSettingsTo } from '../../shared/settings.ts'
-import { migrateDb, sqlite } from '../utils/db'
+import { changeSig, migrateDb, sqlite } from '../utils/db'
+import { handoffState } from '../utils/handoff-runtime'
 import { restoreQueue, stopForShutdown } from '../utils/jobs'
 
 const LEGACY_PATH = resolve(process.cwd(), 'config.json')
@@ -77,4 +78,6 @@ export default defineNitroPlugin((nitroApp) => {
   // a plugin file added to a running dev server is not picked up until a full restart — measured
   // 2026-10-03, a separate server/plugins/queue.ts never ran across a worker rebuild.
   restoreQueue()
+  // last: every write above is boot housekeeping, not something to publish (see server/plugins/handoff.ts)
+  handoffState().lastSig = changeSig()
 })

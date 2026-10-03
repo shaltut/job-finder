@@ -129,7 +129,7 @@ export function restoreQueue(log: (line: string) => void = console.log) {
     { id: number, lane: Lane, kind: Kind, args: string, queued_at: string, started_at: string | null }[]
   if (!rows.length) return
   const h = handoffState()
-  if (!shouldRestore({ pulled: h.pulled, otherActive: h.otherActive })) {
+  if (!shouldRestore({ pulled: h.pulled })) {
     sqlite.prepare('DELETE FROM job_queue').run()
     log(`[queue] ${rows.length} job(s) came with the other machine's data (${rows.map(r => r.kind).join(', ')}) — not resumed here; queue them again if still wanted`)
     return
@@ -183,6 +183,8 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
 }
 
 function pump() {
+  // a closing worker starts nothing: its children would outlive it, and the next worker resumes the row anyway
+  if (state.shuttingDown) return
   for (const lane of Object.keys(lanes) as Lane[]) {
     if (lanes[lane].current) continue
     // the draft lane runs hand-picked drafts first, then the Gmail sync, then bulk (queue-core.ts)

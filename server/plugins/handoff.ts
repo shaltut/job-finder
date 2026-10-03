@@ -7,9 +7,9 @@ const EVERY_MS = 2 * 60_000
 
 export default defineNitroPlugin((nitro) => {
   if (!handoffState().enabled) return
-  // the baseline is "now", not empty: a machine that booted before OneDrive delivered the other one's
-  // push must not publish its unchanged, stale copy two minutes later on its own
-  handoffState().lastSig = changeSig()
+  // The baseline ("no change since boot") is taken at the end of migrate.ts, after every boot-time write:
+  // plugins run in file-name order, so taking it here would count the migrations and the queue restore
+  // as changes and push an unchanged — possibly stale — copy two minutes after boot.
   const timer = setInterval(() => {
     const sig = changeSig()
     if (sig !== handoffState().lastSig) pushNow(sig)

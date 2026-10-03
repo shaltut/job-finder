@@ -186,3 +186,12 @@ test('mirror copies new and changed files, never deletes', () => {
   assert.ok(existsSync(join(to, 'only-here.pdf')))
   assert.equal(readFileSync(join(to, 'tailored', 'x', 'cv.pdf'), 'utf8'), 'a')
 })
+
+test('the boot pull runs once per process, never again on a dev worker rebuild', async () => {
+  const { firstBootInProcess } = await import('../server/utils/handoff-runtime.ts')
+  const dir = mkdtempSync(join(tmpdir(), 'jobfinder-boot-'))
+  const marker = join(dir, 'boot-pid')
+  assert.equal(firstBootInProcess(marker, 100), true)
+  assert.equal(firstBootInProcess(marker, 100), false, 'same process: a rebuilt worker')
+  assert.equal(firstBootInProcess(marker, 200), true, 'a real restart')
+})

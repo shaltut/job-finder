@@ -108,14 +108,29 @@ test('withRetry: Stop during the back-off ends it at once', async () => {
   assert.ok(Date.now() - t0 < 1_000, `took ${Date.now() - t0}ms`)
 })
 
-test('restore: never after a hand-off pull or while the other machine is active', () => {
-  assert.equal(shouldRestore({ pulled: false, otherActive: false }), true)
-  assert.equal(shouldRestore({ pulled: true, otherActive: false }), false, 'the rows are the other machine\'s')
-  assert.equal(shouldRestore({ pulled: false, otherActive: true }), false)
+test('restore: never after a hand-off pull — those rows are the other machine\'s', () => {
+  assert.equal(shouldRestore({ pulled: true }), false)
 })
 
 test('a resumed draft is marked so it writes no skip rows', () => {
   assert.deepEqual(resumedArgs('draft', { n: 10 } as QItem['args'], true), { n: 10, resumed: true })
   assert.deepEqual(resumedArgs('draft', { key: 'a' }, false), { key: 'a' }, 'never started: an ordinary run')
   assert.deepEqual(resumedArgs('gaps', {}, true), {}, 'only drafts write skips')
+})
+
+// In-flight items finish; nothing new starts after a failure — the old sequential loop also ended the job
+// on an uncaught throw.
+test('pool: one item failing never cuts the others short — they finish, then the failure surfaces', async () => {
+  const finished: number[] = []
+  await assert.rejects(pool([1, 2, 3], 2, async (i) => {
+    if (i === 1) throw new Error('gmail down')
+    await new Promise(r => setTimeout(r, 20))
+    finished.push(i)
+  }), /gmail down/)
+  assert.deepEqual(finished, [2], 'the in-flight group finished before the pool returned; 3 never started')
+})
+
+test('restore: this machine\'s own queue survives the other machine merely being active', () => {
+  assert.equal(shouldRestore({ pulled: false }), true)
+  assert.equal(shouldRestore({ pulled: true }), false)
 })

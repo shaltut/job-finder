@@ -2,7 +2,8 @@
 // the endpoints and the boot pull share. On globalThis for the same reason __jobfinderRunner is — HMR
 // inside one Nitro worker re-evaluates modules.
 import { hostname } from 'node:os'
-import { resolve } from 'node:path'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { heartbeat, otherActive, pull, push, readLocalGen, readMeta, type HandoffPaths, type SyncMeta } from './handoff.ts'
 
 export interface HandoffState {
@@ -52,11 +53,27 @@ export function handoffState(): HandoffState {
   return s
 }
 
+/**
+ * True only the first time this OS process asks. The Nitro dev server builds a new worker thread on every
+ * server edit and starts it before the old one has terminated, so a pull there would replace — or unlink
+ * the WAL of — a database the old worker still holds open. Worker threads share the pid; a real restart
+ * does not. A file, because globalThis and process.env are per thread.
+ */
+export function firstBootInProcess(marker: string, pid = process.pid): boolean {
+  try {
+    if (readFileSync(marker, 'utf8').trim() === String(pid)) return false
+  } catch { /* no marker yet */ }
+  mkdirSync(dirname(marker), { recursive: true })
+  writeFileSync(marker, String(pid))
+  return true
+}
+
 /** Called from db.ts before the connection opens. */
 export function bootPull() {
   const p = handoffPaths()
   if (!p) return
   const s = handoffState()
+  if (!firstBootInProcess(resolve(process.cwd(), 'data/.boot-pid'))) return
   const r = pull(p)
   if (r.error) {
     s.pushDisabled = `boot pull failed: ${r.error} — restart once OneDrive has finished syncing`

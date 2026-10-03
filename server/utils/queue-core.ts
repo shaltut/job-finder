@@ -47,13 +47,26 @@ export function restorePlan(rows: { id: number, lane: Lane, kind: string, starte
   return { drop, order, seq: byId.at(-1)?.id ?? 0 }
 }
 
-/** Runs `fn` over `items`, at most `n` at a time. After `signal` aborts, no new item starts. */
+/**
+ * Runs `fn` over `items`, at most `n` at a time. After `signal` aborts, no new item starts. A failing item
+ * never cuts the others short: every worker settles first, then the first failure is rethrown — the caller
+ * closes the database and the CV browser when this returns, and a recruiter still between createDraft and
+ * persist() would otherwise lose its row.
+ */
 export async function pool<T>(items: T[], n: number, fn: (t: T) => Promise<void>, signal?: AbortSignal): Promise<void> {
   let next = 0
+  let failed: { error: unknown } | null = null
   const worker = async () => {
-    while (next < items.length && !signal?.aborted) await fn(items[next++]!)
+    while (next < items.length && !signal?.aborted && !failed) {
+      try {
+        await fn(items[next++]!)
+      } catch (error) {
+        failed ??= { error }
+      }
+    }
   }
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker))
+  if (failed) throw (failed as { error: unknown }).error
 }
 
 /**
@@ -82,9 +95,10 @@ export async function withRetry<T>(fn: () => Promise<T>, o: { signal?: AbortSign
 /**
  * Whether a fresh worker resumes the persisted queue. Not after a hand-off pull: those rows are the other
  * machine's, and it may have finished them after its last push (or still be running them) — resuming would
- * draft the same recruiters twice. Not while the other machine looks active, for the same reason.
+ * draft the same recruiters twice. Without a pull the rows are this machine's own, whatever the other
+ * machine is doing.
  */
-export const shouldRestore = (o: { pulled: boolean, otherActive: boolean }) => !o.pulled && !o.otherActive
+export const shouldRestore = (o: { pulled: boolean }) => !o.pulled
 
 /**
  * A draft that was running when its worker died is marked `resumed`: it may have been cut down inside
