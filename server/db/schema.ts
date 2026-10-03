@@ -194,3 +194,19 @@ export const settings = sqliteTable('settings', {
 ])
 
 export type Settings = typeof settings.$inferSelect
+
+/**
+ * The job queue, durable. jobs.ts keeps the live queue in memory and mirrors every change here, so a
+ * Nitro worker rebuild (any server file edit) or a restart no longer loses it — measured 2026-10-01, one
+ * edit dropped a running draft and 18 queued. `started_at` set means the job was running when the
+ * worker died; server/plugins/queue.ts restores the table at boot (queue-core.ts restorePlan()).
+ * Rides in the cross-machine hand-off snapshot like any other table.
+ */
+export const jobQueue = sqliteTable('job_queue', {
+  id: integer('id').primaryKey(),
+  lane: text('lane').notNull(),
+  kind: text('kind').notNull(),
+  args: text('args').notNull(),
+  queuedAt: text('queued_at').notNull(),
+  startedAt: text('started_at')
+})

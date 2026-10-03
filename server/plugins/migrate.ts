@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { importLegacy, readSettingsFrom, seedDefaults, writeSettingsTo } from '../../shared/settings.ts'
 import { migrateDb, sqlite } from '../utils/db'
+import { restoreQueue } from '../utils/jobs'
 
 const LEGACY_PATH = resolve(process.cwd(), 'config.json')
 const SEED_PATH = resolve(process.cwd(), 'data/seed-background.json')
@@ -70,4 +71,8 @@ export default defineNitroPlugin(() => {
   if (fixed) console.log(`[db] normalised ${fixed} tailored-CV path(s) to /`)
   importLegacyConfig() // may create the row
   importSeedBackground() // then fills what the skill file used to hold
+  // Here rather than in a plugin of its own: it must run after the migrations that create job_queue, and
+  // a plugin file added to a running dev server is not picked up until a full restart — measured
+  // 2026-10-03, a separate server/plugins/queue.ts never ran across a worker rebuild.
+  restoreQueue()
 })

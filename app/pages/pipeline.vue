@@ -20,7 +20,7 @@ const { data: gmail, refresh: refreshGmail } = await useFetch<GmailStatus>('/api
 const { data: job, refresh: refreshJob } = await useFetch<JobState>('/api/job', {
   lazy: true,
   default: () => ({
-    lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null }, paste: { current: null, last: null } },
+    lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null }, paste: { current: null, last: null }, gaps: { current: null, last: null } },
     queue: [],
     busy: false
   })

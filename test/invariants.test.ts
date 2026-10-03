@@ -251,7 +251,10 @@ test('the draft gate asks Gmail, and still falls back to the cache without a tok
   // the run would look identical and simply email people mid-conversation. The fallback is equally
   // load-bearing in the other direction: without it a machine with no google-oauth.json cannot draft.
   const jobs = readFileSync('server/utils/jobs.ts', 'utf8')
-  const loop = jobs.slice(jobs.indexOf('for (const [email, posts] of groups)'), jobs.indexOf('const cc = ccFrom'))
+  // the per-recruiter body: a pool since 2026-10-03 (recruiters in parallel), a for-loop before
+  const start = jobs.indexOf('await pool([...groups]')
+  assert.ok(start > 0, 'anchor: the per-recruiter pool in runDraftJob')
+  const loop = jobs.slice(start, jobs.indexOf('const cc = ccFrom'))
   assert.match(loop, /closedInGmail\(/, 'the per-recruiter gate must consult Gmail when a token exists')
   assert.match(loop, /isClosed\(/, 'and must fall back to the contacts cache when it does not')
 })

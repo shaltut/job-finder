@@ -21,8 +21,10 @@ import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 import { closedInGmail, sweep } from './sync'
 import { runPasteJob } from './paste-job'
 import { runGapsJob } from './gaps-job'
+import { sqlite } from './db'
+import { concurrency, pickNext, pool, restorePlan, withRetry, type Lane } from './queue-core'
 
-export type Lane = 'scrape' | 'draft' | 'paste'
+export type { Lane }
 export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps'
 
 export interface JobArgs {
@@ -73,21 +75,68 @@ const state: RunnerState = g.__jobfinderRunner ??= {
   lanes: {
     scrape: { current: null, last: null },
     draft: { current: null, last: null },
-    paste: { current: null, last: null }
+    paste: { current: null, last: null },
+    gaps: { current: null, last: null }
   },
   queue: [],
   seq: 0
 }
-// A dev server that was already running holds a state object from before this lane existed.
+// A dev server that was already running holds a state object from before these lanes existed.
 state.lanes.paste ??= { current: null, last: null }
+state.lanes.gaps ??= { current: null, last: null }
 const { lanes, queue } = state
 
+// gaps has its own lane: it is OpenAI, not claude, and an hours-long backfill used to hold every Draft
+// press and the Gmail sync behind it. sync stays on the draft lane — beside drafting it could write an
+// application and a follow-up to the same recruiter at once.
 const laneOf = (kind: Kind): Lane =>
   kind === 'paste'
     ? 'paste'
-    : (kind === 'scrape' || kind === 'rescore' || kind === 'reflag' || kind === 'reextract' ? 'scrape' : 'draft')
+    : kind === 'gaps'
+      ? 'gaps'
+      : (kind === 'scrape' || kind === 'rescore' || kind === 'reflag' || kind === 'reextract' ? 'scrape' : 'draft')
 
-export const busy = () => !!(lanes.scrape.current || lanes.draft.current || lanes.paste.current)
+export const busy = () => !!(lanes.scrape.current || lanes.draft.current || lanes.paste.current || lanes.gaps.current)
+
+// The queue is mirrored into job_queue so a worker rebuild or a restart does not lose it (see
+// restoreQueue). Memory stays the source of truth while the worker lives; these only keep the table in step.
+const saved = {
+  add: (i: QueueItem) => sqlite.prepare('INSERT OR REPLACE INTO job_queue (id, lane, kind, args, queued_at, started_at) VALUES (?, ?, ?, ?, ?, NULL)')
+    .run(i.id, i.lane, i.kind, JSON.stringify(i.args), i.queuedAt),
+  start: (id: number, args: JobArgs) => sqlite.prepare('UPDATE job_queue SET started_at = ?, args = ? WHERE id = ?')
+    .run(new Date().toISOString(), JSON.stringify(args), id),
+  drop: (id: number) => sqlite.prepare('DELETE FROM job_queue WHERE id = ?').run(id)
+}
+
+/**
+ * At boot (server/plugins/queue.ts): put back what the previous worker left. Jobs it was running go to the
+ * front of their lane — a re-run draft is safe, drafted posts are out of its query and the Gmail gate
+ * refuses a recruiter with a pending draft — except scrape-lane jobs, which are dropped: re-running a
+ * scrape on every server edit would spend the LinkedIn rate limit. Only into an empty runner, so a
+ * module reload inside a live worker cannot double the queue.
+ */
+export function restoreQueue(log: (line: string) => void = console.log) {
+  if (queue.length || busy()) return
+  const rows = sqlite.prepare('SELECT id, lane, kind, args, queued_at, started_at FROM job_queue').all() as
+    { id: number, lane: Lane, kind: Kind, args: string, queued_at: string, started_at: string | null }[]
+  if (!rows.length) return
+  const plan = restorePlan(rows.map(r => ({ id: r.id, lane: r.lane, kind: r.kind, started: !!r.started_at })))
+  for (const id of plan.drop) {
+    const r = rows.find(x => x.id === id)!
+    log(`[queue] ${r.kind} #${id} was interrupted by a restart — not resumed (scrape-lane); press Start again`)
+    saved.drop(id)
+  }
+  for (const id of plan.order) {
+    const r = rows.find(x => x.id === id)!
+    const item: QueueItem = { id, lane: laneOf(r.kind), kind: r.kind, args: JSON.parse(r.args) as JobArgs, queuedAt: r.queued_at }
+    queue.push(item)
+    saved.add(item) // clears started_at, and fixes the lane of a row written before gaps had its own
+    if (r.started_at) log(`[queue] ${r.kind} #${id} was interrupted by a restart — resumed`)
+  }
+  state.seq = Math.max(state.seq, plan.seq)
+  log(`[queue] restored ${plan.order.length} job(s)`)
+  pump()
+}
 
 export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   // A bulk draft keeps only the keys not already waiting or running; pump() never coalesces a `keys`
@@ -114,6 +163,7 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
 
   const item: QueueItem = { id: ++state.seq, lane: laneOf(kind), kind, args, queuedAt: new Date().toISOString() }
   queue.push(item)
+  saved.add(item)
   pump()
   return item
 }
@@ -121,15 +171,20 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
 function pump() {
   for (const lane of Object.keys(lanes) as Lane[]) {
     if (lanes[lane].current) continue
-    const idx = queue.findIndex(q => q.lane === lane)
+    // the draft lane runs hand-picked drafts first, then the Gmail sync, then bulk (queue-core.ts)
+    const idx = pickNext(queue, lane)
     if (idx < 0) continue
     let item = queue.splice(idx, 1)[0]!
     if (item.kind === 'draft' && item.args.key) {
       // drain every other single-post draft request into this one session
       const more = queue.filter(q => q.kind === 'draft' && q.args.key)
-      more.forEach(q => queue.splice(queue.indexOf(q), 1))
+      more.forEach((q) => {
+        queue.splice(queue.indexOf(q), 1)
+        saved.drop(q.id) // now carried by this item's row
+      })
       item = { ...item, args: { keys: [item.args.key, ...more.map(q => q.args.key!)] } }
     }
+    saved.start(item.id, item.args)
     runJob(lane, item)
   }
 }
@@ -169,6 +224,7 @@ function runJob(lane: Lane, item: QueueItem) {
     job.child = null
     lanes[lane].current = null
     lanes[lane].last = job
+    saved.drop(job.id)
     if (args.auto) notify(job.log.at(-1) || `${kind} finished, exit ${code}`)
     pump()
   }
@@ -183,7 +239,7 @@ function runJob(lane: Lane, item: QueueItem) {
     return
   }
 
-  if (lane === 'draft') {
+  if (lane === 'draft' || lane === 'gaps') {
     // The drafter is an async pipeline, not a piped child: the server selects the posts, groups them by
     // recruiter and runs one claude session per group. `abort` gives Stop something to kill.
     const abort = new AbortController()
@@ -260,6 +316,7 @@ export function cancelQueued(id: number): boolean {
   const i = queue.findIndex(q => q.id === id)
   if (i < 0) return false
   queue.splice(i, 1)
+  saved.drop(id)
   return true
 }
 
@@ -273,7 +330,8 @@ export const stateView = () => ({
   lanes: {
     scrape: { current: jobView(lanes.scrape.current), last: jobView(lanes.scrape.last) },
     draft: { current: jobView(lanes.draft.current), last: jobView(lanes.draft.last) },
-    paste: { current: jobView(lanes.paste.current), last: jobView(lanes.paste.last) }
+    paste: { current: jobView(lanes.paste.current), last: jobView(lanes.paste.last) },
+    gaps: { current: jobView(lanes.gaps.current), last: jobView(lanes.gaps.last) }
   },
   queue,
   busy: busy()
@@ -384,11 +442,11 @@ async function runDraftJob(
     let tailoredCount = 0
     let fellBack = 0
 
-    for (const [email, posts] of groups) {
-      if (signal.aborted) {
-        push('stopped')
-        return 1
-      }
+    // Recruiters in parallel, JOBFINDER_DRAFT_CONCURRENCY at a time (default 2). Each group already has its
+    // own claude session, Gmail gate and persist() transaction, and better-sqlite3 is synchronous, so two
+    // groups never interleave inside a write. Every log line below starts with the address, which keeps an
+    // interleaved log readable. After Stop, no new group starts.
+    await pool([...groups], concurrency(process.env.JOBFINDER_DRAFT_CONCURRENCY), async ([email, posts]) => {
       // Never a third email, and never edit a draft already waiting to be sent — but asked of Gmail, which
       // is the truth about who has been written to, rather than of `contacts`, which is only as fresh as
       // the last sweep. With no token there is no truth to ask and the cache is all there is, which keeps
@@ -402,7 +460,7 @@ async function runDraftJob(
         // A network blip must not mark posts skipped: that verdict is permanent as far as this queue is
         // concerned. Writing no row leaves them unprocessed, the same posture as a drafter rejection.
         push(`${email}: could not reach Gmail to check the stage (${(e as Error).message}) — left for the next run`)
-        continue
+        return
       }
       if (closed) {
         // Still a refusal when the owner chose the post — this is the two-emails-ever ceiling, not a
@@ -421,7 +479,7 @@ async function runDraftJob(
             `).run(p.key, closed, email)
           }
         }
-        continue
+        return
       }
 
       const cc = ccFrom(groupEmails.get(email) ?? [], email, config.profile.email)
@@ -434,12 +492,18 @@ async function runDraftJob(
       // to use after filling in a setting the drafter said was missing.
       let res: DraftResponse
       try {
-        res = await runDrafter(req, config, { onLog: push, signal, masterCv: master })
+        // One retry after 10s, around the claude call only — never around createDraft below, where a
+        // retry could leave two drafts in Gmail. A contract rejection is retried too: the model is not
+        // deterministic and a second answer often passes. Stop is never retried.
+        res = await withRetry(() => runDrafter(req, config, { onLog: push, signal, masterCv: master }), {
+          signal,
+          onRetry: e => push(`${email}: retry 1/1 in 10s: ${e.message.slice(0, 200)}`)
+        })
       } catch (e) {
         // a chosen post's refusal already ends "press Draft again" (checkContract), and the bulk run
         // it would otherwise wait for may never select it
         push(`${email}: ${(e as Error).message} — nothing drafted${manual ? '' : ', the posts stay unprocessed and retry next run'}`)
-        continue
+        return
       }
 
       const carrier = res.results.find(r => r.body)
@@ -500,7 +564,11 @@ async function runDraftJob(
       // and the next bulk run will see it again. Say what actually happened to it.
       const passed = manual ? `${skipped} passed over (no verdict recorded)` : `${skipped} skipped`
       push(`${email}: ${drafted} drafted, ${passed}${where}`)
-      if (res.report) res.report.split('\n').filter(Boolean).forEach(push)
+      if (res.report) res.report.split('\n').filter(Boolean).forEach(line => push(`${email}: ${line}`))
+    }, signal)
+    if (signal.aborted) {
+      push('stopped')
+      return 1
     }
     if (config.tailorCv) push(`cv: ${tailoredCount} tailored, ${fellBack} fell back`)
     return 0

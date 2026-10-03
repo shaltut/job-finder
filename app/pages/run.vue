@@ -15,7 +15,7 @@ const since = ref<string>(config.since)
 const { data: job, refresh: refreshJob } = await useFetch<JobState>('/api/job', {
   lazy: true,
   default: () => ({
-    lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null }, paste: { current: null, last: null } },
+    lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null }, paste: { current: null, last: null }, gaps: { current: null, last: null } },
     queue: [],
     busy: false
   })
@@ -72,8 +72,8 @@ const startScrape = () => post('/api/run/scrape', {
   since: since.value
 })
 
-const active = computed(() => job.value.lanes.scrape.current ?? job.value.lanes.draft.current)
-const shown = computed(() => active.value ?? job.value.lanes.scrape.last ?? job.value.lanes.draft.last)
+const active = computed(() => job.value.lanes.scrape.current ?? job.value.lanes.draft.current ?? job.value.lanes.gaps.current)
+const shown = computed(() => active.value ?? job.value.lanes.scrape.last ?? job.value.lanes.draft.last ?? job.value.lanes.gaps.last)
 
 const logBox = useTemplateRef<HTMLElement>('logBox')
 watch(() => shown.value?.log.length, async () => {
@@ -106,12 +106,12 @@ const yieldColumns: TableColumn<YieldRow>[] = [
             @click="post('/api/job/stop', { lane: 'scrape' })"
           />
           <UButton
-            v-if="job.lanes.draft.current?.kind === 'gaps'"
+            v-if="job.lanes.gaps.current"
             label="Stop gaps"
             color="error"
             variant="subtle"
             icon="i-lucide-square"
-            @click="post('/api/job/stop', { lane: 'draft' })"
+            @click="post('/api/job/stop', { lane: 'gaps' })"
           />
         </template>
       </UDashboardNavbar>
