@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
-import type { JobState, YieldRow } from '~/types'
+import type { JobState, SyncState, YieldRow } from '~/types'
 
 useDashboard()
 useHead({ title: 'Run' })
@@ -39,6 +39,23 @@ watch(() => job.value.lanes.scrape.current, (now, before) => {
     refreshJob()
   }
 })
+
+const { data: syncState, refresh: refreshSync } = await useFetch<SyncState>('/api/sync', { lazy: true })
+watch(running, (r) => {
+  if (!r) refreshSync()
+})
+async function syncNow() {
+  try {
+    syncState.value = await $fetch<SyncState>('/api/sync/push', { method: 'POST' })
+    const s = syncState.value
+    toast.add({
+      title: s.conflict ? 'Not pushed — another machine pushed first' : s.lastError || s.pushDisabled ? 'Not pushed' : `Synced (gen ${s.gen})`,
+      color: s.conflict || s.lastError || s.pushDisabled ? 'error' : 'success'
+    })
+  } catch (e) {
+    toast.add({ title: 'Sync failed', description: (e as Error).message, color: 'error' })
+  }
+}
 
 async function post(url: string, body?: Record<string, unknown>) {
   try {
@@ -262,6 +279,51 @@ const yieldColumns: TableColumn<YieldRow>[] = [
         >
           {{ shown.log.join('\n') || 'waiting for output…' }}
         </div>
+      </UCard>
+
+      <UCard
+        v-if="syncState?.enabled"
+        class="shrink-0"
+      >
+        <div class="flex items-center gap-3 text-sm">
+          <span class="font-semibold text-highlighted">Sync</span>
+          <span class="text-muted mr-auto">
+            {{ syncState.host }} · gen {{ syncState.gen }} · last push {{ syncState.lastPushAt ? new Date(syncState.lastPushAt).toLocaleTimeString() : 'not yet this session' }}
+          </span>
+          <UButton
+            size="sm"
+            variant="soft"
+            icon="i-lucide-refresh-cw"
+            :disabled="!!syncState.conflict || !!syncState.pushDisabled"
+            @click="syncNow"
+          >
+            Sync now
+          </UButton>
+        </div>
+        <UAlert
+          v-if="syncState.conflict"
+          class="mt-3"
+          color="error"
+          :title="`${syncState.conflict.host} pushed gen ${syncState.conflict.gen} after this machine started. Restart to pull it — work done here since is in backups/conflict-*.db.`"
+        />
+        <UAlert
+          v-else-if="syncState.pushDisabled"
+          class="mt-3"
+          color="warning"
+          :title="syncState.pushDisabled"
+        />
+        <UAlert
+          v-else-if="syncState.otherActive"
+          class="mt-3"
+          color="warning"
+          title="The other machine looks active. Close it before working here."
+        />
+        <p
+          v-if="syncState.lastError"
+          class="mt-2 text-xs text-error"
+        >
+          {{ syncState.lastError }}
+        </p>
       </UCard>
 
       <UCard class="shrink-0">

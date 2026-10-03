@@ -74,6 +74,18 @@ export interface QueueItem {
   queuedAt: string
 }
 
+/** GET /api/sync — the cross-machine hand-off (server/utils/handoff-runtime.ts). */
+export interface SyncState {
+  enabled: boolean
+  host: string
+  gen: number
+  pushDisabled: string | null
+  conflict: { gen: number, host: string } | null
+  otherActive: boolean
+  lastPushAt: string | null
+  lastError: string | null
+}
+
 export interface JobState {
   lanes: Record<Lane, { current: JobView | null, last: JobView | null }>
   queue: QueueItem[]
