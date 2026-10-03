@@ -228,14 +228,17 @@ const REGIONS: [string, string][] = [['middle east', 'Middle East'], ['mena', 'M
 // no case, so a case test called them punctuation.
 const isWordChar = (ch: string | undefined) => !!ch && /[\p{L}\p{N}]/u.test(ch)
 
-function hasWord(hay: string, needle: string): boolean {
+/** Index of the first whole-word, case-insensitive occurrence of `needle` in `hay`, or -1. */
+export function wordAt(hay: string, needle: string): number {
   const h = hay.toLowerCase()
   const n = needle.toLowerCase()
   for (let i = h.indexOf(n); i >= 0; i = h.indexOf(n, i + 1)) {
-    if (!isWordChar(h[i - 1]) && !isWordChar(h[i + n.length])) return true
+    if (!isWordChar(h[i - 1]) && !isWordChar(h[i + n.length])) return i
   }
-  return false
+  return -1
 }
+
+export const hasWord = (hay: string, needle: string): boolean => wordAt(hay, needle) >= 0
 
 /**
  * Every country a free-text location names — for filtering, where a miss shows as "no country" rather
