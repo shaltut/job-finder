@@ -4,6 +4,7 @@ import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import * as schema from '../db/schema'
+import { bootPull } from './handoff-runtime'
 
 export const DB_PATH = resolve(process.cwd(), process.env.JOBFINDER_DB || 'data/jobfinder.db')
 
@@ -13,6 +14,7 @@ export const DB_PATH = resolve(process.cwd(), process.env.JOBFINDER_DB || 'data/
  * write lock. WAL still matters: it lets the scraper read while the server is mid-write.
  */
 function open() {
+  bootPull() // a newer snapshot from the other machine replaces the file before anything opens it
   mkdirSync(dirname(DB_PATH), { recursive: true })
   const sqlite = new Database(DB_PATH)
   sqlite.pragma('journal_mode = WAL')
@@ -30,6 +32,15 @@ export const db = drizzle(sqlite, { schema })
  * would mean two different code paths for one row.
  */
 export { sqlite }
+
+/**
+ * Moves on any commit to the file. Both halves are needed: total_changes() counts this connection
+ * only, and the job runners (scrape ingest, drafts, gaps, paste) write through their own
+ * openWritableDb() connections — which data_version sees, because it moves on commits by OTHER
+ * connections. Either alone misses a class of writes.
+ */
+export const changeSig = (): string =>
+  `${sqlite.pragma('data_version', { simple: true })}:${(sqlite.prepare('SELECT total_changes() n').get() as { n: number }).n}`
 
 /**
  * Applies migrations at startup, the way the original applied schema.sql idempotently from both
