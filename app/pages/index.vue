@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { findFinishedMatch, stalePastes, type FinishedPasteJob } from '#shared/paste-poll'
-import { activeChips, apiQuery, clampPage, DEFAULT_VIEW, nextSort, OPTIONS, parseView, rangeKeys, viewQuery, type PostsView } from '#shared/posts-view'
+import { activeChips, apiQuery, clampPage, DEFAULT_VIEW, narrows, nextSort, OPTIONS, parseView, rangeKeys, viewQuery, type PostsView } from '#shared/posts-view'
 import { sentTo, STAGE_LABEL } from '#shared/recruiter-stage'
 import type { TableColumn } from '@nuxt/ui'
 import type { JobState, PostRow } from '~/types'
@@ -491,7 +491,7 @@ function header(label: string, sortCol?: 'score' | 'title' | 'posted' | 'added',
     sortCol,
     sort: view.value.sort,
     dir: view.value.dir,
-    active: !!field && view.value[field] !== DEFAULT_VIEW[field],
+    active: !!field && narrows(field, view.value[field]),
     onSort: () => sortCol && setView(nextSort(view.value, sortCol))
   }, field
     ? {

@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { SORTS as SERVER_SORTS } from '../server/utils/posts-query.ts'
-import { activeChips, apiQuery, bulkDraftable, clampPage, DEFAULT_VIEW, nextSort, parseView, rangeKeys, SORTS, viewQuery } from '../shared/posts-view.ts'
+import { activeChips, apiQuery, bulkDraftable, clampPage, DEFAULT_VIEW, narrows, nextSort, parseView, rangeKeys, SORTS, viewQuery } from '../shared/posts-view.ts'
 
 test('the client sort list matches the server allowlist', () => {
   assert.deepEqual([...SORTS], [...SERVER_SORTS])
@@ -84,4 +84,15 @@ test('bulkDraftable: only views that can hold unprocessed posts offer bulk Draft
   assert.equal(bulkDraftable('unprocessed'), true)
   assert.equal(bulkDraftable('all'), true)
   for (const s of ['skipped', 'drafted', 'dismissed', 'applied'] as const) assert.equal(bulkDraftable(s), false, s)
+})
+
+test('a header shows its filter whenever the column hides posts — defaults included', () => {
+  // Unprocessed, Hiring only and Unflagged are defaults AND filters; comparing with the default hid that.
+  assert.equal(narrows('status', DEFAULT_VIEW.status), true)
+  assert.equal(narrows('type', DEFAULT_VIEW.type), true)
+  assert.equal(narrows('flags', DEFAULT_VIEW.flags), true)
+  assert.equal(narrows('scope', DEFAULT_VIEW.scope), false)
+  assert.equal(narrows('minScore', DEFAULT_VIEW.minScore), false)
+  assert.equal(narrows('status', 'all'), false)
+  assert.equal(narrows('minScore', 6), true)
 })

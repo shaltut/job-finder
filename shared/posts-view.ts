@@ -128,6 +128,21 @@ export function apiQuery(v: PostsView, pageSize: number): Record<string, string 
   return { ...rest, limit: pageSize, offset: (page - 1) * pageSize }
 }
 
+/** Each filter's "show everything" value. */
+const UNFILTERED: { [K in keyof typeof OPTIONS]: OptValue<K> } = {
+  status: 'all', type: 'all', flags: 'all', scope: 'all', channel: 'all', minScore: 0, posted: 0, added: 0
+}
+
+/**
+ * Whether a column's filter hides posts — what its header mark shows. Compared with "show everything",
+ * not with the default: Unprocessed, Hiring only and Unflagged are defaults that filter, and comparing
+ * with the default left their headers looking unfiltered. (Chips still list only changes from the
+ * default: their ✕ resets to it, which would do nothing for a default.)
+ */
+export function narrows<K extends keyof typeof OPTIONS>(field: K, value: OptValue<K>): boolean {
+  return value !== UNFILTERED[field]
+}
+
 /** The filters that differ from the default, labelled for the chip row. Search and sort are not chips. */
 export function activeChips(v: PostsView): { key: keyof PostsView, label: string }[] {
   const out: { key: keyof PostsView, label: string }[] = []
