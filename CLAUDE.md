@@ -593,7 +593,14 @@ drafts keep arguing from a stale CV.
   runners write through their own `openWritableDb()` connections, which only `data_version` sees. `gen`
   in `sync.json` makes each push a compare-and-swap, so a machine that booted before OneDrive delivered
   the newer snapshot is refused (banner + `backups/conflict-*.db`) instead of overwriting it; any other
-  file in the folder is a sync-client conflict copy and stops both pull and push. **Never move `data/`
+  `jobfinder*` / `sync*` file in the folder is a sync-client conflict copy and stops both pull and push.
+  **`sync.json` carries the snapshot's sha256 and a pull refuses a mismatch**: OneDrive delivers the 1 KB
+  `sync.json` before the 8 MB snapshot, and pulling the previous generation's data under the new gen
+  would let the next push erase the other machine's session. **Nothing pushes on its own without a
+  change since boot** (`lastSig` starts at the current `changeSig()`), and **an empty folder is seeded
+  only by an explicit init** from the Run view — an empty folder and an undelivered one look identical.
+  Heartbeats go to per-host `heartbeat-<host>.json` files, never `sync.json`, so they cannot collide
+  with a push. **Never move `data/`
   itself into OneDrive** — a file sync of a WAL database is the 2026-09-25 backup bug. **Paths written to
   the database use `/`** (`tailoredCvPath` is `posix.join`; `migrate.ts` rewrites old rows each boot),
   because `\` is a filename character on the Mac. `scripts/merge-db.ts` is the one-time, insert-only merge

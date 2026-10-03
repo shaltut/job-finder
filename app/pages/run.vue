@@ -46,7 +46,8 @@ watch(running, (r) => {
 })
 async function syncNow() {
   try {
-    syncState.value = await $fetch<SyncState>('/api/sync/push', { method: 'POST' })
+    // an empty folder is seeded only from this button, never by the timer
+    syncState.value = await $fetch<SyncState>('/api/sync/push', { method: 'POST', body: { init: syncState.value?.remoteGen === null } })
     const s = syncState.value
     toast.add({
       title: s.conflict ? 'Not pushed — another machine pushed first' : s.lastError || s.pushDisabled ? 'Not pushed' : `Synced (gen ${s.gen})`,
@@ -297,7 +298,7 @@ const yieldColumns: TableColumn<YieldRow>[] = [
             :disabled="!!syncState.conflict || !!syncState.pushDisabled"
             @click="syncNow"
           >
-            Sync now
+            {{ syncState.remoteGen === null ? 'Start syncing from this machine' : 'Sync now' }}
           </UButton>
         </div>
         <UAlert

@@ -79,6 +79,8 @@ export interface SyncState {
   enabled: boolean
   host: string
   gen: number
+  /** null while the folder holds no sync.json — Sync now then seeds it, and only on that press */
+  remoteGen: number | null
   pushDisabled: string | null
   conflict: { gen: number, host: string } | null
   otherActive: boolean

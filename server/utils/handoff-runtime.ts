@@ -9,6 +9,8 @@ export interface HandoffState {
   enabled: boolean
   host: string
   gen: number
+  /** null while the folder holds no sync.json — then only an explicit init seeds it */
+  remoteGen: number | null
   pushDisabled: string | null
   conflict: SyncMeta | null
   otherActive: boolean
@@ -35,14 +37,15 @@ export function handoffPaths(): HandoffPaths | null {
 
 export function handoffState(): HandoffState {
   g.__jobfinderHandoff ??= {
-    enabled: !!handoffPaths(), host: hostname(), gen: 0, pushDisabled: null, conflict: null,
+    enabled: !!handoffPaths(), host: hostname(), gen: 0, remoteGen: null, pushDisabled: null, conflict: null,
     otherActive: false, lastPushAt: null, lastError: null, lastSig: ''
   }
   const s = g.__jobfinderHandoff
   const p = handoffPaths()
   if (p) {
     s.gen = readLocalGen(p.stateFile)
-    s.otherActive = otherActive(readMeta(p.syncDir), s.host)
+    s.remoteGen = readMeta(p.syncDir)?.gen ?? null
+    s.otherActive = otherActive(p.syncDir, s.host)
   }
   return s
 }
@@ -59,15 +62,19 @@ export function bootPull() {
   } else if (r.pulled) {
     console.log(`[sync] pulled gen ${r.gen} from ${p.syncDir}`)
   }
+  if (r.warning) {
+    s.lastError = r.warning
+    console.warn(`[sync] ${r.warning}`)
+  }
   if (s.otherActive) console.warn('[sync] the other machine looks active — close it before working here')
 }
 
-export function pushNow(sig: string): HandoffState {
+export function pushNow(sig: string, init = false): HandoffState {
   const s = handoffState()
   const p = handoffPaths()
   if (!p || s.pushDisabled || s.conflict) return s
   try {
-    const r = push(p, s.host)
+    const r = push(p, s.host, new Date(), { init })
     if (r.ok) {
       s.lastPushAt = new Date().toISOString()
       s.lastSig = sig
