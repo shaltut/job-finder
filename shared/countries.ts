@@ -183,17 +183,50 @@ const CITY_COUNTRY: Record<string, string> = {
   'riyadh': 'Saudi Arabia', 'jeddah': 'Saudi Arabia', 'dammam': 'Saudi Arabia', 'khobar': 'Saudi Arabia',
   'cairo': 'Egypt', 'giza': 'Egypt', 'alexandria': 'Egypt',
   'doha': 'Qatar', 'amman': 'Jordan',
-  'lahore': 'Pakistan', 'karachi': 'Pakistan', 'islamabad': 'Pakistan'
+  'lahore': 'Pakistan', 'karachi': 'Pakistan', 'islamabad': 'Pakistan',
+  // measured misses, 2026-10-03
+  'jaipur': 'India', 'vadodara': 'India', 'coimbatore': 'India', 'nagpur': 'India', 'bhopal': 'India',
+  'trivandrum': 'India', 'thiruvananthapuram': 'India', 'lucknow': 'India', 'chandigarh': 'India',
+  'visakhapatnam': 'India', 'mysore': 'India', 'surat': 'India', 'gujarat': 'India', 'madhya pradesh': 'India',
+  'lagos': 'Nigeria', 'kathmandu': 'Nepal', 'ho chi minh': 'Vietnam', 'hanoi': 'Vietnam',
+  'toronto': 'Canada', 'vancouver': 'Canada', 'montreal': 'Canada',
+  'london': 'UK', 'manchester': 'UK', 'sydney': 'Australia', 'melbourne': 'Australia'
 }
 
-/** ponytail: "Atlanta, Georgia" resolves to the country Georgia; full US state names are not mapped. */
+/**
+ * Arabic country and city names — filter and display only, like CITY_COUNTRY, and for the same reason
+ * kept out of the aliases: withAliases() renders every alias into the scoring prompt. "عمان" is left out
+ * on purpose: it is both Amman (Jordan) and Oman.
+ */
+const ARABIC_COUNTRY: Record<string, string> = {
+  'المملكة العربية السعودية': 'Saudi Arabia', 'السعودية': 'Saudi Arabia', 'الرياض': 'Saudi Arabia',
+  'جدة': 'Saudi Arabia', 'الدمام': 'Saudi Arabia', 'مصر': 'Egypt', 'القاهرة': 'Egypt',
+  'الإمارات': 'UAE', 'دبي': 'UAE', 'أبوظبي': 'UAE', 'قطر': 'Qatar', 'الدوحة': 'Qatar',
+  'الأردن': 'Jordan', 'الكويت': 'Kuwait', 'البحرين': 'Bahrain'
+}
+
 const US_STATES = new Set(('AK AL AR AZ CA CO CT DC DE FL GA HI IA ID IL IN KS KY LA MA MD ME MI MN MO MS MT '
   + 'NC ND NE NH NJ NM NV NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI WV WY').split(' '))
+const US_STATE_NAMES = new Set(['alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado',
+  'connecticut', 'delaware', 'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas',
+  'kentucky', 'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
+  'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico', 'new york',
+  'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania', 'rhode island',
+  'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont', 'virginia', 'washington',
+  'west virginia', 'wisconsin', 'wyoming', 'district of columbia'])
+const CA_PROVINCES = new Set('ON BC AB QC MB SK NS NB NL PE'.split(' '))
+/** Georgia the country, told apart from Georgia the US state by its own cities. */
+const GEORGIA_CITIES = ['tbilisi', 'batumi', 'kutaisi']
+
+/** Regions — never a country, so a "Middle East" post shows the region instead of "not stated". */
+const REGIONS: [string, string][] = [['middle east', 'Middle East'], ['mena', 'MENA'], ['gcc', 'GCC'],
+  ['gulf', 'Gulf'], ['apac', 'APAC'], ['southeast asia', 'Southeast Asia'], ['emea', 'EMEA'],
+  ['europe', 'Europe'], ['latam', 'LATAM'], ['north america', 'North America']]
 
 // A character test rather than a regex word boundary: `\b` is ASCII-only, and backslash escapes have
-// been mangled by the file tools in this repo. A letter is anything with case, plus digits.
-const isWordChar = (ch: string | undefined) =>
-  !!ch && (ch.toLowerCase() !== ch.toUpperCase() || (ch >= '0' && ch <= '9'))
+// been mangled by the file tools in this repo. Any Unicode letter or digit counts — Arabic letters have
+// no case, so a case test called them punctuation.
+const isWordChar = (ch: string | undefined) => !!ch && /[\p{L}\p{N}]/u.test(ch)
 
 function hasWord(hay: string, needle: string): boolean {
   const h = hay.toLowerCase()
@@ -217,15 +250,26 @@ export function countriesIn(location: string | null | undefined): string[] {
   for (const c of COUNTRIES) {
     if ([c.name, ...c.aliases].some(f => hasWord(l, f))) out.add(c.name)
   }
-  for (const [city, country] of Object.entries(CITY_COUNTRY)) {
+  for (const [city, country] of [...Object.entries(CITY_COUNTRY), ...Object.entries(ARABIC_COUNTRY)]) {
     const c = hasWord(l, city) ? resolveCountry(country) : undefined
     if (c) out.add(c.name)
   }
-  if (l.split(',').slice(1).some(seg => US_STATES.has(seg.trim().split(' ')[0] ?? ''))) {
-    const us = resolveCountry('USA')
-    if (us) out.add(us.name)
+  const georgiaCountry = GEORGIA_CITIES.some(c => hasWord(l, c))
+  const later = l.split(',').slice(1).map(seg => seg.trim())
+  const usState = later.some(seg => US_STATES.has(seg.split(' ')[0] ?? '')
+    || (US_STATE_NAMES.has(seg.toLowerCase()) && !(seg.toLowerCase() === 'georgia' && georgiaCountry)))
+  if (usState) {
+    out.add('USA')
+    if (!georgiaCountry) out.delete('Georgia') // "Atlanta, Georgia" is the state
   }
+  if (later.some(seg => CA_PROVINCES.has(seg.split(' ')[0] ?? ''))) out.add('Canada')
   return [...out]
+}
+
+/** A region the location names when no country resolves ("Middle East", "APAC"), else null. */
+export function regionIn(location: string | null | undefined): string | null {
+  const l = (location ?? '').trim()
+  return REGIONS.find(([needle]) => hasWord(l, needle))?.[1] ?? null
 }
 
 /** The picker's entry for locations that resolve to no country: empty, "unknown", "Remote", or a miss. */

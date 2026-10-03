@@ -41,3 +41,25 @@ test('locationMatches: a picked country, and NO_COUNTRY for what resolves to not
   assert.equal(locationMatches('Remote', [NO_COUNTRY]), true)
   assert.equal(locationMatches('Pune', [NO_COUNTRY]), false)
 })
+
+// Measured misses, 2026-10-03 (docs/superpowers/specs/2026-10-03-location-indicator-design.md).
+test('countriesIn: US states spelled out, Georgia the state vs the country, provinces, more cities, Arabic', () => {
+  assert.deepEqual(countriesIn('Atlanta, Georgia'), ['USA'], 'the US state, not the country')
+  assert.deepEqual(countriesIn('Atlanta, Georgia, USA'), ['USA'])
+  assert.deepEqual(countriesIn('Tbilisi, Georgia'), ['Georgia'])
+  assert.deepEqual(countriesIn('Austin, Texas'), ['USA'])
+  assert.deepEqual(countriesIn('Des Moines, Iowa'), ['USA'])
+  assert.deepEqual(countriesIn('Toronto, ON'), ['Canada'])
+  assert.deepEqual(countriesIn('Jaipur'), ['India'])
+  assert.deepEqual(countriesIn('Vadodara, Gujarat'), ['India'])
+  assert.deepEqual(countriesIn('Coimbatore'), ['India'])
+  assert.deepEqual(countriesIn('Ikeja, Lagos'), ['Nigeria'])
+  assert.deepEqual(countriesIn('المنطقة الشرقية، المملكة العربية السعودية'), ['Saudi Arabia'])
+  assert.deepEqual(countriesIn('القاهرة، مصر'), ['Egypt'])
+})
+
+test('the display-only tables never reach a prompt', async () => {
+  const { withAliases, nameFormsFor } = await import('../shared/countries.ts')
+  assert.equal(withAliases(['Saudi Arabia']), 'Saudi Arabia (KSA, Kingdom of Saudi Arabia)')
+  assert.equal(nameFormsFor(['India']).some(f => /jaipur|bengaluru/i.test(f)), false)
+})
