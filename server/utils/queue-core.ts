@@ -69,6 +69,26 @@ export async function pool<T>(items: T[], n: number, fn: (t: T) => Promise<void>
   if (failed) throw (failed as { error: unknown }).error
 }
 
+/**
+ * At most `n` calls of the returned function in flight; the rest wait their turn. For an API with a rate
+ * quota shared by many callers (Gmail: ~250 units/s per user, a message read costs 5), where pool() — one
+ * list, one loop — cannot see the calls nested inside each item.
+ */
+export function limiter(n: number) {
+  let active = 0
+  const waiting: (() => void)[] = []
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (active >= n) await new Promise<void>(r => waiting.push(r))
+    active++
+    try {
+      return await fn()
+    } finally {
+      active--
+      waiting.shift()?.()
+    }
+  }
+}
+
 /** Failures a second try cannot fix: claude would not start, or the plan's usage limit is spent. */
 const PERMANENT = /could not start claude|usage limit/i
 

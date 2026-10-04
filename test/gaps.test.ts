@@ -300,3 +300,25 @@ test('the page reads application rows only, and counts what was read against the
   assert.ok(counts.applications >= 2)
   assert.ok(counts.analysed < counts.applications, 'b was read against an older CV, so it is not counted')
 })
+
+test('applications are read several at a time, never more than the limit', async () => {
+  const keys = [k(80), k(81), k(82), k(83), k(84), k(85)]
+  for (const key of keys) {
+    addPost(key, `${POST} PAR-${key}`)
+    draft(key)
+  }
+  let inFlight = 0
+  let peak = 0
+  const res = await extractGaps(db, {
+    cvText: CV, cvSha: 'sha-par', model: 'fake', concurrency: 3,
+    ask: async () => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise(r => setTimeout(r, 10))
+      inFlight--
+      return [req()]
+    }
+  }, () => {}, undefined, keys)
+  assert.equal(res.stored, 6)
+  assert.equal(peak, 3)
+})

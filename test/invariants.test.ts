@@ -300,9 +300,10 @@ test('Stop reaches a running sync: the signal is threaded from the lane to every
   const sync = read('server/utils/sync.ts')
   assert.match(jobs, /runSyncJob\(push, abort\.signal\)/)
   assert.match(jobs, /sweep\(db, config, [^)]*, push, signal\)/)
-  assert.match(sync, /if \(signal\?\.aborted\)/, 'the sweep loop checks it between recruiters')
-  assert.match(sync, /draftFollowUp\(db, config, c\.email, onLog, d\.replyTo, signal\)/)
-  assert.match(sync, /runDrafter\(req, config, \{ onLog, signal \}\)/, 'and the running claude session is killed with it')
+  // since 2026-10-04 both sweep phases are pool()s, which stop starting recruiters once the signal aborts
+  assert.match(sync, /await pool\(open, \d+, async \(c\) => \{[\s\S]*?\}, signal\)/, 'the read phase stops between recruiters')
+  assert.match(sync, /draftFollowUp\(db, config, c\.email, onLog, decided\.get\(c\.email\)!\.replyTo, signal\)/)
+  assert.match(sync, /runDrafter\(req, config, \{ onLog: [^\n]*, signal \}\)/, 'and the running claude session is killed with it')
 })
 
 test('the sweep caches a stage through cachedStage(), never the raw decision', () => {

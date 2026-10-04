@@ -13,6 +13,7 @@ import { persist, signature } from './drafts'
 import { ccFrom, createDraft, gmail, renderHtml, replyHeaders } from './gmail'
 import { cachedStage, closedBy, decideStage, untilDue, type Decision, type GmailMessage } from './stages'
 import { followUpPosts, healContact } from './contacts'
+import { concurrency, limiter, pool } from './queue-core'
 
 interface RawMessage {
   id: string
@@ -25,31 +26,36 @@ interface RawMessage {
 const header = (m: RawMessage, name: string) =>
   m.payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || ''
 
+/**
+ * Every Gmail read in this file goes through one limiter: the sweep reads several recruiters at once and
+ * the draft gate runs beside parallel drafting, and Gmail allows ~250 quota units/s per user, a message
+ * read costing 5. Six in flight at ~150 ms each stays near 40 reads/s. ponytail: no 429 back-off — add one
+ * if `rateLimitExceeded` ever shows in a log.
+ */
+const gmailRead = limiter(6)
+
 /** Every message either side of this address. Sent mail is included; drafts are not, which is the point. */
 async function threadMessages(email: string): Promise<GmailMessage[]> {
   const q = `to:${email} OR from:${email} OR "${email}"`
-  const list = await gmail<{ messages?: { id: string }[] }>(`messages?q=${encodeURIComponent(q)}&maxResults=50`)
-  const out: GmailMessage[] = []
-  for (const { id } of list.messages ?? []) {
-    const m = await gmail<RawMessage>(
-      `messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Message-Id`
-    )
-    out.push({
-      id: m.id,
-      threadId: m.threadId,
-      messageId: header(m, 'Message-Id') || undefined,
-      from: header(m, 'From'),
-      subject: header(m, 'Subject'),
-      snippet: m.snippet || '',
-      date: Number(m.internalDate) || Date.parse(header(m, 'Date')) || 0
-    })
-  }
-  return out
+  const list = await gmailRead(() => gmail<{ messages?: { id: string }[] }>(`messages?q=${encodeURIComponent(q)}&maxResults=50`))
+  // the reads in parallel, the order kept — decideStage() is handed the list exactly as search returned it
+  const raw = await Promise.all((list.messages ?? []).map(({ id }) => gmailRead(() => gmail<RawMessage>(
+    `messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Message-Id`
+  ))))
+  return raw.map(m => ({
+    id: m.id,
+    threadId: m.threadId,
+    messageId: header(m, 'Message-Id') || undefined,
+    from: header(m, 'From'),
+    subject: header(m, 'Subject'),
+    snippet: m.snippet || '',
+    date: Number(m.internalDate) || Date.parse(header(m, 'Date')) || 0
+  }))
 }
 
 /** `messages` never returns drafts, even with `in:draft` — trusting it once nearly produced a duplicate. */
 async function hasPendingDraft(email: string): Promise<boolean> {
-  const r = await gmail<{ drafts?: unknown[] }>(`drafts?q=${encodeURIComponent(`to:${email}`)}&maxResults=5`)
+  const r = await gmailRead(() => gmail<{ drafts?: unknown[] }>(`drafts?q=${encodeURIComponent(`to:${email}`)}&maxResults=5`))
   return !!r.drafts?.length
 }
 
@@ -121,13 +127,12 @@ export async function sweep(
   const now = Date.now()
   const lines: SweepLine[] = []
 
-  for (const c of open) {
-    if (signal?.aborted) {
-      onLog('stopped')
-      break
-    }
-    const messages = await threadMessages(c.email)
-    const pending = await hasPendingDraft(c.email)
+  // Two phases. Reading and deciding is Gmail reads only, so several recruiters run at once (the limiter
+  // above caps the calls). The follow-up drafts are Opus sessions and run JOBFINDER_DRAFT_CONCURRENCY at a
+  // time, like drafting. Each recruiter is independent in both: its own reads, its own contacts row.
+  const decided = new Map<string, Decision>()
+  await pool(open, 4, async (c) => {
+    const [messages, pending] = await Promise.all([threadMessages(c.email), hasPendingDraft(c.email)])
     const d = decideStage({
       messages, selfEmail, recruiterEmail: c.email, dbStage: c.stage, hasPendingDraft: pending, now
     })
@@ -145,24 +150,32 @@ export async function sweep(
       lastSent: d.followUpDueAt ? Math.floor((d.followUpDueAt - 72 * 3600e3) / 1000) : null,
       now: Math.floor(now / 1000)
     })
+    decided.set(c.email, d)
+  }, signal)
 
-    if (d.action === 'draft-the-follow-up') {
-      // Per recruiter, like the batch drafter in jobs.ts: one Gmail rejection must not cost every recruiter
-      // still queued behind it. The contact stays `contacted` above; persist() promotes it to followed_up
-      // only if a draft is actually created here.
-      try {
-        await draftFollowUp(db, config, c.email, onLog, d.replyTo, signal)
-      } catch (e) {
-        // Stop kills the claude session, which surfaces here as an exit code — not a failure worth a note
-        if (signal?.aborted) {
-          onLog(`${c.email}: stopped`)
-        } else {
-          onLog(`${c.email}: follow-up draft failed — ${(e as Error).message}`)
-          noteOn(db, c.email, `follow-up draft failed, retried next sweep: ${(e as Error).message.slice(0, 160)}`)
-        }
+  const due = open.filter(c => decided.get(c.email)?.action === 'draft-the-follow-up')
+  await pool(due, concurrency(process.env.JOBFINDER_DRAFT_CONCURRENCY), async (c) => {
+    // Per recruiter, like the batch drafter in jobs.ts: one Gmail rejection must not cost every recruiter
+    // still queued behind it. The contact stays `contacted` above; persist() promotes it to followed_up
+    // only if a draft is actually created here.
+    try {
+      await draftFollowUp(db, config, c.email, onLog, decided.get(c.email)!.replyTo, signal)
+    } catch (e) {
+      // Stop kills the claude session, which surfaces here as an exit code — not a failure worth a note
+      if (signal?.aborted) {
+        onLog(`${c.email}: stopped`)
+      } else {
+        onLog(`${c.email}: follow-up draft failed — ${(e as Error).message}`)
+        noteOn(db, c.email, `follow-up draft failed, retried next sweep: ${(e as Error).message.slice(0, 160)}`)
       }
     }
+  }, signal)
+  if (signal?.aborted) onLog('stopped')
 
+  for (const c of open) {
+    const d = decided.get(c.email)
+    if (!d) continue // not reached before Stop
+    const cached = cachedStage(d)
     // read back, not `cached`: a follow-up drafted above has just moved it to followed_up in persist()
     const stageNow = (db.prepare('SELECT stage FROM contacts WHERE email = ?').get(c.email) as { stage: Decision['stage'] } | undefined)?.stage ?? cached.stage
     const line: SweepLine = {
@@ -217,7 +230,8 @@ async function draftFollowUp(
     // would cite that date directly above the quoted original showing the real one
     originalSentAt: new Date(replyTo.date).toLocaleDateString('sv-SE')
   }
-  const res = await runDrafter(req, config, { onLog, signal })
+  // prefixed: follow-ups now draft in parallel, and an unprefixed claude line cannot be attributed
+  const res = await runDrafter(req, config, { onLog: line => onLog(`${email}: ${line}`), signal })
   const carrier = res.results.find(r => r.body)
   if (!carrier?.body) {
     // the why is in each skipped result's reason; without it this line reads like a failure

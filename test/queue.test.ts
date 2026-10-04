@@ -2,7 +2,7 @@
 // the drafter, Gmail, sync and the CV modules). See docs/superpowers/specs/2026-10-03-job-queue-design.md.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { concurrency, draftPriority, pickNext, pool, restorePlan, resumedArgs, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
+import { concurrency, draftPriority, limiter, pickNext, pool, restorePlan, resumedArgs, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
 
 const item = (id: number, kind: string, args: QItem['args'] = {}, lane: QItem['lane'] = 'draft'): QItem =>
   ({ id, lane, kind, args, queuedAt: '' })
@@ -144,4 +144,23 @@ test('withRetry: a failure that cannot pass a second time is not retried', async
     }, { waitMs: 0 }))
     assert.equal(calls, 1, msg)
   }
+})
+
+test('limiter: never more than n calls in flight, results in call order', async () => {
+  const run = limiter(2)
+  let inFlight = 0
+  let peak = 0
+  const out = await Promise.all([1, 2, 3, 4, 5].map(i => run(async () => {
+    inFlight++
+    peak = Math.max(peak, inFlight)
+    await new Promise(r => setTimeout(r, 5 * (6 - i)))
+    inFlight--
+    return i * 10
+  })))
+  assert.equal(peak, 2)
+  assert.deepEqual(out, [10, 20, 30, 40, 50])
+  await assert.rejects(run(async () => {
+    throw new Error('boom')
+  }), /boom/)
+  assert.equal(await run(async () => 'still works after a failure'), 'still works after a failure')
 })

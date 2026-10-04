@@ -10,6 +10,7 @@
 // sides — the post, and the CV.
 import { excludeRule } from '../../scraper/lib.ts'
 import { matchKey } from './cv-master.ts'
+import { pool } from './queue-core.ts'
 import { groupFor, modeStatus, type GapTerm } from '../../shared/gaps.ts'
 import type Database from 'better-sqlite3'
 
@@ -201,6 +202,8 @@ export interface GapsDeps {
   cvText: string
   cvSha: string
   model: string
+  /** applications read at once (default 4) */
+  concurrency?: number
 }
 
 /**
@@ -217,18 +220,16 @@ export async function extractGaps(
   }
   push(`gaps: ${pending.length} application(s) to read with ${deps.model}`)
   let stored = 0
-  for (const p of pending) {
-    if (signal?.aborted) {
-      push('stopped')
-      break
-    }
+  // Several applications at once: each is an independent OpenAI call and storeRun() is a synchronous
+  // transaction, so reads never interleave inside a write. A full backfill went from hours to a quarter.
+  await pool(pending, deps.concurrency ?? 4, async (p) => {
     const id = p.key.slice(0, 8)
     let raw: RawRequirement[]
     try {
       raw = await deps.ask(p.text, deps.cvText)
     } catch (e) {
       push(`${id}: ${(e as Error).message} — left for the next run`)
-      continue
+      return
     }
     const { kept, dropped } = verifyRequirements(raw, p.text, deps.cvText)
     storeRun(db, p.key, kept, { cvSha: deps.cvSha, model: deps.model, dropped: dropped.length })
@@ -241,7 +242,8 @@ export async function extractGaps(
       const why = [...new Set(dropped.map(d => d.why))].join('; ')
       push(`${id}: ${kept.length} kept${dropped.length ? `, ${dropped.length} dropped (${why})` : ''}`)
     }
-  }
+  }, signal)
+  if (signal?.aborted) push('stopped')
   push(`gaps: ${stored} of ${pending.length} read`)
   return { stored, pending: pending.length }
 }
