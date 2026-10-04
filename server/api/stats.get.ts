@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm'
 import { neverWrittenTo } from '../utils/contacts'
 import { db } from '../utils/db'
-import { PASTED_TERM } from '../utils/paste'
+import { CLIPPED_TERM, PASTED_TERM } from '../utils/paste'
 
 /** The KPI strip. One round trip, four numbers that answer "is this pipeline working?". */
 export default defineEventHandler(async () => {
@@ -31,13 +31,13 @@ export default defineEventHandler(async () => {
           AND p.applied_at IS NULL
           -- the same clause as the Posts view's Unprocessed, so this number is the length of that list
           AND ${sql.raw(neverWrittenTo('p'))}) AS unprocessed,
-      -- Both figures below measure the scraper, so a pasted row (search_term = 'pasted') is excluded from
-      -- each; coalesce guards the comparison because search_term is nullable in the schema, so a bare
-      -- <> comparison would silently drop any row that happens to carry NULL there.
+      -- Both figures below measure the scraper, so a pasted or clipped row is excluded from each; coalesce
+      -- guards the comparison because search_term is nullable in the schema, so a bare NOT IN would
+      -- silently drop any row that happens to carry NULL there.
       (SELECT count(*) FROM posts WHERE scraped_at >= unixepoch() - 86400
-        AND coalesce(search_term, '') <> ${PASTED_TERM}) AS last24h,
+        AND coalesce(search_term, '') NOT IN (${PASTED_TERM}, ${CLIPPED_TERM})) AS last24h,
       (SELECT count(*) FROM applications WHERE verdict = 'drafted') AS drafted,
-      (SELECT max(scraped_at) FROM posts WHERE coalesce(search_term, '') <> ${PASTED_TERM}) AS scrapedAt
+      (SELECT max(scraped_at) FROM posts WHERE coalesce(search_term, '') NOT IN (${PASTED_TERM}, ${CLIPPED_TERM})) AS scrapedAt
   `)
 
   return {

@@ -45,6 +45,10 @@ export interface JobArgs {
   resumed?: boolean
   /** paste lane: the pasted post's text */
   text?: string
+  /** paste lane, from the LinkedIn clipper: who posted it and where (server/utils/paste.ts Provenance) */
+  author?: string
+  authorUrl?: string
+  postUrl?: string
 }
 
 interface Job {
@@ -247,7 +251,7 @@ function runJob(lane: Lane, item: QueueItem) {
   }
 
   if (lane === 'paste') {
-    runPasteJob(args.text ?? '', push)
+    runPasteJob(args.text ?? '', push, { author: args.author, authorUrl: args.authorUrl, postUrl: args.postUrl })
       .then(code => finish(code))
       .catch((e) => {
         push(`failed: ${(e as Error).message}`)

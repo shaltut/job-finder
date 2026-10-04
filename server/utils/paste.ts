@@ -12,6 +12,21 @@ import type { PostRecord } from './ingest.ts'
 
 /** Marks the origin without colonising a real search term in the per-term yield table. */
 export const PASTED_TERM = 'pasted'
+/** A post sent from LinkedIn by the clipper extension — it carries its author, so it keys like a scraped one. */
+export const CLIPPED_TERM = 'clipped'
+
+/** What the clipper knows that a paste does not. Every field optional: a paste has none of them. */
+export interface Provenance { author?: string, authorUrl?: string, postUrl?: string }
+
+/** linkedin.com or a subdomain of it, https only — the clipper's links are stored and later rendered as links. */
+export function isLinkedInUrl(s: string): boolean {
+  try {
+    const u = new URL(s)
+    return u.protocol === 'https:' && (u.hostname === 'linkedin.com' || u.hostname.endsWith('.linkedin.com'))
+  } catch {
+    return false
+  }
+}
 
 export interface PasteFound { emails: string[], links: string[], phones: string[], refIds: string[] }
 
@@ -19,7 +34,7 @@ export type PasteGate
   = | { ok: true, key: string, found: PasteFound, channels: string[] }
     | { ok: false, found: PasteFound, channels: string[], enabled: readonly string[] }
 
-export function pasteGate(text: string, config: Config): PasteGate {
+export function pasteGate(text: string, config: Config, prov: Provenance = {}): PasteGate {
   const found: PasteFound = {
     emails: extractEmails(text),
     links: extractLinks(text),
@@ -29,22 +44,24 @@ export function pasteGate(text: string, config: Config): PasteGate {
   const channels = channelsOf(found, text)
   const enabled = config.contactChannels
   if (!admits(channels, enabled)) return { ok: false, found, channels, enabled }
-  // An empty author URL: a paste has no author, and two pastes of the same text must give one key.
-  return { ok: true, key: dedupeKey('', text), found, channels }
+  // A paste has no author, so two pastes of the same text give one key. A clipped post has one, and keys
+  // exactly as the scraper would — so either side recognises a post the other already stored.
+  return { ok: true, key: dedupeKey(prov.authorUrl ?? '', text), found, channels }
 }
 
 export function pasteRecord(
   text: string,
   config: Config,
   gate: Extract<PasteGate, { ok: true }>,
-  score: Score
+  score: Score,
+  prov: Provenance = {}
 ): PostRecord {
   return {
     key: gate.key,
-    searchTerm: PASTED_TERM,
-    author: null,
-    authorUrl: null,
-    postUrl: null,
+    searchTerm: prov.authorUrl ? CLIPPED_TERM : PASTED_TERM,
+    author: prov.author ?? null,
+    authorUrl: prov.authorUrl ?? null,
+    postUrl: prov.postUrl ?? null,
     postedAge: null,
     postedAt: null,
     postType: score.post_type,
@@ -84,9 +101,10 @@ export async function pasteOnce(
   text: string,
   config: Config,
   deps: PasteDeps,
-  push: (line: string) => void
+  push: (line: string) => void,
+  prov: Provenance = {}
 ): Promise<number> {
-  const gate = pasteGate(text, config)
+  const gate = pasteGate(text, config, prov)
   if (!gate.ok) {
     // The endpoint refuses these synchronously; reaching here means the settings changed while queued.
     push(`refused: no enabled contact route (found ${gate.channels.join(', ') || 'none'})`)
@@ -94,7 +112,7 @@ export async function pasteOnce(
   }
   const system = await deps.system()
   const score = await deps.score(text, system)
-  const rec = pasteRecord(text, config, gate, score)
+  const rec = pasteRecord(text, config, gate, score, prov)
   const applied = deps.store(rec)
   push(applied
     ? `stored: ${rec.title || 'untitled'} — score ${rec.score}, ${rec.postType}${rec.flags.length ? `, flags: ${rec.flags.join(' ')}` : ''}`

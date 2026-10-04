@@ -7,7 +7,7 @@ import { systemPrompt, type Config } from '../../scraper/lib.ts'
 import { loadCv, scorePost } from '../../scraper/score.ts'
 import { readConfig } from './config'
 import { applyRecord, openWritableDb } from './ingest'
-import { pasteOnce } from './paste'
+import { pasteOnce, type Provenance } from './paste'
 
 // The CV text costs one OpenAI call to obtain and never changes while the file does not, so without a
 // cache every paste pays for it. On globalThis for the reason __jobfinderRunner is: Nitro's dev HMR
@@ -26,7 +26,7 @@ async function cvSystem(config: Config, push: (line: string) => void): Promise<s
   return system
 }
 
-export async function runPasteJob(text: string, push: (line: string) => void): Promise<number> {
+export async function runPasteJob(text: string, push: (line: string) => void, prov: Provenance = {}): Promise<number> {
   const config = readConfig()
   return pasteOnce(text, config, {
     system: () => cvSystem(config, push),
@@ -39,5 +39,5 @@ export async function runPasteJob(text: string, push: (line: string) => void): P
         close()
       }
     }
-  }, push)
+  }, push, prov)
 }

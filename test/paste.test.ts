@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { loadCv, scorePost } from '../scraper/score.ts'
 import { emptySettings } from '../shared/settings.ts'
-import { PASTED_TERM, pasteGate, pasteOnce, pasteRecord } from '../server/utils/paste.ts'
+import { CLIPPED_TERM, isLinkedInUrl, PASTED_TERM, pasteGate, pasteOnce, pasteRecord } from '../server/utils/paste.ts'
 
 // scraper/ has no typecheck coverage, so a broken lift there fails at run time and nowhere else.
 // This is cheap and catches a syntax error, a bad import path and a changed arity.
@@ -199,4 +199,38 @@ test('enqueue() suppresses a duplicate paste, not just a duplicate draft or sync
     /if \(kind === 'paste' && args\.text\s*\n\s*&& \(queue\.some\(q => q\.args\.text === args\.text\) \|\| lanes\.paste\.current\?\.args\?\.text === args\.text\)\) return null/,
     'a pasted text already queued, or the text of the paste currently running, must be a no-op'
   )
+})
+
+// The LinkedIn clipper sends the author too (docs/superpowers/specs/2026-10-04-linkedin-clipper-design.md).
+const SCORE = {
+  post_type: 'hiring', title: 'Senior .NET Developer', company: 'Example Ltd',
+  location: 'Remote', is_remote: true, is_in_scope: true, score: 7, reason: 'matches the stack'
+} as const
+const PROV = { author: 'Jane Recruiter', authorUrl: 'https://www.linkedin.com/in/jane-recruiter', postUrl: 'https://www.linkedin.com/feed/update/urn:li:activity:1/' }
+
+test('a clipped post keys like a scraped one, so the scraper and the clipper recognise each other', async () => {
+  const { dedupeKey } = await import('../scraper/lib.ts')
+  const g = pasteGate(POST, cfg(), PROV)
+  assert.equal(g.ok, true)
+  if (!g.ok) return
+  assert.equal(g.key, dedupeKey(PROV.authorUrl, POST))
+  assert.notEqual(g.key, (pasteGate(POST, cfg()) as { key: string }).key, 'a plain paste still keys on the text alone')
+})
+
+test('a clipped record carries its provenance and its own bucket', () => {
+  const g = pasteGate(POST, cfg(), PROV)
+  if (!g.ok) throw new Error('gate refused')
+  const rec = pasteRecord(POST, cfg(), g, SCORE, PROV)
+  assert.equal(rec.searchTerm, CLIPPED_TERM)
+  assert.equal(rec.author, PROV.author)
+  assert.equal(rec.authorUrl, PROV.authorUrl)
+  assert.equal(rec.postUrl, PROV.postUrl)
+})
+
+test('provenance must point at LinkedIn', () => {
+  assert.equal(isLinkedInUrl('https://www.linkedin.com/in/x'), true)
+  assert.equal(isLinkedInUrl('https://linkedin.com/company/y'), true)
+  assert.equal(isLinkedInUrl('https://evil.example/in/x'), false)
+  assert.equal(isLinkedInUrl('https://www.linkedin.com.evil.example/in/x'), false)
+  assert.equal(isLinkedInUrl('javascript:alert(1)'), false)
 })

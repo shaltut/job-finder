@@ -2,11 +2,16 @@ import { z } from 'zod'
 import { sqlite } from '../../utils/db'
 import { readConfig } from '../../utils/config'
 import { enqueue } from '../../utils/jobs'
-import { pasteGate } from '../../utils/paste'
+import { isLinkedInUrl, pasteGate } from '../../utils/paste'
 
+const linkedIn = z.string().trim().max(500).refine(isLinkedInUrl, 'must be an https linkedin.com link')
 const body = z.object({
   // a whole job post pasted from email or WhatsApp; the floor rejects an accidental empty submit
-  text: z.string().trim().min(40, 'paste the whole post — this is too short to be one')
+  text: z.string().trim().min(40, 'paste the whole post — this is too short to be one'),
+  // sent by the LinkedIn clipper extension (extension/); a paste from the Posts view has none of them
+  author: z.string().trim().max(200).optional(),
+  authorUrl: linkedIn.optional(),
+  postUrl: linkedIn.optional()
 })
 
 /**
@@ -26,7 +31,8 @@ export default defineEventHandler(async (event) => {
     return { error: (e as Error).message }
   }
 
-  const gate = pasteGate(a.text, config)
+  const prov = { author: a.author, authorUrl: a.authorUrl, postUrl: a.postUrl }
+  const gate = pasteGate(a.text, config, prov)
   if (!gate.ok) {
     setResponseStatus(event, 422)
     return {
@@ -40,7 +46,7 @@ export default defineEventHandler(async (event) => {
     return { duplicate: true, key: gate.key }
   }
 
-  const item = enqueue('paste', { text: a.text })
+  const item = enqueue('paste', { text: a.text, ...prov })
   setResponseStatus(event, item ? 202 : 200)
   // a repeat paste of the same text already queued, or still being scored, is a no-op, not a second job
   return { queued: !!item, key: gate.key, note: item ? undefined : 'already queued or running' }
