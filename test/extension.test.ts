@@ -4,9 +4,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 // lib.js is a classic content script, not a module: importing it runs it, and it leaves its API on globalThis
 await import('../extension/lib.js')
-const { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel } = (globalThis as unknown as { JobFinderClip: {
+const { authorOf, clippable, isDark, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel } = (globalThis as unknown as { JobFinderClip: {
   authorOf: (l: { href: string, text: string }[]) => { url: string, name: string } | null
   clippable: (p: string) => boolean
+  isDark: (css: string) => boolean | null
   linkedInOnly: (u?: string) => string | undefined
   MORE_LABEL: RegExp
   postLinkOf: (h: string[]) => string | null
@@ -57,6 +58,15 @@ test('a non-LinkedIn author link is dropped client-side, so the clip degrades to
   assert.equal(linkedInOnly('https://www.linkedin.com/in/x'), 'https://www.linkedin.com/in/x')
   assert.equal(linkedInOnly('https://example.com/in/x'), undefined)
   assert.equal(linkedInOnly(undefined), undefined)
+})
+
+test('dark backgrounds are told from light ones by luminance', () => {
+  assert.equal(isDark('rgb(27, 31, 35)'), true, 'LinkedIn dark card')
+  assert.equal(isDark('rgb(0, 0, 0)'), true)
+  assert.equal(isDark('rgb(255, 255, 255)'), false)
+  assert.equal(isDark('rgb(243, 242, 239)'), false, 'LinkedIn light page')
+  assert.equal(isDark('rgba(0, 0, 0, 0)'), null, 'transparent: look further up')
+  assert.equal(isDark('nonsense'), null)
 })
 
 test('the button says what happened', () => {

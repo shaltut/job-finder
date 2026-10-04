@@ -71,6 +71,21 @@ function postLinkOf(hrefs) {
 }
 
 /**
+ * Whether a computed background colour is dark — LinkedIn's dark mode is its own setting, not the OS's,
+ * so the button reads the card it sits on. null for a transparent or unreadable colour: look further up.
+ * @param {string} css e.g. "rgb(27, 31, 35)"
+ * @returns {boolean | null}
+ */
+function isDark(css) {
+  const open = css.indexOf('(')
+  const close = css.indexOf(')')
+  if (!css.startsWith('rgb') || open < 0 || close < open) return null
+  const [r, g, b, a = 1] = css.slice(open + 1, close).split(',').map(Number)
+  if ([r, g, b, a].some(Number.isNaN) || a === 0) return null
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128
+}
+
+/**
  * What the button says after a click, from the paste endpoint's reply. Status 0 is a network failure:
  * the app is not running (or not on 127.0.0.1:3939).
  * @returns {{ text: string, tone: 'ok' | 'info' | 'warn' | 'error' }}
@@ -85,4 +100,4 @@ function resultLabel(status, body) {
   return { text: String(body?.error || body?.message || `Error ${status}`).slice(0, 80), tone: 'error' }
 }
 
-globalThis.JobFinderClip = { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel }
+globalThis.JobFinderClip = { authorOf, clippable, isDark, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel }
