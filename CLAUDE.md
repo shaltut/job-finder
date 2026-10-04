@@ -634,7 +634,11 @@ drafts keep arguing from a stale CV.
   `server/utils/queue-core.ts`): hand-picked drafts (`key`, or `keys` without `screened`), then `sync`,
   then bulk/batch, FIFO within each. Single-post draft requests waiting in the queue are batched into
   one session. **Within a draft job, recruiters run `JOBFINDER_DRAFT_CONCURRENCY` at a time** (default 2,
-  clamped 1-4, `pool()`), and **`runDrafter` is retried once after 10 s** (`withRetry()`) — never
+  clamped 1-4, `pool()`; this machine's `.env` sets 3). **The Gmail sync runs in two phases**: it reads and
+  decides 4 recruiters at once, then drafts the due follow-ups `JOBFINDER_DRAFT_CONCURRENCY` at a time.
+  **Every Gmail read in `sync.ts` goes through one `limiter(6)`** (Gmail allows ~250 quota units/s per user
+  and a message read costs 5), and that includes the draft gate, which runs beside parallel drafting.
+  **Extract gaps reads 4 applications at once.** And **`runDrafter` is retried once after 10 s** (`withRetry()`) — never
   `createDraft`, where a retry could leave two Gmail drafts. **The queue is mirrored into `job_queue`**
   (`saved.add/start/drop`) and `restoreQueue()`, called from `server/plugins/migrate.ts`, puts it back
   in a fresh worker: interrupted non-scrape jobs at the front, interrupted scrape-lane jobs dropped (a
