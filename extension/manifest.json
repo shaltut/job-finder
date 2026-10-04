@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Job Finder clipper",
+  "version": "1.0.0",
+  "description": "Adds a button to LinkedIn posts that sends the post to your local Job Finder (http://127.0.0.1:3939).",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAimS4CNBAMZLDBVVF+rucw3FbN12kTcd+yKvHhymp4LoBKVIkmFZKw3zBZTWsI1EMVcWaclpNNSBxc+zCE1166/oBEGAd1bWRMCc0EUjgNfAqhpinBFK0TQXDtZlPnT14zYBvjLbA0Itnf5VDgS5dSl8sA9HOnv8wGkSFvkLS/yH5oL3cYKMSEgATv/yoMOnqGVJAtumr7cMrhvx8qE2pmwQX0X4Jru36zAsqhf3Y5UOMeJ3/DefoSY9Ev8gS5HLAn3c7ZPjG1c9uanDzSs3NPEVcNnFZ7uL40BrqzFwvoBPmTNFt17TdmlMHaGW07jjWvmJZlxOV+4oRpmKe/PqJjwIDAQAB",
+  "permissions": [],
+  "host_permissions": [
+    "http://127.0.0.1:3939/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.linkedin.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
