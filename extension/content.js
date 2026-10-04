@@ -2,8 +2,9 @@
 // Adds a "+ Job Finder" button to each LinkedIn post. One click: expand "…more", read the card the way the
 // scraper reads it (readCards in scraper/run.ts), and send it through the background worker to the app's
 // Paste-a-post intake. See docs/superpowers/specs/2026-10-04-linkedin-clipper-design.md.
-(async () => {
-  const { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel } = await import(chrome.runtime.getURL('lib.js'))
+(() => {
+  // lib.js runs first (manifest content_scripts order) and leaves these here
+  const { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel } = globalThis.JobFinderClip
   const MARK = 'data-jf-clip'
   const PROFILE = 'a[href*="/in/"],a[href*="/company/"]'
   const TONE = { ok: '#0a7d3c', info: '#555', warn: '#9a6700', error: '#b42318' }

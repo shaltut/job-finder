@@ -2,7 +2,16 @@
 // scraper/run.ts exactly: the key is dedupeKey(authorUrl, text), so a different URL means a duplicate row.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel } from '../extension/lib.js'
+// lib.js is a classic content script, not a module: importing it runs it, and it leaves its API on globalThis
+await import('../extension/lib.js')
+const { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel } = (globalThis as unknown as { JobFinderClip: {
+  authorOf: (l: { href: string, text: string }[]) => { url: string, name: string } | null
+  clippable: (p: string) => boolean
+  linkedInOnly: (u?: string) => string | undefined
+  MORE_LABEL: RegExp
+  postLinkOf: (h: string[]) => string | null
+  resultLabel: (s: number, b: object) => { text: string, tone: string }
+} }).JobFinderClip
 
 const L = (href: string, text = '') => ({ href, text })
 

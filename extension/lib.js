@@ -1,5 +1,7 @@
-// The clipper's pure parts, imported by content.js (through chrome.runtime.getURL) and by
-// test/extension.test.ts. No DOM, no chrome.* — plain data in, plain data out.
+// The clipper's pure parts. A classic script, not a module: the manifest loads it before content.js and it
+// leaves its functions on globalThis.JobFinderClip — content.js reads them there, and test/extension.test.ts
+// imports this file for the same side effect. (A dynamic import() of a web-accessible copy was tried first,
+// and no button ever appeared on a real feed, 2026-10-04 — the riskiest line, so removed.) No DOM, no chrome.*.
 
 /**
  * The post's author, by the scraper's own rule (readCards in scraper/run.ts): the most repeated
@@ -9,7 +11,7 @@
  * @param {{ href: string, text: string }[]} links every anchor in the card
  * @returns {{ url: string, name: string } | null}
  */
-export function authorOf(links) {
+function authorOf(links) {
   const profiles = links
     .filter(l => l.href.includes('/in/') || l.href.includes('/company/'))
     .map(l => ({ href: l.href.split('?')[0], text: (l.text || '').trim().split('\n')[0] || '' }))
@@ -26,14 +28,14 @@ export function authorOf(links) {
  * post, people results), and a button there would clip a comment or a person.
  * @param {string} pathname
  */
-export const clippable = pathname => /^\/feed\/?$/.test(pathname) || pathname.startsWith('/search/results/content')
+const clippable = pathname => /^\/feed\/?$/.test(pathname) || pathname.startsWith('/search/results/content')
 
 /**
  * An author link the server will accept (https linkedin.com), or none — then the clip degrades to a plain
  * paste instead of a 400.
  * @param {string | undefined} url
  */
-export function linkedInOnly(url) {
+function linkedInOnly(url) {
   if (!url) return undefined
   try {
     const u = new URL(url)
@@ -47,14 +49,14 @@ export function linkedInOnly(url) {
  * The "…more" expander, by the scraper's own pattern (MORE_LABEL in scraper/lib.ts). It follows the UI
  * language, not the post's, so an English post still carries the Arabic label on an Arabic account.
  */
-export const MORE_LABEL = /…\s*(?:more|المزيد)\s*$/
+const MORE_LABEL = /…\s*(?:more|المزيد)\s*$/
 
 /**
  * The post's own permalink, when the card exposes one — often it does not (LinkedIn strips URNs from
  * much of the page), and then there is none rather than a guess.
  * @param {string[]} hrefs
  */
-export function postLinkOf(hrefs) {
+function postLinkOf(hrefs) {
   for (const h of hrefs) {
     let u
     try {
@@ -73,7 +75,7 @@ export function postLinkOf(hrefs) {
  * the app is not running (or not on 127.0.0.1:3939).
  * @returns {{ text: string, tone: 'ok' | 'info' | 'warn' | 'error' }}
  */
-export function resultLabel(status, body) {
+function resultLabel(status, body) {
   if (status === 0) return { text: 'Job Finder not running', tone: 'error' }
   if (status === 403) return { text: 'Job Finder refused this extension', tone: 'error' }
   if (body?.duplicate) return { text: 'Already have it', tone: 'info' }
@@ -82,3 +84,5 @@ export function resultLabel(status, body) {
   if (status === 422 && body?.enabled) return { text: `No contact route (${body.enabled.join(', ')} only)`, tone: 'warn' }
   return { text: String(body?.error || body?.message || `Error ${status}`).slice(0, 80), tone: 'error' }
 }
+
+globalThis.JobFinderClip = { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel }
