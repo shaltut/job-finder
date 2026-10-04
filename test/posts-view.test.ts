@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { SORTS as SERVER_SORTS } from '../server/utils/posts-query.ts'
-import { activeChips, apiQuery, bulkDraftable, clampPage, DEFAULT_VIEW, narrows, nextSort, parseView, rangeKeys, SORTS, viewQuery } from '../shared/posts-view.ts'
+import { activeChips, apiQuery, bulkDraftable, clampPage, DEFAULT_VIEW, liftFilter, narrows, nextSort, parseView, rangeKeys, SORTS, viewQuery } from '../shared/posts-view.ts'
 
 test('the client sort list matches the server allowlist', () => {
   assert.deepEqual([...SORTS], [...SERVER_SORTS])
@@ -44,11 +44,16 @@ test('apiQuery carries paging and every filter the API reads', () => {
   assert.equal('page' in q, false)
 })
 
-test('chips list only what differs from the default', () => {
-  assert.deepEqual(activeChips(DEFAULT_VIEW), [])
+test('chips list every filter that hides posts — the defaults included — and ✕ lifts it', () => {
+  // the defaults are filters too: a bare page must say it is showing only unprocessed, hiring, unflagged posts
+  assert.deepEqual(activeChips(DEFAULT_VIEW).map(c => c.key), ['status', 'type', 'flags'])
+  assert.deepEqual(activeChips({ ...DEFAULT_VIEW, status: 'all', type: 'all', flags: 'all' }), [])
   const chips = activeChips({ ...DEFAULT_VIEW, minScore: 6, country: ['India'], countryMode: 'exclude' })
-  assert.deepEqual(chips.map(c => c.key), ['minScore', 'country'])
-  assert.match(chips[1]!.label, /not India/)
+  assert.deepEqual(chips.map(c => c.key), ['status', 'type', 'flags', 'minScore', 'country'])
+  assert.match(chips.at(-1)!.label, /not India/)
+  // ✕ means "remove this filter", which for a default filter is not the default
+  assert.equal(liftFilter('status'), 'all')
+  assert.equal(liftFilter('minScore'), 0)
 })
 
 test('sort cycles desc → asc → default, and a new column starts at desc', () => {

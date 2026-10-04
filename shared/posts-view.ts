@@ -134,20 +134,24 @@ const UNFILTERED: { [K in keyof typeof OPTIONS]: OptValue<K> } = {
 }
 
 /**
- * Whether a column's filter hides posts — what its header mark shows. Compared with "show everything",
- * not with the default: Unprocessed, Hiring only and Unflagged are defaults that filter, and comparing
- * with the default left their headers looking unfiltered. (Chips still list only changes from the
- * default: their ✕ resets to it, which would do nothing for a default.)
+ * Whether a column's filter hides posts — what its header mark and the chip row show. Compared with
+ * "show everything", not with the default: Unprocessed, Hiring only and Unflagged are defaults that
+ * filter, and comparing with the default made a bare page look unfiltered.
  */
 export function narrows<K extends keyof typeof OPTIONS>(field: K, value: OptValue<K>): boolean {
   return value !== UNFILTERED[field]
 }
 
-/** The filters that differ from the default, labelled for the chip row. Search and sort are not chips. */
+/** A chip's ✕: remove this filter. Not "back to the default" — for a default filter that changes nothing. Reset restores the defaults. */
+export function liftFilter<K extends keyof typeof OPTIONS>(field: K): OptValue<K> {
+  return UNFILTERED[field]
+}
+
+/** Every filter that hides posts, defaults included, labelled for the chip row. Search and sort are not chips. */
 export function activeChips(v: PostsView): { key: keyof PostsView, label: string }[] {
   const out: { key: keyof PostsView, label: string }[] = []
   for (const k of Object.keys(OPTIONS) as (keyof typeof OPTIONS)[]) {
-    if (v[k] === DEFAULT_VIEW[k]) continue
+    if (!narrows(k, v[k])) continue
     const o = (OPTIONS[k] as Opt<string | number>[]).find(x => x.value === v[k])
     out.push({ key: k, label: `${FIELD_LABEL[k]}: ${o?.label ?? String(v[k])}` })
   }

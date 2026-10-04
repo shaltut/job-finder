@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { findFinishedMatch, stalePastes, type FinishedPasteJob } from '#shared/paste-poll'
-import { activeChips, apiQuery, clampPage, DEFAULT_VIEW, narrows, nextSort, OPTIONS, parseView, rangeKeys, viewQuery, type PostsView } from '#shared/posts-view'
+import { activeChips, apiQuery, clampPage, DEFAULT_VIEW, liftFilter, narrows, nextSort, OPTIONS, parseView, rangeKeys, viewQuery, type PostsView } from '#shared/posts-view'
 import { sentTo, STAGE_LABEL } from '#shared/recruiter-stage'
 import type { TableColumn } from '@nuxt/ui'
 import type { JobState, PostRow } from '~/types'
@@ -261,8 +261,12 @@ watch(() => view.value.q, (v) => {
 })
 
 const chips = computed(() => activeChips(view.value))
+// chips now include the default filters, so Reset keys on "differs from the default" instead
+const filtersChanged = computed(() => view.value.country.length > 0
+  || (Object.keys(OPTIONS) as (keyof typeof OPTIONS)[]).some(k => view.value[k] !== DEFAULT_VIEW[k]))
 function clearChip(key: keyof PostsView) {
-  setView(key === 'country' ? { country: [], countryMode: 'exclude' } : { [key]: DEFAULT_VIEW[key] })
+  // ✕ lifts the filter (Status → All active), it does not restore the default — Reset does that
+  setView(key === 'country' ? { country: [], countryMode: 'exclude' } : { [key]: liftFilter(key as keyof typeof OPTIONS) })
 }
 /** Reset clears the filters; the search text and the sort are not filters and stay. */
 function resetFilters() {
@@ -912,7 +916,7 @@ const columns: TableColumn<PostRow>[] = [
           />
         </UBadge>
         <UButton
-          v-if="chips.length"
+          v-if="filtersChanged"
           label="Reset"
           size="xs"
           color="neutral"
