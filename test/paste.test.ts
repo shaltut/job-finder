@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { loadCv, scorePost } from '../scraper/score.ts'
 import { emptySettings } from '../shared/settings.ts'
-import { CLIPPED_TERM, isLinkedInUrl, PASTED_TERM, pasteGate, pasteOnce, pasteRecord } from '../server/utils/paste.ts'
+import { clipText, CLIPPED_TERM, isLinkedInUrl, PASTED_TERM, pasteGate, pasteOnce, pasteRecord } from '../server/utils/paste.ts'
 
 // scraper/ has no typecheck coverage, so a broken lift there fails at run time and nowhere else.
 // This is cheap and catches a syntax error, a bad import path and a changed arity.
@@ -196,7 +196,9 @@ test('enqueue() suppresses a duplicate paste, not just a duplicate draft or sync
   const body = src.slice(start, end)
   assert.match(
     body,
-    /if \(kind === 'paste' && args\.text\s*\n\s*&& \(queue\.some\(q => q\.args\.text === args\.text\) \|\| lanes\.paste\.current\?\.args\?\.text === args\.text\)\) return null/,
+    // since 2026-10-04 "the same paste" is text AND author (queue-core samePaste), so a clip is not
+    // swallowed by a plain paste of the same text — both arms, queued and running, still required
+    /if \(kind === 'paste' && args\.text[\s\S]{0,40}queue\.some\(q => q\.kind === 'paste' && samePaste\(q\.args, args\)\)[\s\S]{0,40}samePaste\(lanes\.paste\.current\.args, args\)\)\)\) return null/,
     'a pasted text already queued, or the text of the paste currently running, must be a no-op'
   )
 })
@@ -233,4 +235,23 @@ test('provenance must point at LinkedIn', () => {
   assert.equal(isLinkedInUrl('https://evil.example/in/x'), false)
   assert.equal(isLinkedInUrl('https://www.linkedin.com.evil.example/in/x'), false)
   assert.equal(isLinkedInUrl('javascript:alert(1)'), false)
+})
+
+// review 2026-10-04: the clipper's text must become what the scraper stores before it is keyed
+test('clipped text is normalised and capped as a scrape is, so the keys meet', async () => {
+  const { normalize, TEXT_CAP } = await import('../scraper/lib.ts')
+  const arabicDigits = `${POST}\nexperience: ٥ years`
+  assert.equal(clipText(arabicDigits), normalize(arabicDigits).slice(0, TEXT_CAP))
+  assert.notEqual(clipText(arabicDigits), arabicDigits, 'the Arabic-Indic digit is folded')
+  assert.equal(clipText('x'.repeat(TEXT_CAP + 50)).length, TEXT_CAP)
+})
+
+test('a clip is checked against the legacy key too — rows stored before 2026-09-18 carry it', async () => {
+  const { legacyKey } = await import('../scraper/lib.ts')
+  const g = pasteGate(POST, cfg(), PROV)
+  if (!g.ok) throw new Error('gate refused')
+  assert.deepEqual(g.knownAs, [g.key, legacyKey(PROV.authorUrl, POST)])
+  const plain = pasteGate(POST, cfg())
+  if (!plain.ok) throw new Error('gate refused')
+  assert.deepEqual(plain.knownAs, [plain.key], 'a plain paste has no scraped twin')
 })

@@ -143,6 +143,13 @@ export async function withRetry<T>(fn: () => Promise<T>, o: { signal?: AbortSign
 }
 
 /**
+ * One paste job or two: the same text from the same author. Text alone merged a paste with a later clip
+ * of it (losing the clip's author) and two clips of one template from different recruiters.
+ */
+export const samePaste = (a: { text?: string, authorUrl?: string }, b: { text?: string, authorUrl?: string }) =>
+  a.text === b.text && (a.authorUrl ?? '') === (b.authorUrl ?? '')
+
+/**
  * Whether a fresh worker resumes the persisted queue. Not after a hand-off pull: those rows are the other
  * machine's, and it may have finished them after its last push (or still be running them) — resuming would
  * draft the same recruiters twice. Without a pull the rows are this machine's own, whatever the other

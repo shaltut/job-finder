@@ -56,11 +56,12 @@ and `postUrl` (same).
 Today no middleware exists: the server binds 127.0.0.1, but any web page in the browser can send it a
 "simple" cross-site POST. The extension is a cross-origin caller by design, so the guard comes with it:
 
-- For `POST` / `PUT` / `PATCH` / `DELETE` under `/api/`: allow when `Origin` is absent (curl, server-side
+- For every `POST` / `PUT` / `PATCH` / `DELETE` (not only `/api/` — `/_nitro/tasks/daily` is a write too): allow when `Origin` is absent (curl, server-side
   calls), equals the app's own origin (`http://127.0.0.1:3939`, `http://localhost:3939`), or equals
   `chrome-extension://<EXTENSION_ID>`. Anything else → 403.
 - GETs are untouched — the Gmail OAuth callback is a cross-site GET and is guarded by its own nonce.
-- The decision is a pure function `originAllowed(method, path, origin)` in `server/utils/origin.ts`, so a
+- Every request must also name this machine's host (`127.0.0.1:3939` / `localhost:3939`) — DNS rebinding otherwise lets a page read the API as same-origin (review 2026-10-04).
+- The decision is pure functions `originAllowed(method, origin)` and `hostAllowed(host)` in `server/utils/origin.ts`, so a
   test can reach it (no test can import a Nitro handler).
 - A new `server/middleware/` directory is only scanned when the dev server starts: **a full restart of
   `npm run dev` is required once** (the plugins gotcha in CLAUDE.md).

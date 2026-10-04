@@ -13,7 +13,7 @@ import { parseArgs } from 'node:util'
 import Database from 'better-sqlite3'
 import { chromium } from 'playwright-core'
 import {
-  admits, ageOf, applyCueFor, channelsOf, collapsedText, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, MORE_LABEL, normalize, storedKey,
+  admits, ageOf, applyCueFor, TEXT_CAP, channelsOf, collapsedText, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, MORE_LABEL, normalize, storedKey,
   throttleEvidence, rotateTerms, dayIndex, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
@@ -71,14 +71,6 @@ const CV_PATH = opts.cv || CONFIG.cv
 // Compiled once, for the dry run's report only. The scrape itself reaches the same rule through
 // prescreen(), so there is exactly one definition of what "excluded" means.
 const EXCLUDE_RE = excludeRule(CONFIG.excludes)
-/**
- * Characters of a card stored and scored — the card, not the post. LinkedIn caps a post body at 3000
- * characters, and the card adds the header above it (measured up to 1605) plus the reaction footer, so the
- * old 3000 cut the tail off every full-length post, and the tail is where the address sits (median at 86%
- * of a post). Invisible while the top feed cards stayed collapsed; the first dry run after they expanded
- * found one over 3000. 6000 holds a full body under the longest header measured.
- */
-const TEXT_CAP = 6000
 
 // ---------------- output ----------------
 /** One NDJSON record on stdout. The only channel through which data leaves this process. */

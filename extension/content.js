@@ -3,26 +3,25 @@
 // scraper reads it (readCards in scraper/run.ts), and send it through the background worker to the app's
 // Paste-a-post intake. See docs/superpowers/specs/2026-10-04-linkedin-clipper-design.md.
 (async () => {
-  const { authorOf, MORE_LABEL, postLinkOf, resultLabel } = await import(chrome.runtime.getURL('lib.js'))
+  const { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel } = await import(chrome.runtime.getURL('lib.js'))
   const MARK = 'data-jf-clip'
   const PROFILE = 'a[href*="/in/"],a[href*="/company/"]'
   const TONE = { ok: '#0a7d3c', info: '#555', warn: '#9a6700', error: '#b42318' }
 
-  // LinkedIn's class names are hashed, so cards are found by structure: the container whose children each
-  // hold an author link, as the scraper does. Re-run on DOM changes — the feed renders as you scroll.
+  // LinkedIn's class names are hashed, so cards are found by structure: a container whose children each
+  // hold an author link, as the scraper does. Outermost such containers only — a feed card with its
+  // comments open holds a comment list of that same shape, and that list must never win.
   function cards() {
     const main = document.querySelector('main')
     if (!main) return []
-    let best = null
-    let bestN = 1
+    const lists = []
     for (const e of main.querySelectorAll('div')) {
       let n = 0
       for (const c of e.children) if (c.querySelector(PROFILE)) n++
-      if (n > bestN) {
-        best = e
-        bestN = n
-      }
+      if (n >= 2) lists.push({ e, n })
     }
+    const outer = lists.filter(l => !lists.some(o => o !== l && o.e.contains(l.e)))
+    const best = outer.sort((a, b) => b.n - a.n)[0]?.e
     return best ? [...best.children].filter(c => c.querySelector(PROFILE)) : []
   }
 
@@ -36,28 +35,42 @@
     for (let i = 0; i < 15 && card.innerText.length <= before; i++) await wait(100)
   }
 
+  async function send(post) {
+    try {
+      return await chrome.runtime.sendMessage({ type: 'clip', post })
+    } catch {
+      // "Extension context invalidated" after the extension is reloaded: this page's script is orphaned
+      return { status: -1, body: { error: 'Extension was reloaded — refresh this page' } }
+    }
+  }
+
   async function clip(card, btn) {
     btn.disabled = true
     btn.textContent = 'Sending…'
     await expand(card)
+    // read without the button in it — the stored text must be the card exactly as a scrape stores it
+    btn.remove()
+    const text = card.innerText.trim()
     const anchors = [...card.querySelectorAll('a[href]')]
+    card.prepend(btn)
     const author = authorOf(anchors.map(a => ({ href: a.href, text: a.innerText || '' })))
-    const post = {
-      text: card.innerText.replace(btn.innerText, '').trim(),
-      author: author?.name || undefined,
-      authorUrl: author?.url,
-      postUrl: postLinkOf(anchors.map(a => a.href)) || undefined
-    }
-    const res = await chrome.runtime.sendMessage({ type: 'clip', post }).catch(() => ({ status: 0, body: {} }))
-    const label = resultLabel(res.status, res.body)
+    const authorUrl = linkedInOnly(author?.url)
+    const res = await send({
+      text,
+      author: (authorUrl && author?.name) || undefined,
+      authorUrl,
+      postUrl: linkedInOnly(postLinkOf(anchors.map(a => a.href)) || undefined)
+    })
+    const label = resultLabel(res?.status ?? 0, res?.body ?? {})
     btn.textContent = label.text
     btn.style.color = TONE[label.tone]
-    btn.title = res.body?.error || ''
+    btn.title = res?.body?.error || ''
     // a refusal can be retried (start the app, change Settings); success or a duplicate cannot
     btn.disabled = label.tone === 'ok' || label.tone === 'info'
   }
 
   function decorate() {
+    if (!clippable(location.pathname)) return // LinkedIn is a single-page app: checked on every pass
     for (const card of cards()) {
       if (card.hasAttribute(MARK)) continue
       card.setAttribute(MARK, '')
@@ -69,16 +82,18 @@
       btn.addEventListener('click', (e) => {
         e.preventDefault()
         e.stopPropagation()
+        // only a real click: a script on the page calling btn.click() must not spend OpenAI calls
+        if (!e.isTrusted) return
         clip(card, btn)
       })
       card.prepend(btn)
     }
   }
 
-  // throttled: the feed mutates constantly, and cards() walks every div under <main>
+  // throttled, and idle while the tab is hidden: the feed mutates constantly, and cards() walks every div
   let pending = false
   new MutationObserver(() => {
-    if (pending) return
+    if (pending || document.hidden) return
     pending = true
     setTimeout(() => {
       pending = false

@@ -23,7 +23,7 @@ import { closedInGmail, sweep } from './sync'
 import { runPasteJob } from './paste-job'
 import { runGapsJob } from './gaps-job'
 import { sqlite } from './db'
-import { concurrency, pickNext, pool, restorePlan, resumedArgs, shouldRestore, withRetry, type Lane } from './queue-core'
+import { concurrency, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type Lane } from './queue-core'
 import { handoffState } from './handoff-runtime'
 
 export type { Lane }
@@ -177,7 +177,8 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   if (kind === 'reflag' && queue.some(q => q.kind === 'reflag')) return null
   // the same pasted text queued twice, or pasted again while its own score is still running, is a no-op
   if (kind === 'paste' && args.text
-    && (queue.some(q => q.args.text === args.text) || lanes.paste.current?.args?.text === args.text)) return null
+    && (queue.some(q => q.kind === 'paste' && samePaste(q.args, args))
+      || (lanes.paste.current && samePaste(lanes.paste.current.args, args)))) return null
 
   const item: QueueItem = { id: ++state.seq, lane: laneOf(kind), kind, args, queuedAt: new Date().toISOString() }
   queue.push(item)

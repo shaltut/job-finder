@@ -307,6 +307,15 @@ const AR_AGE = new RegExp(`(\\d+)${MARKS}(?:من${MARKS})?(${Object.keys(AR_UNIT
 
 // ponytail: only the age is folded, so the same post still keys twice when the two render paths disagree
 // about the wrapper ('Feed post' vs 'منشور في سجل الأنشطة'). Rare; the email is identical either way.
+/**
+ * Characters of a card stored and scored — the card, not the post. LinkedIn caps a post body at 3000
+ * characters, and the card adds the header above it (measured up to 1605) plus the reaction footer, so the
+ * old 3000 cut the tail off every full-length post, and the tail is where the address sits (median at 86%
+ * of a post). 6000 holds a full body under the longest header measured. Here rather than in run.ts so the
+ * paste intake can store a clipped post exactly as a scrape would.
+ */
+export const TEXT_CAP = 6000
+
 export const normalize = (t: string): string => t
   .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
   .replace(AR_AGE, (_, n, u) => n + AR_UNIT[u])

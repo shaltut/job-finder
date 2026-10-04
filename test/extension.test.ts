@@ -2,7 +2,7 @@
 // scraper/run.ts exactly: the key is dedupeKey(authorUrl, text), so a different URL means a duplicate row.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { authorOf, MORE_LABEL, postLinkOf, resultLabel } from '../extension/lib.js'
+import { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel } from '../extension/lib.js'
 
 const L = (href: string, text = '') => ({ href, text })
 
@@ -33,6 +33,21 @@ test('the expander label is the scraper\'s, both languages', async () => {
   assert.ok(MORE_LABEL.test('…more'))
   assert.ok(MORE_LABEL.test('… المزيد'))
   assert.ok(!MORE_LABEL.test('see more jobs'))
+})
+
+test('buttons only where posts are listed — never messaging, profiles or people search (review 2026-10-04)', () => {
+  assert.equal(clippable('/feed/'), true)
+  assert.equal(clippable('/search/results/content/'), true)
+  assert.equal(clippable('/feed/update/urn:li:activity:7/'), false, 'a single post: the comment list would win')
+  assert.equal(clippable('/messaging/thread/1/'), false)
+  assert.equal(clippable('/in/someone/'), false)
+  assert.equal(clippable('/search/results/people/'), false)
+})
+
+test('a non-LinkedIn author link is dropped client-side, so the clip degrades to a plain paste', () => {
+  assert.equal(linkedInOnly('https://www.linkedin.com/in/x'), 'https://www.linkedin.com/in/x')
+  assert.equal(linkedInOnly('https://example.com/in/x'), undefined)
+  assert.equal(linkedInOnly(undefined), undefined)
 })
 
 test('the button says what happened', () => {

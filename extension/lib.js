@@ -21,6 +21,29 @@ export function authorOf(links) {
 }
 
 /**
+ * Pages where the cards() heuristic finds posts: the feed and content search — the two the scraper reads.
+ * Anywhere else the busiest list of profile links is something else (a thread, a comment list on a single
+ * post, people results), and a button there would clip a comment or a person.
+ * @param {string} pathname
+ */
+export const clippable = pathname => /^\/feed\/?$/.test(pathname) || pathname.startsWith('/search/results/content')
+
+/**
+ * An author link the server will accept (https linkedin.com), or none — then the clip degrades to a plain
+ * paste instead of a 400.
+ * @param {string | undefined} url
+ */
+export function linkedInOnly(url) {
+  if (!url) return undefined
+  try {
+    const u = new URL(url)
+    return u.protocol === 'https:' && (u.hostname === 'linkedin.com' || u.hostname.endsWith('.linkedin.com')) ? url : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * The "…more" expander, by the scraper's own pattern (MORE_LABEL in scraper/lib.ts). It follows the UI
  * language, not the post's, so an English post still carries the Arabic label on an Arabic account.
  */

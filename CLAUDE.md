@@ -118,6 +118,15 @@ npm run dev ──► http://127.0.0.1:3939
    without an Origin (curl), and `chrome-extension://<EXTENSION_ID>`. That ID is derived from the public
    `key` in `extension/manifest.json`; `test/origin.test.ts` fails if the two drift. Branded Chrome no
    longer honours `--load-extension`, so the extension cannot be driven from `scripts/`; verify it by hand.
+   **A clip is stored as a scrape stores it**: the endpoint runs `clipText()` (the scraper's `normalize()`
+   and `TEXT_CAP`, now exported from `scraper/lib.ts`) before keying, and checks `legacyKey` too. **One gap
+   stays open**: a card with no Follow marker (common on the home feed for people already followed) keys on
+   the whole card, header included, and the owner's Chrome renders that header in Arabic while the scraper's
+   renders English — such a clip may store a second row. The paste queue dedupes on text **and** author
+   (`samePaste()`). Buttons appear only on the feed and content search (`clippable()`), and the outermost
+   card list wins, so a comment list never gets them. **Every request must name `127.0.0.1:3939` or
+   `localhost:3939`** (`hostAllowed()`), which closes DNS rebinding — a page that re-points its own name at
+   127.0.0.1 could otherwise read `/api/config`.
 
 ## Commands
 

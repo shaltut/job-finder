@@ -2,7 +2,7 @@
 // the drafter, Gmail, sync and the CV modules). See docs/superpowers/specs/2026-10-03-job-queue-design.md.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { backoff, concurrency, draftPriority, limiter, pickNext, pool, restorePlan, resumedArgs, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
+import { backoff, concurrency, draftPriority, limiter, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
 
 const item = (id: number, kind: string, args: QItem['args'] = {}, lane: QItem['lane'] = 'draft'): QItem =>
   ({ id, lane, kind, args, queuedAt: '' })
@@ -201,4 +201,11 @@ test('backoff: retries a quota error after waiting, rethrows anything else at on
     throw quota
   }, { waits: [1, 2], sleep: async () => {} }), /Quota exceeded/)
   assert.equal(calls, 3, 'gives up after the last wait')
+})
+
+test('two paste requests are the same job only when text AND author match (review 2026-10-04)', () => {
+  assert.equal(samePaste({ text: 'a' }, { text: 'a' }), true)
+  assert.equal(samePaste({ text: 'a' }, { text: 'a', authorUrl: 'https://www.linkedin.com/in/x' }), false, 'a paste then a clip')
+  assert.equal(samePaste({ text: 'a', authorUrl: 'u1' }, { text: 'a', authorUrl: 'u2' }), false, 'one template, two authors')
+  assert.equal(samePaste({ text: 'a', authorUrl: 'u1' }, { text: 'a', authorUrl: 'u1' }), true)
 })

@@ -4,7 +4,8 @@
 // `pasteOnce` below isn't pure — it awaits a score and writes a row — but it takes those effects as
 // arguments for the same reason: a test can inject them without touching OpenAI or SQLite.
 import {
-  admits, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, prescreen
+  admits, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, legacyKey, normalize,
+  prescreen, TEXT_CAP
 } from '../../scraper/lib.ts'
 import type { Config } from '../../scraper/lib.ts'
 import type { Score } from '../../scraper/score.ts'
@@ -17,6 +18,13 @@ export const CLIPPED_TERM = 'clipped'
 
 /** What the clipper knows that a paste does not. Every field optional: a paste has none of them. */
 export interface Provenance { author?: string, authorUrl?: string, postUrl?: string }
+
+/**
+ * A clipped card becomes exactly what a scrape stores before it is keyed or extracted: normalize() folds
+ * Arabic-Indic digits and Arabic ages, and the cut is the scraper's. Without it a post carrying "٥ سنوات"
+ * keyed differently from its scraped twin and was stored twice.
+ */
+export const clipText = (text: string): string => normalize(text).slice(0, TEXT_CAP)
 
 /** linkedin.com or a subdomain of it, https only — the clipper's links are stored and later rendered as links. */
 export function isLinkedInUrl(s: string): boolean {
@@ -31,7 +39,7 @@ export function isLinkedInUrl(s: string): boolean {
 export interface PasteFound { emails: string[], links: string[], phones: string[], refIds: string[] }
 
 export type PasteGate
-  = | { ok: true, key: string, found: PasteFound, channels: string[] }
+  = | { ok: true, key: string, knownAs: string[], found: PasteFound, channels: string[] }
     | { ok: false, found: PasteFound, channels: string[], enabled: readonly string[] }
 
 export function pasteGate(text: string, config: Config, prov: Provenance = {}): PasteGate {
@@ -46,7 +54,10 @@ export function pasteGate(text: string, config: Config, prov: Provenance = {}): 
   if (!admits(channels, enabled)) return { ok: false, found, channels, enabled }
   // A paste has no author, so two pastes of the same text give one key. A clipped post has one, and keys
   // exactly as the scraper would — so either side recognises a post the other already stored.
-  return { ok: true, key: dedupeKey(prov.authorUrl ?? '', text), found, channels }
+  const key = dedupeKey(prov.authorUrl ?? '', text)
+  // A clip has a scraped twin, which may carry the pre-2026-09-18 key (storedKey() in scraper/lib.ts)
+  const knownAs = prov.authorUrl ? [key, legacyKey(prov.authorUrl, text)] : [key]
+  return { ok: true, key, knownAs, found, channels }
 }
 
 export function pasteRecord(

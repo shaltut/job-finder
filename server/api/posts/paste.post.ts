@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { sqlite } from '../../utils/db'
 import { readConfig } from '../../utils/config'
 import { enqueue } from '../../utils/jobs'
-import { isLinkedInUrl, pasteGate } from '../../utils/paste'
+import { clipText, isLinkedInUrl, pasteGate } from '../../utils/paste'
 
 const linkedIn = z.string().trim().max(500).refine(isLinkedInUrl, 'must be an https linkedin.com link')
 const body = z.object({
@@ -32,6 +32,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const prov = { author: a.author, authorUrl: a.authorUrl, postUrl: a.postUrl }
+  // a clipped card is stored exactly as a scrape stores it, so its key can meet its scraped twin's
+  if (a.authorUrl) a.text = clipText(a.text)
   const gate = pasteGate(a.text, config, prov)
   if (!gate.ok) {
     setResponseStatus(event, 422)
@@ -42,7 +44,7 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  if (sqlite.prepare('SELECT 1 FROM posts WHERE key = ?').get(gate.key)) {
+  if (gate.knownAs.some(k => sqlite.prepare('SELECT 1 FROM posts WHERE key = ?').get(k))) {
     return { duplicate: true, key: gate.key }
   }
 

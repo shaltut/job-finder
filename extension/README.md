@@ -15,7 +15,8 @@ like any scraped post.
 
 ## Use
 
-Open LinkedIn, press **+ Job Finder** on a post. The button then says:
+Open your LinkedIn **feed** or a **post search**, press **+ Job Finder** on a post. (Buttons appear only
+there — on a single post's own page the comment list looks like a list of posts.) The button then says:
 
 | Label | Meaning |
 |---|---|

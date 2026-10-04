@@ -2,7 +2,7 @@
 // cross-site POST. Only the app itself and the LinkedIn clipper extension may write.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { EXTENSION_ID, originAllowed } from '../server/utils/origin.ts'
+import { EXTENSION_ID, hostAllowed, originAllowed } from '../server/utils/origin.ts'
 
 test('writes are allowed from the app, from the clipper, and from no browser at all', () => {
   assert.equal(originAllowed('POST', undefined), true, 'curl and server-side calls send no Origin')
@@ -36,4 +36,12 @@ test('reads are never guarded; every write is, /api or not', () => {
   assert.equal(originAllowed('HEAD', 'https://evil.example'), true)
   // the daily task runs a backup and a Gmail sync: a write, wherever it lives
   assert.equal(originAllowed('POST', 'https://evil.example'), false)
+})
+
+test('only this machine\'s own host names are served — a DNS-rebinding page cannot read the API', () => {
+  assert.equal(hostAllowed('127.0.0.1:3939'), true)
+  assert.equal(hostAllowed('localhost:3939'), true)
+  assert.equal(hostAllowed(undefined), true, 'no Host: not a browser')
+  assert.equal(hostAllowed('attacker.example:3939'), false)
+  assert.equal(hostAllowed('127.0.0.1.attacker.example:3939'), false)
 })

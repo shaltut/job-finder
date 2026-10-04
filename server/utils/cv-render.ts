@@ -3,7 +3,7 @@
 // See docs/superpowers/specs/2026-09-17-tailored-cv-design.md, section 4.
 import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join, posix } from 'node:path'
+import { basename, dirname, posix } from 'node:path'
 import type { Browser } from 'playwright-core'
 import type { Profile } from '../../shared/settings.ts'
 import type { CvContent } from './cv-master.ts'

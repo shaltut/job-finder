@@ -15,6 +15,16 @@ export const EXTENSION_ID = 'pdoeglcbbgfjnonkfjpdgbeonopkoipo'
 const APP_ORIGINS = new Set(['http://127.0.0.1:3939', 'http://localhost:3939', `chrome-extension://${EXTENSION_ID}`])
 const READS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
+/**
+ * DNS rebinding: a page at attacker.example can re-point its own name at 127.0.0.1 and then read this API
+ * as same-origin — the Origin check never fires for its GETs, and /api/config returns the profile's email
+ * and phone. So every request must name this machine's own host. Google's OAuth redirect lands on
+ * 127.0.0.1 and passes.
+ */
+export function hostAllowed(host: string | undefined): boolean {
+  return host === undefined || host === '127.0.0.1:3939' || host === 'localhost:3939'
+}
+
 export function originAllowed(method: string, origin: string | undefined): boolean {
   if (READS.has(method.toUpperCase())) return true
   return origin === undefined || APP_ORIGINS.has(origin)
