@@ -106,6 +106,18 @@ npm run dev ──► http://127.0.0.1:3939
    so renaming the export or appending a later one fails an anchor assertion instead of the vacuous pass an
    earlier version of this pin had, where an unchecked `indexOf` returning -1 made the slice run over the
    file's last byte only.
+6. **LinkedIn clipper** `extension/` (MV3, no build, Load unpacked): a **+ Job Finder** button on every
+   post sends `{ text, author, authorUrl, postUrl }` through the background worker to the paste endpoint.
+   **The author rule is the scraper's, byte for byte** (`authorOf` in `extension/lib.js` mirrors `readCards`
+   in `scraper/run.ts`): with an `authorUrl` the key is `dedupeKey(authorUrl, text)`, so a post the scraper
+   holds reads "Already have it" — a different URL normalisation would store it twice. `MORE_LABEL` is
+   pinned equal to the scraper's by `test/extension.test.ts`. Rows get `search_term = 'clipped'` and stay
+   out of the scrape KPIs like `pasted`; links must be https linkedin.com. **The server's origin guard**
+   (`server/middleware/origin.ts`, logic in `server/utils/origin.ts`) refuses any non-GET from another
+   origin — any page in the browser could otherwise POST to 127.0.0.1 — and admits the app, requests
+   without an Origin (curl), and `chrome-extension://<EXTENSION_ID>`. That ID is derived from the public
+   `key` in `extension/manifest.json`; `test/origin.test.ts` fails if the two drift. Branded Chrome no
+   longer honours `--load-extension`, so the extension cannot be driven from `scripts/`; verify it by hand.
 
 ## Commands
 

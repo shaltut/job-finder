@@ -183,6 +183,11 @@ would silently make every sent application look unsent.
 **It cannot send.** `gmail.compose` does permit sending, so that is enforced in the code instead: no send
 call exists anywhere under `server/`, and `npm test` fails if one is ever added.
 
+## Clip posts from LinkedIn
+
+A Chrome extension in `extension/` puts a **+ Job Finder** button on every LinkedIn post: one click
+sends it to Paste a post, author included. Install it with **Load unpacked** — `extension/README.md`.
+
 ## How you actually use it
 
 1. **Run** → Start scrape. Nine terms, forty cards each, a few minutes. Or leave it to the daily 08:07 task.
