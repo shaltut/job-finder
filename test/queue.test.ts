@@ -2,7 +2,7 @@
 // the drafter, Gmail, sync and the CV modules). See docs/superpowers/specs/2026-10-03-job-queue-design.md.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { concurrency, draftPriority, limiter, pickNext, pool, restorePlan, resumedArgs, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
+import { backoff, concurrency, draftPriority, limiter, pickNext, pool, restorePlan, resumedArgs, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
 
 const item = (id: number, kind: string, args: QItem['args'] = {}, lane: QItem['lane'] = 'draft'): QItem =>
   ({ id, lane, kind, args, queuedAt: '' })
@@ -163,4 +163,42 @@ test('limiter: never more than n calls in flight, results in call order', async 
     throw new Error('boom')
   }), /boom/)
   assert.equal(await run(async () => 'still works after a failure'), 'still works after a failure')
+})
+
+test('limiter: calls start at least minGapMs apart — a rate, not only a concurrency cap', async () => {
+  // Gmail's quota is per minute; six fast calls in flight still made ~120 calls/s and tripped it (2026-10-04)
+  const run = limiter(6, 20)
+  const starts: number[] = []
+  await Promise.all([1, 2, 3, 4, 5].map(() => run(async () => {
+    starts.push(Date.now())
+  })))
+  // the rate is what a per-minute quota counts; one gap can jitter by a Windows timer tick (~15ms)
+  const span = starts.at(-1)! - starts[0]!
+  assert.ok(span >= 4 * 20 - 10, `5 calls spanned ${span}ms, want ≥ 70`)
+})
+
+test('backoff: retries a quota error after waiting, rethrows anything else at once', async () => {
+  const quota = Object.assign(new Error('gmail drafts: Quota exceeded for quota metric \'Total Query Cost\''), { statusCode: 429 })
+  let calls = 0
+  const waited: number[] = []
+  const ok = await backoff(async () => {
+    if (++calls < 3) throw quota
+    return 'done'
+  }, { waits: [1, 2, 3], sleep: async (ms) => { waited.push(ms) } })
+  assert.equal(ok, 'done')
+  assert.deepEqual(waited, [1, 2])
+
+  calls = 0
+  await assert.rejects(backoff(async () => {
+    calls++
+    throw new Error('gmail messages: Not Found')
+  }, { waits: [1], sleep: async () => {} }), /Not Found/)
+  assert.equal(calls, 1)
+
+  calls = 0
+  await assert.rejects(backoff(async () => {
+    calls++
+    throw quota
+  }, { waits: [1, 2], sleep: async () => {} }), /Quota exceeded/)
+  assert.equal(calls, 3, 'gives up after the last wait')
 })

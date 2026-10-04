@@ -74,17 +74,44 @@ export async function pool<T>(items: T[], n: number, fn: (t: T) => Promise<void>
  * quota shared by many callers (Gmail: ~250 units/s per user, a message read costs 5), where pool() — one
  * list, one loop — cannot see the calls nested inside each item.
  */
-export function limiter(n: number) {
+export function limiter(n: number, minGapMs = 0) {
   let active = 0
+  let nextStart = 0
   const waiting: (() => void)[] = []
   return async <T>(fn: () => Promise<T>): Promise<T> => {
     if (active >= n) await new Promise<void>(r => waiting.push(r))
     active++
+    // A rate as well as a cap: fast calls under a concurrency cap alone still run as fast as they return.
+    // Measured 2026-10-04: limiter(6) with no gap tripped Gmail's per-minute quota on the first sync.
+    const wait = nextStart - Date.now()
+    nextStart = Math.max(Date.now(), nextStart) + minGapMs
+    if (wait > 0) await new Promise(r => setTimeout(r, wait))
     try {
       return await fn()
     } finally {
       active--
       waiting.shift()?.()
+    }
+  }
+}
+
+/** A rate-limit refusal: HTTP 429, or Google's "Quota exceeded" / "rateLimitExceeded" wording. */
+const RATE_LIMITED = /quota exceeded|rate ?limit/i
+
+/**
+ * Retries `fn` after each of `waits` when it fails with a rate-limit error; anything else is rethrown at
+ * once. Gmail's quota is per minute, so waiting is the cure, not trying again sooner.
+ */
+export async function backoff<T>(fn: () => Promise<T>, o: { waits?: number[], sleep?: (ms: number) => Promise<void> } = {}): Promise<T> {
+  const waits = o.waits ?? [15_000, 30_000, 60_000]
+  const sleep = o.sleep ?? (ms => new Promise<void>(r => setTimeout(r, ms)))
+  for (let i = 0; ; i++) {
+    try {
+      return await fn()
+    } catch (e) {
+      const err = e as Error & { statusCode?: number }
+      if (i >= waits.length || !(err.statusCode === 429 || RATE_LIMITED.test(err.message ?? ''))) throw e
+      await sleep(waits[i]!)
     }
   }
 }

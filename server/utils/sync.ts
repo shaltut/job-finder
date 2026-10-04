@@ -13,7 +13,7 @@ import { persist, signature } from './drafts'
 import { ccFrom, createDraft, gmail, renderHtml, replyHeaders } from './gmail'
 import { cachedStage, closedBy, decideStage, untilDue, type Decision, type GmailMessage } from './stages'
 import { followUpPosts, healContact } from './contacts'
-import { concurrency, limiter, pool } from './queue-core'
+import { backoff, concurrency, limiter, pool } from './queue-core'
 
 interface RawMessage {
   id: string
@@ -28,11 +28,13 @@ const header = (m: RawMessage, name: string) =>
 
 /**
  * Every Gmail read in this file goes through one limiter: the sweep reads several recruiters at once and
- * the draft gate runs beside parallel drafting, and Gmail allows ~250 quota units/s per user, a message
- * read costing 5. Six in flight at ~150 ms each stays near 40 reads/s. ponytail: no 429 back-off — add one
- * if `rateLimitExceeded` ever shows in a log.
+ * the draft gate runs beside parallel drafting. Gmail allows 15,000 quota units per minute per user and a
+ * read costs 5, so ~50 reads/s at most. A cap of 6 in flight alone was not a rate — fast replies ran it far
+ * past that and the first parallel sync died on "Quota exceeded" (2026-10-04) — so calls also start 30 ms
+ * apart (~33/s, ~165 units/s, room for createDraft beside it), and a rate-limit refusal waits and retries.
  */
-const gmailRead = limiter(6)
+const paced = limiter(6, 30)
+const gmailRead = <T>(fn: () => Promise<T>) => backoff(() => paced(fn))
 
 /** Every message either side of this address. Sent mail is included; drafts are not, which is the point. */
 async function threadMessages(email: string): Promise<GmailMessage[]> {
