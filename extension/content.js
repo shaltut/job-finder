@@ -6,24 +6,31 @@
   // lib.js runs first (manifest content_scripts order) and leaves these here
   const { authorOf, clippable, linkedInOnly, MORE_LABEL, postLinkOf, resultLabel } = globalThis.JobFinderClip
   const MARK = 'data-jf-clip'
-  const PROFILE = 'a[href*="/in/"],a[href*="/company/"]'
   const TONE = { ok: '#0a7d3c', info: '#555', warn: '#9a6700', error: '#b42318' }
 
-  // LinkedIn's class names are hashed, so cards are found by structure: a container whose children each
-  // hold an author link, as the scraper does. Outermost such containers only — a feed card with its
-  // comments open holds a comment list of that same shape, and that list must never win.
+  // One element per post. Measured on the live feed, 2026-10-04: each post is a role="listitem" whose
+  // componentkey starts "update-card", and its innerText equals the card text the scraper stores. The
+  // structural rule the scraper uses ("a container whose children each hold an author link") picked the
+  // page's three layout columns instead on this layout. Fallback for search pages: the scraper's own
+  // per-post token, an element id "expanded<token>" / "collapsed<token>".
+  const POST = '[role="listitem"][componentkey^="update-card"]'
+  const TOKEN = '[id^="expanded"],[id^="collapsed"]'
   function cards() {
     const main = document.querySelector('main')
     if (!main) return []
-    const lists = []
-    for (const e of main.querySelectorAll('div')) {
-      let n = 0
-      for (const c of e.children) if (c.querySelector(PROFILE)) n++
-      if (n >= 2) lists.push({ e, n })
-    }
-    const outer = lists.filter(l => !lists.some(o => o !== l && o.e.contains(l.e)))
-    const best = outer.sort((a, b) => b.n - a.n)[0]?.e
-    return best ? [...best.children].filter(c => c.querySelector(PROFILE)) : []
+    const items = [...main.querySelectorAll(POST)]
+    // on the feed the token element wraps the listitem, so either direction means "already counted"
+    const loose = [...main.querySelectorAll(TOKEN)].filter(t => !t.closest(POST) && !t.querySelector(POST))
+    // a lazy post renders empty first; it gets its button on a later pass, once it has text
+    return [...items, ...loose].filter(c => c.innerText.trim().length > 0)
+  }
+
+  // "…more" can re-render the post; find it again by the attribute that identifies it
+  function current(card) {
+    const key = card.getAttribute('componentkey')
+    if (key) return document.querySelector(`[componentkey="${CSS.escape(key)}"]`) || card
+    const token = card.id.replace(/^(expanded|collapsed)/, '')
+    return document.getElementById(`expanded${token}`) || document.getElementById(`collapsed${token}`) || card
   }
 
   const wait = ms => new Promise(r => setTimeout(r, ms))
@@ -49,6 +56,7 @@
     btn.disabled = true
     btn.textContent = 'Sending…'
     await expand(card)
+    card = current(card)
     // read without the button in it — the stored text must be the card exactly as a scrape stores it
     btn.remove()
     const text = card.innerText.trim()
