@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3'
 import { gmail, gmailStatus } from './gmail'
 import { openWritableDb } from './ingest'
 import { backoff } from './queue-core'
-import { draftText, pickBatch, sendable, type GmailDraft } from './sender-core'
+import { draftText, modeOf, pickBatch, sendable, type GmailDraft } from './sender-core'
 import { gmailDecision } from './sync'
 
 const BATCH = 10
@@ -33,9 +33,24 @@ const mark = (db: Database.Database, id: string, outcome: string) =>
 async function round(
   db: Database.Database, selfEmail: string, push: (s: string) => void, signal: AbortSignal, failures: Map<string, number>
 ): Promise<number> {
+  const waiting = await gmailDraftIds()
+  // Adopt drafts to recruiters the app knows. Follow-ups drafted before app_drafts existed were never recorded
+  // (their id lived in a note the sweep overwrites), so they were invisible here (owner, 2026-10-05). Only an
+  // address in `contacts` qualifies; the stage check below still decides whether anything goes out.
+  const known = new Set((db.prepare('SELECT draft_id FROM app_drafts').all() as { draft_id: string }[]).map(r => r.draft_id))
+  const recruiters = new Set((db.prepare('SELECT email FROM contacts').all() as { email: string }[]).map(r => r.email))
+  let adopted = 0
+  for (const id of waiting) {
+    if (known.has(id) || signal.aborted) continue
+    const to = draftText(await backoff(() => gmail<GmailDraft>(`drafts/${id}?format=metadata&metadataHeaders=To`))).to
+    if (!recruiters.has(to)) continue
+    db.prepare(`INSERT OR IGNORE INTO app_drafts (draft_id, email, mode, created_at) VALUES (?, ?, 'apply', unixepoch())`).run(id, to)
+    adopted++
+  }
+  if (adopted) push(`${adopted} draft(s) to known recruiters adopted (drafted before the sender kept a record)`)
+
   const unsent = db.prepare('SELECT draft_id, email, mode FROM app_drafts WHERE sent_at IS NULL AND outcome IS NULL')
     .all() as { draft_id: string, email: string, mode: string }[]
-  const waiting = await gmailDraftIds()
   const gone = unsent.filter(r => !waiting.has(r.draft_id))
   for (const r of gone) mark(db, r.draft_id, 'gone') // sent or deleted by hand, before the lane saw it
   if (gone.length) push(`${gone.length} app draft(s) no longer in Gmail — sent or deleted by hand`)
@@ -49,18 +64,25 @@ async function round(
     if (signal.aborted) break
     const row = live.find(r => r.draft_id === id)!
     try {
-      const t = draftText(await backoff(() => gmail<GmailDraft>(`drafts/${id}?format=full`)))
+      const draft = await backoff(() => gmail<GmailDraft>(`drafts/${id}?format=full`))
+      const t = draftText(draft)
       const to = t.to || row.email
+      // what this draft is, from its own thread — not the stored label (sender-core modeOf)
+      const thread = draft.message.threadId
+        ? await backoff(() => gmail<{ messages?: { labelIds?: string[] }[] }>(`threads/${draft.message.threadId}?format=minimal&fields=messages/labelIds`))
+        : { messages: [] }
+      const mode = modeOf(thread.messages ?? [])
+      if (mode !== row.mode) db.prepare('UPDATE app_drafts SET mode = ? WHERE draft_id = ?').run(mode, id)
       const decision = await gmailDecision(db, to, selfEmail)
       const verdict = sendable({
         subject: t.subject,
         body: t.body,
         hasPdf: t.hasPdf,
         action: decision.action,
-        mode: row.mode,
+        mode,
         recipientMatches: t.to === row.email,
         // a local record, because Gmail's search can lag a send by minutes
-        sentBefore: !!db.prepare('SELECT 1 FROM app_drafts WHERE email = ? AND mode = ? AND sent_at IS NOT NULL').get(row.email, row.mode),
+        sentBefore: !!db.prepare('SELECT 1 FROM app_drafts WHERE email = ? AND mode = ? AND sent_at IS NOT NULL').get(row.email, mode),
         sentThisRound: sentThisRound.has(row.email)
       })
       if (!verdict.ok) {
@@ -111,6 +133,9 @@ export async function runSendJob(push: (s: string) => void, signal: AbortSignal,
   }
   const { db, close } = openWritableDb()
   const failures = new Map<string, number>() // per draft, this job: three transient failures set it aside
+  // Held only because a stored label said 'application' — the mode is now read from Gmail, so look again
+  const relooked = db.prepare(`UPDATE app_drafts SET outcome = NULL WHERE sent_at IS NULL AND outcome LIKE 'an application already went out%'`).run().changes
+  if (relooked) push(`${relooked} draft(s) held as a second application are checked again, their kind now read from Gmail`)
   try {
     for (;;) {
       const left = await round(db, status.email, push, signal, failures)

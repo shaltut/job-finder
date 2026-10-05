@@ -70,6 +70,15 @@ export function sendable(d: SendCheck): { ok: true } | { ok: false, reason: stri
   return { ok: true }
 }
 
+/**
+ * What a draft is, read from Gmail rather than from a stored label: a draft inside a thread where we already
+ * sent something is a follow-up; anything else is an application. The backfill could only guess (44 follow-ups
+ * came in labelled as applications), and follow-ups drafted before app_drafts existed had no label at all.
+ */
+export function modeOf(threadMessages: { labelIds?: string[] }[]): 'apply' | 'follow-up' {
+  return threadMessages.some(m => m.labelIds?.includes('SENT') && !m.labelIds.includes('DRAFT')) ? 'follow-up' : 'apply'
+}
+
 /** Up to n ids in random order (Fisher-Yates over a copy). */
 export function pickBatch(ids: string[], n: number, random: () => number = Math.random): string[] {
   const a = [...ids]

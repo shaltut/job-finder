@@ -2,7 +2,7 @@
 // do until 2026-10-05, so every refusal it can make is pinned here.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { draftText, pickBatch, sendable } from '../server/utils/sender-core.ts'
+import { draftText, modeOf, pickBatch, sendable } from '../server/utils/sender-core.ts'
 
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64url')
 const draft = (body: string, withPdf = true, subject = 'Application: .NET Lead') => ({
@@ -73,4 +73,17 @@ test('a local record refuses a second email of the same kind — Gmail search ca
 test('a changed recipient or an empty body is held back', () => {
   assert.match((sendable({ ...base, recipientMatches: false }) as { reason: string }).reason, /recipient changed/)
   assert.match((sendable({ ...base, body: '  ' }) as { reason: string }).reason, /empty/)
+})
+
+// review 2026-10-05 / owner: follow-up drafts made before app_drafts existed were invisible to the sender.
+// What a draft IS comes from Gmail: a reply inside a thread where we already wrote is a follow-up.
+test('modeOf: a draft in a thread we already sent in is a follow-up, otherwise an application', () => {
+  const sent = { labelIds: ['SENT'] }
+  const draftMsg = { labelIds: ['DRAFT'] }
+  const theirs = { labelIds: ['INBOX'] }
+  assert.equal(modeOf([sent, draftMsg]), 'follow-up')
+  assert.equal(modeOf([draftMsg]), 'apply')
+  assert.equal(modeOf([theirs, draftMsg]), 'apply', 'a thread they started is not one we sent in')
+  assert.equal(modeOf([{ labelIds: ['SENT', 'DRAFT'] }]), 'apply', 'the draft itself does not count')
+  assert.equal(modeOf([]), 'apply')
 })

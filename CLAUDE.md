@@ -777,7 +777,12 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   address per round) refuses a second email, because Gmail's search index can lag a send by minutes. A
   changed recipient, an empty body, a permanent 4xx and three transient failures each set a draft aside.
   **A send job is never resumed after a restart** (`restorePlan` drops it like a scrape): only the button
-  starts sending. The backfill labels a draft id `follow-up` when its rows say `named in follow-up`. A round queues a sync; Stop ends the 15-minute wait. **The sender has its own lane
+  starts sending. The backfill labels a draft id `follow-up` when its rows say `named in follow-up`.
+  **Each round also adopts Gmail drafts addressed to a known recruiter** (`contacts`): follow-ups drafted
+  before `app_drafts` existed were never recorded and were invisible to the lane (owner's choice, 2026-10-05,
+  to send them). **A draft's kind is read from Gmail at send time** (`modeOf()`: inside a thread we already
+  sent in ⇒ follow-up), never trusted from the stored label. The trade-off the owner accepted: a draft they
+  wrote by hand to a known recruiter is eligible too, still only through the row-7/row-4 stage check. A round queues a sync; Stop ends the 15-minute wait. **The sender has its own lane
   (`send`)**, so its hours of waiting never hold the draft lane. Spec:
   `docs/superpowers/specs/2026-10-05-draft-sender-design.md`. **Migration `0009` carries the backfill** —
   on this PC it ran once by hand, because the dev server applied the table before the backfill was added.
