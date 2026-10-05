@@ -42,6 +42,7 @@ test('only this machine\'s own host names are served — a DNS-rebinding page ca
   assert.equal(hostAllowed('127.0.0.1:3939'), true)
   assert.equal(hostAllowed('localhost:3939'), true)
   assert.equal(hostAllowed(undefined), true, 'no Host: not a browser')
+  assert.equal(hostAllowed('localhost'), true, 'SSR calls its own API in-process with a bare host')
   assert.equal(hostAllowed('attacker.example:3939'), false)
   assert.equal(hostAllowed('127.0.0.1.attacker.example:3939'), false)
 })

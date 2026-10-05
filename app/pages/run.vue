@@ -311,7 +311,7 @@ const yieldColumns: TableColumn<YieldRow>[] = [
             color="primary"
             icon="i-lucide-send"
             :loading="!!job.lanes.send.current"
-            :disabled="!!job.lanes.send.current || !sendCounts.pending"
+            :disabled="!!job.lanes.send.current || (!sendCounts.pending && !sendCounts.held)"
             @click="startSending"
           >
             {{ job.lanes.send.current ? 'Sending…' : 'Send drafts' }}

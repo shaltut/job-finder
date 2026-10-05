@@ -8,7 +8,7 @@ import { chromium } from 'playwright-core'
 
 const out = process.argv[2] || 'logs/shots'
 const base = process.argv[3] || 'http://127.0.0.1:3939'
-const views = [['posts', '/'], ['pipeline', '/pipeline'], ['run', '/run'], ['settings', '/settings']]
+const views = [['posts', '/'], ['pipeline', '/pipeline'], ['run', '/run'], ['settings', '/settings'], ['gaps', '/gaps']]
 
 mkdirSync(out, { recursive: true })
 const browser = await chromium.launch({ channel: 'chrome', headless: true })

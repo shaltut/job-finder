@@ -19,10 +19,11 @@ const READS = new Set(['GET', 'HEAD', 'OPTIONS'])
  * DNS rebinding: a page at attacker.example can re-point its own name at 127.0.0.1 and then read this API
  * as same-origin — the Origin check never fires for its GETs, and /api/config returns the profile's email
  * and phone. So every request must name this machine's own host. Google's OAuth redirect lands on
- * 127.0.0.1 and passes.
+ * 127.0.0.1 and passes. Bare `localhost` is Nuxt's own server-side render calling its API in-process (a
+ * hard load of /run 403'd without it); a browser on this port always sends `:3939`, so no page can produce it.
  */
 export function hostAllowed(host: string | undefined): boolean {
-  return host === undefined || host === '127.0.0.1:3939' || host === 'localhost:3939'
+  return host === undefined || host === 'localhost' || host === '127.0.0.1:3939' || host === 'localhost:3939'
 }
 
 export function originAllowed(method: string, origin: string | undefined): boolean {

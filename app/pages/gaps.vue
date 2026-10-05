@@ -20,9 +20,32 @@ const expanded = ref<Record<string, boolean>>({})
 
 const categories = computed(() => ['all', ...new Set(data.value.terms.map(t => t.category))])
 
-const rows = computed(() => data.value.terms.filter(t =>
+const filtered = computed(() => data.value.terms.filter(t =>
   (show.value === 'all' || (show.value === 'gaps' ? t.group !== 'on-cv' : t.group === show.value))
   && (category.value === 'all' || t.category === category.value)))
+
+// 100 rows at a time: thousands of table rows were most of the page's slowness (3,030 terms, measured)
+const PAGE = 100
+const page = ref(1)
+watch([show, category], () => {
+  page.value = 1
+})
+const rows = computed(() => filtered.value.slice((page.value - 1) * PAGE, page.value * PAGE))
+
+// a term's posts load when its row opens — the list itself no longer carries them
+const posts = ref<Record<string, GapTerm['posts'] | 'loading' | undefined>>({})
+watch(expanded, async (open) => {
+  for (const [id, on] of Object.entries(open)) {
+    if (!on || posts.value[id]) continue
+    posts.value[id] = 'loading'
+    try {
+      const r = await $fetch<{ posts: GapTerm['posts'] }>('/api/gaps', { query: { term: id } })
+      posts.value[id] = r.posts
+    } catch {
+      posts.value[id] = undefined // reopening the row tries again
+    }
+  }
+}, { deep: true })
 
 const GROUP: Record<GapGroup, { label: string, color: 'error' | 'warning' | 'success' }> = {
   'learn': { label: 'Learn', color: 'error' },
@@ -126,7 +149,14 @@ async function copyList() {
           :items="categories.map(c => ({ label: c === 'all' ? 'Any category' : c, value: c }))"
           class="w-44"
         />
-        <span class="text-sm text-muted ml-auto">{{ rows.length }} keywords</span>
+        <span class="text-sm text-muted ml-auto">{{ filtered.length }} keywords</span>
+        <UPagination
+          v-if="filtered.length > PAGE"
+          v-model:page="page"
+          :total="filtered.length"
+          :items-per-page="PAGE"
+          size="sm"
+        />
       </div>
 
       <UTable
@@ -138,9 +168,18 @@ async function copyList() {
         class="shrink-0"
       >
         <template #expanded="{ row }">
-          <ul class="p-4 space-y-3 text-sm">
+          <p
+            v-if="!Array.isArray(posts[row.id])"
+            class="p-4 text-sm text-muted"
+          >
+            Loading posts…
+          </p>
+          <ul
+            v-else
+            class="p-4 space-y-3 text-sm"
+          >
             <li
-              v-for="p in row.original.posts"
+              v-for="p in (posts[row.id] as GapTerm['posts'])"
               :key="p.key"
               class="space-y-1"
             >
