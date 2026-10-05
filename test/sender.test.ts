@@ -1,0 +1,55 @@
+// The draft sender's decisions (server/utils/sender-core.ts). Sending is the one thing this app could not
+// do until 2026-10-05, so every refusal it can make is pinned here.
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { draftText, pickBatch, sendable } from '../server/utils/sender-core.ts'
+
+const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64url')
+const draft = (body: string, withPdf = true, subject = 'Application: .NET Lead') => ({
+  id: 'r1',
+  message: {
+    id: 'm1',
+    payload: {
+      mimeType: 'multipart/mixed',
+      headers: [{ name: 'To', value: 'Jane <jane@acme.example>' }, { name: 'Subject', value: subject }],
+      parts: [
+        { mimeType: 'multipart/alternative', parts: [
+          { mimeType: 'text/plain', body: { data: b64(body) } },
+          { mimeType: 'text/html', body: { data: b64(`<p>${body}</p>`) } }
+        ] },
+        ...(withPdf ? [{ mimeType: 'application/pdf', filename: 'CV.pdf', body: { attachmentId: 'a1' } }] : [])
+      ]
+    }
+  }
+})
+
+test('draftText reads the recipient, subject, plain body and whether a PDF rides along', () => {
+  const t = draftText(draft('Dear Jane,\nI am applying.'))
+  assert.equal(t.to, 'jane@acme.example')
+  assert.equal(t.subject, 'Application: .NET Lead')
+  assert.equal(t.body, 'Dear Jane,\nI am applying.')
+  assert.equal(t.hasPdf, true)
+  assert.equal(draftText(draft('x', false)).hasPdf, false)
+})
+
+test('sendable: only a clean draft to a recruiter whose Gmail still says "draft pending"', () => {
+  const ok = { subject: 'Application', body: 'Dear Jane', hasPdf: true, action: 'send-the-application' }
+  assert.deepEqual(sendable(ok), { ok: true })
+  assert.deepEqual(sendable({ ...ok, action: 'send-the-follow-up' }), { ok: true })
+  assert.match((sendable({ ...ok, body: 'Expected salary: [ADD BEFORE SENDING]' }) as { reason: string }).reason, /placeholder/)
+  assert.match((sendable({ ...ok, subject: 'TBD' }) as { reason: string }).reason, /placeholder/)
+  assert.match((sendable({ ...ok, hasPdf: false }) as { reason: string }).reason, /no CV/)
+  assert.match((sendable({ ...ok, action: 'none' }) as { reason: string }).reason, /no longer pending/)
+  assert.match((sendable({ ...ok, action: 'draft-the-follow-up' }) as { reason: string }).reason, /no longer pending/)
+})
+
+test('pickBatch: n distinct ids, all of them when fewer, random order', () => {
+  const ids = ['a', 'b', 'c', 'd', 'e']
+  const batch = pickBatch(ids, 3, () => 0.5)
+  assert.equal(batch.length, 3)
+  assert.equal(new Set(batch).size, 3)
+  assert.ok(batch.every(id => ids.includes(id)))
+  assert.deepEqual(pickBatch(ids, 10, Math.random).sort(), ids)
+  assert.deepEqual(pickBatch([], 10, Math.random), [])
+  assert.notDeepEqual(pickBatch(ids, 5, () => 0), ids, 'shuffled, not the stored order')
+})

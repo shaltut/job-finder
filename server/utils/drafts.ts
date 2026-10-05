@@ -139,6 +139,12 @@ export function persist(
         apply: req.mode === 'apply' ? 1 : 0,
         now
       })
+      // The sender lane sends only drafts listed here — the app's own, never the owner's. A local file
+      // draft (no Gmail connection) has nothing to send.
+      if (draftFile && !draftFile.endsWith('.json')) {
+        db.prepare(`INSERT OR IGNORE INTO app_drafts (draft_id, email, mode, created_at) VALUES (?, ?, ?, ?)`)
+          .run(draftFile, req.recruiterEmail.toLowerCase(), req.mode, now)
+      }
     }
   })
 

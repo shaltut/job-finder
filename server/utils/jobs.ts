@@ -22,12 +22,13 @@ import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 import { closedInGmail, sweep } from './sync'
 import { runPasteJob } from './paste-job'
 import { runGapsJob } from './gaps-job'
+import { runSendJob } from './sender'
 import { sqlite } from './db'
 import { concurrency, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type Lane } from './queue-core'
 import { handoffState } from './handoff-runtime'
 
 export type { Lane }
-export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps'
+export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps' | 'send'
 
 export interface JobArgs {
   terms?: string
@@ -86,7 +87,8 @@ const state: RunnerState = g.__jobfinderRunner ??= {
     scrape: { current: null, last: null },
     draft: { current: null, last: null },
     paste: { current: null, last: null },
-    gaps: { current: null, last: null }
+    gaps: { current: null, last: null },
+    send: { current: null, last: null }
   },
   queue: [],
   seq: 0
@@ -94,6 +96,7 @@ const state: RunnerState = g.__jobfinderRunner ??= {
 // A dev server that was already running holds a state object from before these lanes existed.
 state.lanes.paste ??= { current: null, last: null }
 state.lanes.gaps ??= { current: null, last: null }
+state.lanes.send ??= { current: null, last: null }
 const { lanes, queue } = state
 
 // gaps has its own lane: it is OpenAI, not claude, and an hours-long backfill used to hold every Draft
@@ -102,11 +105,11 @@ const { lanes, queue } = state
 const laneOf = (kind: Kind): Lane =>
   kind === 'paste'
     ? 'paste'
-    : kind === 'gaps'
-      ? 'gaps'
+    : kind === 'gaps' || kind === 'send'
+      ? kind
       : (kind === 'scrape' || kind === 'rescore' || kind === 'reflag' || kind === 'reextract' ? 'scrape' : 'draft')
 
-export const busy = () => !!(lanes.scrape.current || lanes.draft.current || lanes.paste.current || lanes.gaps.current)
+export const busy = () => !!(lanes.scrape.current || lanes.draft.current || lanes.paste.current || lanes.gaps.current || lanes.send.current)
 
 // The queue is mirrored into job_queue so a worker rebuild or a restart does not lose it (see
 // restoreQueue). Memory stays the source of truth while the worker lives; these only keep the table in step.
@@ -168,6 +171,8 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   if (kind === 'draft' && args.key
     && (queue.some(q => q.args.key === args.key) || lanes.draft.current?.args?.keys?.includes(args.key))) return null
   if (kind === 'sync' && (queue.some(q => q.kind === 'sync') || lanes.draft.current?.kind === 'sync')) return null
+  // one sender at a time: a second would race the first over the same drafts
+  if (kind === 'send' && (queue.some(q => q.kind === 'send') || lanes.send.current)) return null
   // Deduped against the QUEUE only, unlike sync: a gaps job already running chose its posts when it
   // started, so an application that arrives mid-run needs the queued one to pick it up. A queued full
   // run (no keys) covers any keyed one; keyed runs are per draft job and stay separate.
@@ -261,14 +266,16 @@ function runJob(lane: Lane, item: QueueItem) {
     return
   }
 
-  if (lane === 'draft' || lane === 'gaps') {
+  if (lane === 'draft' || lane === 'gaps' || lane === 'send') {
     // The drafter is an async pipeline, not a piped child: the server selects the posts, groups them by
     // recruiter and runs one claude session per group. `abort` gives Stop something to kill.
     const abort = new AbortController()
     job.child = { kill: () => abort.abort() } as unknown as ChildProcess
-    const work = kind === 'sync'
-      ? runSyncJob(push, abort.signal)
-      : (kind === 'gaps' ? runGapsJob(job, args.keys, push, abort.signal) : runDraftJob(job, args, push, abort.signal))
+    const work = kind === 'send'
+      ? runSendJob(push, abort.signal, () => enqueue('sync'))
+      : kind === 'sync'
+        ? runSyncJob(push, abort.signal)
+        : (kind === 'gaps' ? runGapsJob(job, args.keys, push, abort.signal) : runDraftJob(job, args, push, abort.signal))
     work
       .then(code => finish(code))
       .catch((e) => {
@@ -363,7 +370,8 @@ export const stateView = () => ({
     scrape: { current: jobView(lanes.scrape.current), last: jobView(lanes.scrape.last) },
     draft: { current: jobView(lanes.draft.current), last: jobView(lanes.draft.last) },
     paste: { current: jobView(lanes.paste.current), last: jobView(lanes.paste.last) },
-    gaps: { current: jobView(lanes.gaps.current), last: jobView(lanes.gaps.last) }
+    gaps: { current: jobView(lanes.gaps.current), last: jobView(lanes.gaps.last) },
+    send: { current: jobView(lanes.send.current), last: jobView(lanes.send.last) }
   },
   queue,
   busy: busy()
@@ -561,7 +569,7 @@ async function runDraftJob(
         }
         const attachPath = attachment?.path ?? config.cv
         // A Gmail draft when connected, a local file when not, so M1-M3 stay usable without Google Cloud.
-        // Either way nothing is sent: the server has no code path that can send.
+        // Either way this only creates a draft; sending is the sender lane's (server/utils/sender.ts), started by hand.
         if (gmailStatus().authorized) {
           const created = await createDraft({
             to: email,

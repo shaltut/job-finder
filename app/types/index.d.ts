@@ -52,8 +52,8 @@ export interface Stats {
   lastScrapeAt: string | null
 }
 
-export type Lane = 'scrape' | 'draft' | 'paste' | 'gaps'
-export type JobKind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps'
+export type Lane = 'scrape' | 'draft' | 'paste' | 'gaps' | 'send'
+export type JobKind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps' | 'send' | 'send'
 
 export interface JobView {
   id: number

@@ -2,7 +2,7 @@
 // imported by a test (it pulls in the drafter, Gmail, sync and the CV modules).
 // See docs/superpowers/specs/2026-10-03-job-queue-design.md.
 
-export type Lane = 'scrape' | 'draft' | 'paste' | 'gaps'
+export type Lane = 'scrape' | 'draft' | 'paste' | 'gaps' | 'send'
 
 export interface QArgs { key?: string, keys?: string[], screened?: boolean }
 export interface QItem { id: number, lane: Lane, kind: string, args: QArgs, queuedAt: string }

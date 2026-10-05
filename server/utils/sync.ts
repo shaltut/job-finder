@@ -97,6 +97,17 @@ export async function closedInGmail(
   return closed
 }
 
+/**
+ * The stage machine's full verdict for one address, from its real mail — for the sender, which may send a
+ * draft only while this still reads "draft pending" (rows 4 and 7).
+ */
+export async function gmailDecision(db: Database.Database, email: string, selfEmail: string, now = Date.now()): Promise<Decision> {
+  const cached = db.prepare('SELECT stage FROM contacts WHERE email = ?')
+    .get(email.toLowerCase()) as { stage: Decision['stage'] } | undefined
+  const [messages, pending] = await Promise.all([threadMessages(email), hasPendingDraft(email)])
+  return decideStage({ messages, selfEmail, recruiterEmail: email, dbStage: cached?.stage ?? null, hasPendingDraft: pending, now })
+}
+
 export interface SweepLine {
   email: string
   row: number

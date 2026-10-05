@@ -19,12 +19,19 @@ function walk(dir: string, out: string[] = []): string[] {
 const serverFiles = [...walk('server'), ...walk('shared')]
 const read = (p: string) => readFileSync(p, 'utf8')
 
-test('the server never sends mail: it only ever creates drafts', () => {
-  // `gmail.compose` includes permission to send, so never-sending is a property of this code, not of the
-  // credential. If a send call is ever added, this test is the thing that catches it.
+test('exactly one file can send mail, and it sends only drafts, once per call site', () => {
+  // `gmail.compose` includes permission to send, so where sending can happen is a property of this code,
+  // not of the credential. Until 2026-10-05 nothing could send; the owner then asked for the sender lane
+  // (docs/superpowers/specs/2026-10-05-draft-sender-design.md). Any other file that can send fails here.
   const forbidden = /\bmessages\.send\b|\bdrafts\/send\b|\bdrafts\.send\b|users\.messages\.send|\/send\b/
-  const offenders = serverFiles.filter(f => forbidden.test(read(f)))
+  const SENDER = join('server', 'utils', 'sender.ts')
+  const offenders = serverFiles.filter(f => f !== SENDER && forbidden.test(read(f)))
   assert.deepEqual(offenders, [], `these files look like they can send mail: ${offenders.join(', ')}`)
+  const sender = read(SENDER)
+  assert.equal(sender.match(/drafts\/send/g)?.length, 1, 'one send call site, and it sends a draft')
+  assert.doesNotMatch(sender, /messages\.send|messages\/send/, 'never a raw message — only a draft the app made')
+  assert.match(sender, /FROM app_drafts/, 'it chooses only from the app\'s own drafts')
+  assert.match(sender, /sendable\(/, 'and every draft passes the pre-send check')
 })
 
 test('the drafter runs from a neutral directory, never the project root', () => {

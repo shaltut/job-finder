@@ -15,7 +15,7 @@ const since = ref<string>(config.since)
 const { data: job, refresh: refreshJob } = await useFetch<JobState>('/api/job', {
   lazy: true,
   default: () => ({
-    lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null }, paste: { current: null, last: null }, gaps: { current: null, last: null } },
+    lanes: { scrape: { current: null, last: null }, draft: { current: null, last: null }, paste: { current: null, last: null }, gaps: { current: null, last: null }, send: { current: null, last: null } },
     queue: [],
     busy: false
   })
@@ -72,8 +72,17 @@ const startScrape = () => post('/api/run/scrape', {
   since: since.value
 })
 
-const active = computed(() => job.value.lanes.scrape.current ?? job.value.lanes.draft.current ?? job.value.lanes.gaps.current)
-const shown = computed(() => active.value ?? job.value.lanes.scrape.last ?? job.value.lanes.draft.last ?? job.value.lanes.gaps.last)
+const active = computed(() => job.value.lanes.scrape.current ?? job.value.lanes.draft.current ?? job.value.lanes.gaps.current ?? job.value.lanes.send.current)
+const shown = computed(() => active.value ?? job.value.lanes.scrape.last ?? job.value.lanes.draft.last ?? job.value.lanes.gaps.last ?? job.value.lanes.send.last)
+
+const { data: sendCounts, refresh: refreshSend } = await useFetch<{ pending: number, sent: number, held: number }>('/api/send/pending', {
+  lazy: true, default: () => ({ pending: 0, sent: 0, held: 0 })
+})
+watch(() => job.value.lanes.send.current?.log.length, () => refreshSend())
+async function startSending() {
+  await post('/api/run/send')
+  await refreshSend()
+}
 
 const logBox = useTemplateRef<HTMLElement>('logBox')
 watch(() => shown.value?.log.length, async () => {
@@ -112,6 +121,14 @@ const yieldColumns: TableColumn<YieldRow>[] = [
             variant="subtle"
             icon="i-lucide-square"
             @click="post('/api/job/stop', { lane: 'gaps' })"
+          />
+          <UButton
+            v-if="job.lanes.send.current"
+            label="Stop sending"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-square"
+            @click="post('/api/job/stop', { lane: 'send' })"
           />
         </template>
       </UDashboardNavbar>
@@ -279,6 +296,26 @@ const yieldColumns: TableColumn<YieldRow>[] = [
           class="max-h-96 overflow-y-auto rounded-md bg-elevated/50 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap"
         >
           {{ shown.log.join('\n') || 'waiting for output…' }}
+        </div>
+      </UCard>
+
+      <UCard class="shrink-0">
+        <div class="flex items-center gap-3 text-sm">
+          <span class="font-semibold text-highlighted">Send drafts</span>
+          <span class="text-muted mr-auto">
+            {{ sendCounts.pending }} pending · {{ sendCounts.sent }} sent by the lane{{ sendCounts.held ? ` · ${sendCounts.held} held back` : '' }}
+            — 10 at random every 15 minutes, each re-checked against Gmail first
+          </span>
+          <UButton
+            size="sm"
+            color="primary"
+            icon="i-lucide-send"
+            :loading="!!job.lanes.send.current"
+            :disabled="!!job.lanes.send.current || !sendCounts.pending"
+            @click="startSending"
+          >
+            {{ job.lanes.send.current ? 'Sending…' : 'Send drafts' }}
+          </UButton>
         </div>
       </UCard>
 

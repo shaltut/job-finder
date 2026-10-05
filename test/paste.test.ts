@@ -91,7 +91,8 @@ test('pasteRecord carries the owner\'s exclude flags', () => {
 test('a paste runs on its own lane, never behind a scrape or a draft', () => {
   const src = readFileSync('server/utils/jobs.ts', 'utf8')
   // the Lane union moved to queue-core.ts with the gaps lane (2026-10-03); jobs.ts re-exports it
-  assert.match(readFileSync('server/utils/queue-core.ts', 'utf8'), /export type Lane = 'scrape' \| 'draft' \| 'paste' \| 'gaps'/)
+  // only that paste is a member — the full list grows with every lane (gaps, send) and is not this test's concern
+  assert.match(readFileSync('server/utils/queue-core.ts', 'utf8'), /export type Lane = [^\n]*'paste'/)
   assert.match(src, /export type \{ Lane \}/)
   assert.match(src, /kind === 'paste'\s*\n?\s*\?\s*'paste'/, 'laneOf must map paste to its own lane')
   assert.match(src, /paste: \{ current: null, last: null \}/, 'the lanes initialiser must carry paste')
@@ -101,7 +102,7 @@ test('a paste runs on its own lane, never behind a scrape or a draft', () => {
   // stateView()'s unrelated jobView(lanes.paste.current) and would stay green through this exact bug.
   assert.match(
     src,
-    /busy = \(\) => !!\(lanes\.scrape\.current \|\| lanes\.draft\.current \|\| lanes\.paste\.current \|\| lanes\.gaps\.current\)/,
+    /busy = \(\) => !!\([^\n]*lanes\.paste\.current[^\n]*\)/,
     'busy() must count the paste lane'
   )
 })

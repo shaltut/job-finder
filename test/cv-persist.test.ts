@@ -105,3 +105,15 @@ test('tailored CV paths are stored with / and old backslash rows still resolve',
   assert.equal(got, 'data/cv/tailored/x/CV.pdf')
   assert.deepEqual(seen, ['data/cv/tailored/x/CV.pdf'])
 })
+
+// The sender lane may only send drafts this app made: persist() is where both draft paths record them.
+test('persist records a Gmail draft as the app\'s own, never a local file draft', () => {
+  persist(db, request('apply'), drafted('apply'), 'r-app-1', null)
+  persist(db, request('follow-up'), drafted('follow-up'), 'r-fu-1', null)
+  persist(db, request('apply'), drafted('apply'), join('data', 'drafts', 'x.json'), null)
+  const rows = db.prepare(`SELECT draft_id, email, mode FROM app_drafts WHERE draft_id IN ('r-app-1', 'r-fu-1') OR draft_id LIKE '%.json' ORDER BY draft_id`).all()
+  assert.deepEqual(rows, [
+    { draft_id: 'r-app-1', email: 'hr@acme.sa', mode: 'apply' },
+    { draft_id: 'r-fu-1', email: 'hr@acme.sa', mode: 'follow-up' }
+  ])
+})

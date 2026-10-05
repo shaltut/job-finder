@@ -210,3 +210,18 @@ export const jobQueue = sqliteTable('job_queue', {
   queuedAt: text('queued_at').notNull(),
   startedAt: text('started_at')
 })
+
+/**
+ * Every Gmail draft this app created — the only drafts the sender lane (server/utils/sender.ts) may send.
+ * persist() records one whenever it stores a Gmail draft id; the owner's own drafts are never here.
+ * `outcome` is why a draft left the queue without being sent by the lane: 'gone' (deleted or sent by
+ * hand) or the refusal from sendable(). See docs/superpowers/specs/2026-10-05-draft-sender-design.md.
+ */
+export const appDrafts = sqliteTable('app_drafts', {
+  draftId: text('draft_id').primaryKey(),
+  email: text('email').notNull(),
+  mode: text('mode').notNull(),
+  createdAt: integer('created_at').notNull(),
+  sentAt: integer('sent_at'),
+  outcome: text('outcome')
+})

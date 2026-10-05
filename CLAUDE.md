@@ -759,9 +759,21 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
 
 ## Gmail (M4)
 
-- **Nothing can send.** `gmail.compose` includes permission to send, so never-sending is a property of this
-  code: no `messages.send` / `drafts.send` call may exist under `server/`, and `test/invariants.test.ts`
-  fails if one appears. Drafts are created addressed and attached; you press send.
+- **Exactly one file can send: `server/utils/sender.ts`, the sender lane, started by hand.** Until 2026-10-05
+  nothing could; the owner then asked for a lane that sends **10 random app drafts every 15 minutes until
+  none are left**, with no review step (their choice). `gmail.compose` includes permission to send, so where
+  sending can happen is a property of this code: `test/invariants.test.ts` fails if any other file under
+  `server/` or `shared/` can send, and pins that `sender.ts` has one `drafts/send` call, never a raw message.
+  **It sends only the app's own drafts** — `app_drafts`, written by `persist()` for every Gmail draft id and
+  backfilled from `applications.gmail_draft_id` (pre-2026-10-05 follow-up drafts kept their id only in a
+  note and are not in it) — never the owner's. Each round lists the drafts actually in Gmail first, marks the
+  rest `gone`, then sends at most 10 at random, each through `sendable()` (`sender-core.ts`): no
+  placeholder, a PDF attached, and **the recruiter's real Gmail still at row 7 or row 4** (`gmailDecision()`
+  in `sync.ts`) — a reply, a bounce or a send since the draft was written holds it back with that reason in
+  `app_drafts.outcome`. A round queues a sync; Stop ends the 15-minute wait. **The sender has its own lane
+  (`send`)**, so its hours of waiting never hold the draft lane. Spec:
+  `docs/superpowers/specs/2026-10-05-draft-sender-design.md`. **Migration `0009` carries the backfill** —
+  on this PC it ran once by hand, because the dev server applied the table before the backfill was added.
 - **Scopes: `gmail.compose` + `gmail.readonly`.** The sweep searches sent mail with `q=`, which the narrower
   `gmail.metadata` scope rejects outright.
 - **The callback checks a one-shot `state` nonce before touching the code.** Google's redirect into

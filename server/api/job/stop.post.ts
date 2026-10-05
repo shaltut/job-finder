@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { stateView, stopLane } from '../../utils/jobs'
 
-const body = z.object({ lane: z.enum(['scrape', 'draft', 'gaps']).default('draft') })
+const body = z.object({ lane: z.enum(['scrape', 'draft', 'gaps', 'send']).default('draft') })
 
 export default defineEventHandler(async (event) => {
   const { lane } = await readValidatedBody(event, body.parse)
