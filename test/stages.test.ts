@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { buildMime, ccFrom, findAttachment, renderHtml, replyHeaders } from '../server/utils/gmail.ts'
-import { cachedStage, classifyMessage, closedBy, decideStage, FOLLOW_UP_AFTER_MS, untilDue, type GmailMessage } from '../server/utils/stages.ts'
+import { cachedStage, classifyMessage, closedBy, decideStage, FOLLOW_UP_AFTER_MS, sentMail, untilDue, type GmailMessage } from '../server/utils/stages.ts'
 
 const ME = 'me@gmail.com'
 const REC = 'hr@acme.sa'
@@ -333,4 +333,26 @@ test('control: a recruiter never followed up still gets the follow-up at row 6',
   const d = decideStage({ ...base, dbStage: 'contacted', hasPendingDraft: false, messages: [msg({ from: ME, date: NOW - 6 * 86400e3 })] })
   assert.equal(d.row, 6)
   assert.equal(d.action, 'draft-the-follow-up')
+})
+
+// 2026-10-05, proven against Gmail: messages.list DOES return drafts, so a pending draft was counted as a
+// sent email — 26 recruiters with one application and a follow-up DRAFT read "final, no reply after
+// follow-up", and 17 with only an application DRAFT read "application already went out".
+test('sentMail: a draft is never a sent email', () => {
+  const sent = { id: 'a', labelIds: ['SENT'] }
+  const draft = { id: 'b', labelIds: ['DRAFT'] }
+  const inbox = { id: 'c', labelIds: ['INBOX', 'UNREAD'] }
+  assert.deepEqual(sentMail([sent, draft, inbox]).map(m => m.id), ['a', 'c'])
+  assert.deepEqual(sentMail([{ id: 'd' }]).map(m => m.id), ['d'], 'no labels: kept')
+})
+
+test('decideStage on the real shapes: one application sent + its follow-up draft is row 4, not final', () => {
+  const self = 'me@example.com'
+  const r = 'rec@agency.example'
+  const now = Date.parse('2026-10-05T12:00:00Z')
+  const application = { id: '1', from: self, subject: 'App', snippet: '', date: Date.parse('2026-10-01T12:00:00Z') }
+  const d = decideStage({ messages: [application], selfEmail: self, recruiterEmail: r, dbStage: 'contacted', hasPendingDraft: true, now })
+  assert.equal(d.action, 'send-the-follow-up')
+  const none = decideStage({ messages: [], selfEmail: self, recruiterEmail: r, dbStage: null, hasPendingDraft: true, now })
+  assert.equal(none.action, 'send-the-application')
 })

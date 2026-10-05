@@ -11,7 +11,7 @@ import { followUpAttachment } from './cv-attach'
 import { runDrafter } from './drafter'
 import { persist, signature } from './drafts'
 import { ccFrom, createDraft, gmail, renderHtml, replyHeaders } from './gmail'
-import { cachedStage, closedBy, decideStage, untilDue, type Decision, type GmailMessage } from './stages'
+import { cachedStage, closedBy, decideStage, sentMail, untilDue, type Decision, type GmailMessage } from './stages'
 import { followUpPosts, healContact } from './contacts'
 import { backoff, concurrency, limiter, pool } from './queue-core'
 
@@ -20,6 +20,8 @@ interface RawMessage {
   threadId: string
   snippet?: string
   internalDate?: string
+  /** format=metadata returns these; DRAFT marks an unsent draft (see sentMail) */
+  labelIds?: string[]
   payload?: { headers?: { name: string, value: string }[] }
 }
 
@@ -44,7 +46,8 @@ async function threadMessages(email: string): Promise<GmailMessage[]> {
   const raw = await Promise.all((list.messages ?? []).map(({ id }) => gmailRead(() => gmail<RawMessage>(
     `messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Message-Id`
   ))))
-  return raw.map(m => ({
+  // drafts out: the search returns them, and a draft is "from" us, so it read as a sent email (stages.ts sentMail)
+  return sentMail(raw).map(m => ({
     id: m.id,
     threadId: m.threadId,
     messageId: header(m, 'Message-Id') || undefined,
@@ -55,7 +58,11 @@ async function threadMessages(email: string): Promise<GmailMessage[]> {
   }))
 }
 
-/** `messages` never returns drafts, even with `in:draft` — trusting it once nearly produced a duplicate. */
+/**
+ * Whether a draft to this address is pending — asked of the drafts endpoint, the one place that answers it.
+ * (The message search DOES return drafts too, contrary to what this note used to say; threadMessages() now
+ * drops them, because counted there they read as sent mail — stages.ts sentMail.)
+ */
 async function hasPendingDraft(email: string): Promise<boolean> {
   const r = await gmailRead(() => gmail<{ drafts?: unknown[] }>(`drafts?q=${encodeURIComponent(`to:${email}`)}&maxResults=5`))
   return !!r.drafts?.length

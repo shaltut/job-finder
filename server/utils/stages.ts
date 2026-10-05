@@ -67,6 +67,17 @@ export interface Decision {
   replyTo?: GmailMessage
 }
 
+/**
+ * The mail the stage machine may see: everything except drafts. Gmail's messages.list DOES return drafts
+ * (an earlier note here claimed it did not), and a draft is "from" the owner, so classifyMessage() counted
+ * it as sent. Proven against Gmail on 2026-10-05: 26 recruiters with one application and a pending follow-up
+ * DRAFT read "final — no reply after follow-up", and 17 with only an application DRAFT read "an application
+ * already went out". Pending drafts are hasPendingDraft()'s job, through the drafts endpoint.
+ */
+export function sentMail<T extends { labelIds?: string[] }>(messages: T[]): T[] {
+  return messages.filter(m => !m.labelIds?.includes('DRAFT'))
+}
+
 export const FOLLOW_UP_AFTER_MS = 72 * 3600_000 // "three days of silence"
 
 export interface DecideInput {

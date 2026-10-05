@@ -134,7 +134,10 @@ export async function runSendJob(push: (s: string) => void, signal: AbortSignal,
   const { db, close } = openWritableDb()
   const failures = new Map<string, number>() // per draft, this job: three transient failures set it aside
   // Held only because a stored label said 'application' — the mode is now read from Gmail, so look again
-  const relooked = db.prepare(`UPDATE app_drafts SET outcome = NULL WHERE sent_at IS NULL AND outcome LIKE 'an application already went out%'`).run().changes
+  // Also every stage-based hold: until 2026-10-05 drafts were counted as sent mail (stages.ts sentMail), so
+  // "no longer pending" and "application already went out" could be the bug, not the recruiter
+  const relooked = db.prepare(`UPDATE app_drafts SET outcome = NULL WHERE sent_at IS NULL
+    AND (outcome LIKE 'an application already went out%' OR outcome LIKE 'no longer pending in Gmail%')`).run().changes
   if (relooked) push(`${relooked} draft(s) held as a second application are checked again, their kind now read from Gmail`)
   try {
     for (;;) {

@@ -904,8 +904,15 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   With no token there is no truth to ask, so `isClosed()` (the cache) is the gate — closed on every stage but a missing row — and the local-file
   draft path still works. A Gmail error writes no row and leaves the posts for the next run, the same
   posture as a drafter rejection — a `skipped` verdict is permanent as far as the batch queue is concerned.
-- **`drafts` are not returned by `messages.list`, even with `in:draft`** — pending drafts are found with the
-  `drafts` endpoint. Trusting the search once nearly produced a duplicate.
+- **`messages.list` DOES return drafts** — this line used to say the opposite, and the stage machine believed
+  it: `classifyMessage()` counts any message from the owner as `outgoing`, so a pending draft read as a sent
+  email. Proven against Gmail on 2026-10-05: 26 recruiters with one application and a follow-up *draft* were
+  cached `final` ("no reply after follow-up") and never got their follow-up; 17 with only an application
+  *draft* read "an application already went out", which held the sender lane's every send. `threadMessages()`
+  now drops `DRAFT`-labelled messages (`sentMail()` in `stages.ts`, pinned by `test/stages.test.ts`); pending
+  drafts are asked of the `drafts` endpoint (`hasPendingDraft()`), the one place that answers that. The 27
+  wrongly-`final` contacts were repaired by hand, each verified in Gmail — `final` is never reset by a sweep,
+  so a wrongly-final recruiter elsewhere (one whose draft was since deleted) stays wrong until checked.
 - **The connected account is discovered, not hardcoded.** The sweep matches sent mail by sender, so the wrong
   account would make every sent application look unsent. Settings shows a warning when the connected address
   differs from the stored settings.
