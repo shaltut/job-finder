@@ -33,9 +33,9 @@ test('draftText reads the recipient, subject, plain body and whether a PDF rides
 })
 
 test('sendable: only a clean draft to a recruiter whose Gmail still says "draft pending"', () => {
-  const ok = { subject: 'Application', body: 'Dear Jane', hasPdf: true, action: 'send-the-application' }
+  const ok = { subject: 'Application', body: 'Dear Jane', hasPdf: true, action: 'send-the-application', mode: 'apply', recipientMatches: true, sentBefore: false, sentThisRound: false }
   assert.deepEqual(sendable(ok), { ok: true })
-  assert.deepEqual(sendable({ ...ok, action: 'send-the-follow-up' }), { ok: true })
+  assert.deepEqual(sendable({ ...ok, mode: 'follow-up', action: 'send-the-follow-up' }), { ok: true })
   assert.match((sendable({ ...ok, body: 'Expected salary: [ADD BEFORE SENDING]' }) as { reason: string }).reason, /placeholder/)
   assert.match((sendable({ ...ok, subject: 'TBD' }) as { reason: string }).reason, /placeholder/)
   assert.match((sendable({ ...ok, hasPdf: false }) as { reason: string }).reason, /no CV/)
@@ -52,4 +52,25 @@ test('pickBatch: n distinct ids, all of them when fewer, random order', () => {
   assert.deepEqual(pickBatch(ids, 10, Math.random).sort(), ids)
   assert.deepEqual(pickBatch([], 10, Math.random), [])
   assert.notDeepEqual(pickBatch(ids, 5, () => 0), ids, 'shuffled, not the stored order')
+})
+
+// review 2026-10-05: the stage check alone let a second application through
+const base = { subject: 'Application', body: 'Dear Jane', hasPdf: true, action: 'send-the-application', mode: 'apply', recipientMatches: true, sentBefore: false, sentThisRound: false }
+
+test('an application goes out only as an application, a follow-up only as a follow-up', () => {
+  assert.deepEqual(sendable(base), { ok: true })
+  assert.deepEqual(sendable({ ...base, mode: 'follow-up', action: 'send-the-follow-up' }), { ok: true })
+  assert.match((sendable({ ...base, action: 'send-the-follow-up' }) as { reason: string }).reason, /application.*already/,
+    'an apply draft while one email is already out is a second application')
+  assert.match((sendable({ ...base, mode: 'follow-up' }) as { reason: string }).reason, /follow-up.*before/)
+})
+
+test('a local record refuses a second email of the same kind — Gmail search can lag a send by minutes', () => {
+  assert.match((sendable({ ...base, sentBefore: true }) as { reason: string }).reason, /already sent/)
+  assert.match((sendable({ ...base, sentThisRound: true }) as { reason: string }).reason, /this round/)
+})
+
+test('a changed recipient or an empty body is held back', () => {
+  assert.match((sendable({ ...base, recipientMatches: false }) as { reason: string }).reason, /recipient changed/)
+  assert.match((sendable({ ...base, body: '  ' }) as { reason: string }).reason, /empty/)
 })

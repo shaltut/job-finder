@@ -144,7 +144,7 @@ export function restoreQueue(log: (line: string) => void = console.log) {
   const plan = restorePlan(rows.map(r => ({ id: r.id, lane: r.lane, kind: r.kind, started: !!r.started_at })))
   for (const id of plan.drop) {
     const r = rows.find(x => x.id === id)!
-    log(`[queue] ${r.kind} #${id} was interrupted by a restart — not resumed (scrape-lane); press Start again`)
+    log(`[queue] ${r.kind} #${id} was interrupted by a restart — not resumed (scrape and send never are); start it again by hand`)
     saved.drop(id)
   }
   for (const id of plan.order) {

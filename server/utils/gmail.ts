@@ -1,8 +1,8 @@
 // Gmail over REST. The server owns every Gmail call; the drafter model never touches one.
 //
-// THIS MODULE NEVER SENDS. `gmail.compose` includes permission to send, so never-sending is a property of
-// this code rather than of the credential — test/invariants.test.ts fails if a send call appears anywhere
-// under server/. Drafts only.
+// THIS MODULE NEVER SENDS. `gmail.compose` includes permission to send, so where sending can happen is a
+// property of this code rather than of the credential — test/invariants.test.ts fails if a send call appears
+// anywhere under server/ except server/utils/sender.ts, the hand-started sender lane. Drafts only here.
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'

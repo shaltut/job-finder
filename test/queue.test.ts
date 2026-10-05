@@ -209,3 +209,9 @@ test('two paste requests are the same job only when text AND author match (revie
   assert.equal(samePaste({ text: 'a', authorUrl: 'u1' }, { text: 'a', authorUrl: 'u2' }), false, 'one template, two authors')
   assert.equal(samePaste({ text: 'a', authorUrl: 'u1' }, { text: 'a', authorUrl: 'u1' }), true)
 })
+
+test('restore: an interrupted sender is never resumed — only the owner\'s button starts sending (review 2026-10-05)', () => {
+  const plan = restorePlan([{ id: 4, lane: 'send', kind: 'send', started: true }, { id: 5, lane: 'draft', kind: 'draft', started: true }])
+  assert.deepEqual(plan.drop, [4])
+  assert.deepEqual(plan.order, [5])
+})

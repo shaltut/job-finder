@@ -29,8 +29,12 @@ export function pickNext(queue: QItem[], lane: Lane): number {
   return best
 }
 
-/** Kinds that drive LinkedIn. Never resumed after a restart: re-running one on every server edit spends the account's rate limit. */
-const SCRAPE_KINDS = new Set(['scrape', 'rescore', 'reflag', 'reextract'])
+/**
+ * Never resumed after a restart. The scrape kinds drive LinkedIn: re-running one on every server edit spends
+ * the account's rate limit. `send` sends email: only the owner's button starts it — resuming would fire an
+ * unpaced batch on every server edit and start sending on a plain `npm run dev` the next day.
+ */
+const SCRAPE_KINDS = new Set(['scrape', 'rescore', 'reflag', 'reextract', 'send'])
 
 /**
  * What a fresh worker does with the persisted queue. Jobs that were running when the old worker died go

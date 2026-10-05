@@ -770,7 +770,14 @@ silently expensive if reintroduced — that is what `test/invariants.test.ts` is
   rest `gone`, then sends at most 10 at random, each through `sendable()` (`sender-core.ts`): no
   placeholder, a PDF attached, and **the recruiter's real Gmail still at row 7 or row 4** (`gmailDecision()`
   in `sync.ts`) — a reply, a bounce or a send since the draft was written holds it back with that reason in
-  `app_drafts.outcome`. A round queues a sync; Stop ends the 15-minute wait. **The sender has its own lane
+  `app_drafts.outcome`. **The row alone was not enough (review 2026-10-05)**: the draft being checked is
+  itself a pending draft, so rows 7/4 only meant "fewer than two emails out" and an application draft would
+  pass row 4 — a second application. So **the mode must match the stage** (apply ⇒ row 7, follow-up ⇒ row
+  4), and **a local record** (a sent `app_drafts` row of the same mode to that address, plus one email per
+  address per round) refuses a second email, because Gmail's search index can lag a send by minutes. A
+  changed recipient, an empty body, a permanent 4xx and three transient failures each set a draft aside.
+  **A send job is never resumed after a restart** (`restorePlan` drops it like a scrape): only the button
+  starts sending. The backfill labels a draft id `follow-up` when its rows say `named in follow-up`. A round queues a sync; Stop ends the 15-minute wait. **The sender has its own lane
   (`send`)**, so its hours of waiting never hold the draft lane. Spec:
   `docs/superpowers/specs/2026-10-05-draft-sender-design.md`. **Migration `0009` carries the backfill** —
   on this PC it ran once by hand, because the dev server applied the table before the backfill was added.
