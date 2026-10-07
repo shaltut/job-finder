@@ -127,6 +127,26 @@ npm run dev ──► http://127.0.0.1:3939
    card list wins, so a comment list never gets them. **Every request must name `127.0.0.1:3939` or
    `localhost:3939`** (`hostAllowed()`), which closes DNS rebinding — a page that re-points its own name at
    127.0.0.1 could otherwise read `/api/config`.
+7. **Inbox** `server/utils/inbox.ts` + `server/utils/inbox-store.ts` + `server/tasks/inbox.ts` (`*/5 * * * *`):
+   every reply in a thread holding a SENT message from the owner to a known recruiter — whoever writes it,
+   which also marks that recruiter `replied` (a colleague at another domain used to read as `other` and
+   leave them due a follow-up). Stored in `inbox` with the quoted history stripped (`inbox-core.ts
+   stripQuoted`); bounces and auto-replies never arrive. **The poll hands each thread to the reply drafter as
+   it goes** (`onThread`), so a poll that dies later has already queued what it stored; one unreadable
+   thread is logged and skipped, never a failed poll. Because a rebuild or a dead poll can still lose a
+   job, the task first re-enqueues rows stranded as `queued` (`strandedQueued`), and `enqueue` refuses a
+   reply already running for the same thread and message (a pressed Re-draft is exempt). Each thread gets
+   one `reply` job on the draft lane (background priority; Re-draft is hand-picked), and once it resolves
+   its row every other `queued` row in the thread becomes `superseded` (`supersedeQueued`), or every poll
+   would re-enqueue it. `claude -p` in `reply` mode returns `{ body, questions }` — `questions` is what the
+   profile cannot answer, shown as "Needs your input", never a guess. The draft lands in the thread and is
+   recorded in `inbox` and `app_drafts` **immediately after `createDraft`**, before older drafts are
+   touched, so nothing later can fail a job whose draft exists; the previous app reply draft is then
+   deleted only if its message id is unchanged (an edit in Gmail changes it). Stop marks the row `failed`
+   with 'stopped — press Re-draft'. **Reply drafts are never sent by the app**: `app_drafts.mode = 'reply'`,
+   the sender's pending queries exclude it, its `modeOf` relabel never overwrites it, and it re-reads the
+   mode right before `sendable()` because a reply job can record a draft after the list was read; pinned by
+   `test/invariants.test.ts`. Spec: `docs/superpowers/specs/2026-10-07-inbox-replies-design.md`.
 
 ## Commands
 
