@@ -142,7 +142,7 @@ Replies sit outside it. The ceiling stops unsolicited email; once a person answe
 ## UI
 
 - **Inbox** nav item (`app/layouts/default.vue`) between Pipeline and Gaps, with a badge: the unread count.
-- `app/pages/inbox.vue`: messages newest-first, unread in bold, grouped by thread. Expanding one marks it
+- `app/pages/inbox.vue`: messages newest-first, unread in bold (one card per message; thread grouping deferred until a long thread makes the list hard to read). Expanding one marks it
   read and shows the stored body, the draft state (queued / drafted with an "Open in Gmail" link /
   failed with the reason), **Needs your input** (`questions`), and **Re-draft** with a note textarea.
 - The client polls `GET /api/inbox/unread` every 60 s (a local `count(*)`, no Gmail) and sets the tab title to
