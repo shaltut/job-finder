@@ -19,9 +19,9 @@ export default defineTask({
     g.__jobfinderInboxPolling = true
     const { db, close } = openWritableDb()
     try {
-      // threads a dead poll or a rebuild left `queued` with no job; enqueue() ignores one already running
-      for (const t of strandedQueued(db)) enqueue('reply', { ...t, auto: true })
-      const { stored, threads } = await pollInbox(db, status.email.toLowerCase(), console.log, t => enqueue('reply', { ...t, auto: true }))
+      // threads a dead poll or a rebuild left `queued` with no job; enqueue() ignores one already running or waiting (queue-core replyNoop)
+      for (const t of strandedQueued(db)) enqueue('reply', t)
+      const { stored, threads } = await pollInbox(db, status.email.toLowerCase(), console.log, t => enqueue('reply', t))
       return { result: `${stored} new repl(ies), ${threads} draft(s) queued` }
     } catch (e) {
       console.log(`[inbox] poll failed: ${(e as Error).message}`)

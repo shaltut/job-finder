@@ -381,3 +381,8 @@ test('replied is sticky in every contacts write except the inbox store', () => {
   assert.match(read('server/utils/drafts.ts'), /INSERT INTO contacts[\s\S]{0,400}WHERE contacts\.stage NOT IN \('final', 'replied'\)/)
   assert.match(read('server/utils/sender.ts'), /stage: \(db\.prepare\('SELECT stage FROM contacts WHERE email = \?'\)/, 'the sender passes the cached stage to sendable()')
 })
+
+test('inbox notifications stay in the app: the poll queues reply jobs without auto', () => {
+  // `auto` makes jobs.ts finish() raise a desktop notification; the spec keeps the inbox to its badge
+  assert.doesNotMatch(read('server/tasks/inbox.ts'), /\bauto\b/)
+})
