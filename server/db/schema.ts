@@ -225,3 +225,31 @@ export const appDrafts = sqliteTable('app_drafts', {
   sentAt: integer('sent_at'),
   outcome: text('outcome')
 })
+
+/**
+ * Every reply in a thread the owner started with a recruiter, for the Inbox view. Written by the 5-minute
+ * poll (server/utils/inbox.ts). `reply_draft_msg_id` is the draft's message id at creation: Gmail gives an
+ * edited draft a new one, so an unchanged id is what lets Re-draft delete only an untouched app draft.
+ * See docs/superpowers/specs/2026-10-07-inbox-replies-design.md.
+ */
+export const inbox = sqliteTable('inbox', {
+  messageId: text('message_id').primaryKey(),
+  threadId: text('thread_id').notNull(),
+  contactEmail: text('contact_email').notNull(),
+  fromAddr: text('from_addr').notNull(),
+  subject: text('subject').notNull(),
+  body: text('body').notNull(),
+  receivedAt: integer('received_at').notNull(),
+  readAt: integer('read_at'),
+  replyStatus: text('reply_status'),
+  replyDraftId: text('reply_draft_id'),
+  replyDraftMsgId: text('reply_draft_msg_id'),
+  questions: text('questions'),
+  note: text('note')
+}, t => [index('inbox_thread').on(t.threadId)])
+
+/** The inbox poll's one piece of state: when it last searched. One row, like `settings`. */
+export const inboxState = sqliteTable('inbox_state', {
+  id: integer('id').primaryKey(),
+  lastPollAt: integer('last_poll_at')
+}, t => [check('inbox_state_one_row', sql`${t.id} = 1`)])
