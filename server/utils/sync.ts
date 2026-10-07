@@ -157,12 +157,12 @@ export async function sweep(
       messages, selfEmail, recruiterEmail: c.email, dbStage: c.stage, hasPendingDraft: pending, now
     })
 
-    // 'final' is never reset — the WHERE clause enforces that, not this code. cachedStage(), not d.stage:
+    // 'final' and 'replied' are never reset — the WHERE clause enforces that, not this code (healContact says why). cachedStage(), not d.stage:
     // row 6 becomes `followed_up` only when draftFollowUp() below actually creates the draft.
     const cached = cachedStage(d)
     db.prepare(`
       UPDATE contacts SET stage = @stage, note = @note, last_sent_at = @lastSent, updated_at = @now
-      WHERE email = @email AND stage <> 'final'
+      WHERE email = @email AND stage NOT IN ('final', 'replied')
     `).run({
       email: c.email,
       stage: cached.stage,
@@ -215,7 +215,7 @@ export async function sweep(
 
 /** The Pipeline shows `contacts.note`, so a follow-up that was not written says why there. */
 const noteOn = (db: Database.Database, email: string, note: string) =>
-  db.prepare(`UPDATE contacts SET note = ? WHERE email = ? AND stage <> 'final'`).run(note, email.toLowerCase())
+  db.prepare(`UPDATE contacts SET note = ? WHERE email = ? AND stage NOT IN ('final', 'replied')`).run(note, email.toLowerCase())
 
 /**
  * The follow-up is about the roles the application named, and names any role from this address that no

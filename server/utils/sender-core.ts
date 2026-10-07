@@ -44,6 +44,8 @@ export interface SendCheck {
   sentBefore: boolean
   /** this round already sent to this address */
   sentThisRound: boolean
+  /** the recruiter's cached contacts.stage: `replied` may be a colleague's reply Gmail's decision cannot see */
+  stage?: string | null
 }
 
 /**
@@ -57,6 +59,7 @@ export function sendable(d: SendCheck): { ok: true } | { ok: false, reason: stri
   if (!d.body.trim()) return { ok: false, reason: 'empty body (or unreadable) — nothing to check' }
   if (PLACEHOLDER.test(d.subject) || PLACEHOLDER.test(d.body)) return { ok: false, reason: 'placeholder in the draft' }
   if (!d.hasPdf) return { ok: false, reason: 'no CV attached' }
+  if (d.stage === 'replied') return { ok: false, reason: 'the recruiter has replied — answer from the Inbox' }
   if (d.sentThisRound) return { ok: false, reason: 'already sent to this address this round' }
   if (d.sentBefore) return { ok: false, reason: `already sent a ${d.mode} to this address` }
   if (d.mode === 'apply' && d.action === 'send-the-follow-up') {

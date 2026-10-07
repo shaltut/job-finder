@@ -79,6 +79,15 @@ test('final is never reset, however the other device left it', () => {
   assert.equal(c?.note, 'two emails sent', 'and its note is not overwritten either')
 })
 
+test('replied is sticky: a Gmail decision that cannot see a colleague never reopens the recruiter', () => {
+  // the inbox marks `replied` for a colleague's reply, which classifyMessage() reads as 'other' — so Gmail
+  // still says row 5/6, and healing that as `contacted` would put a follow-up back in the sender's way
+  const email = 'talking@example.com'
+  db.prepare(`INSERT INTO contacts (email, stage, note) VALUES (?, 'replied', 'replied 2026-09-18')`).run(email)
+  healContact(db, email, row5(), NOW)
+  assert.deepEqual([contact(email)?.stage, contact(email)?.note], ['replied', 'replied 2026-09-18'])
+})
+
 test('a due follow-up heals as contacted, never followed_up: nothing has been drafted yet', () => {
   // closedInGmail() heals through here, so it must apply the same rule as the sweep (cachedStage).
   const email = 'due@example.com'

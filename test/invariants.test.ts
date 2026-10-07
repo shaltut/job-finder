@@ -79,7 +79,8 @@ test('the drafter is granted no usable tools', () => {
 test('the contacts upsert can never resurrect a \'final\' recruiter', () => {
   // two emails per address, ever — enforced by the database, not by prose
   const src = read('server/utils/drafts.ts')
-  assert.match(src, /WHERE contacts\.stage <> 'final'/, 'the contacts upsert must carry WHERE stage <> \'final\'')
+  // since the inbox, `replied` is sticky too (the test at the end of this file); 'final' stays in the list
+  assert.match(src, /WHERE contacts\.stage NOT IN \('final'/, 'the contacts upsert must keep final out of reach')
 })
 
 test('the schema keeps the lower-case email constraint', () => {
@@ -369,4 +370,14 @@ test('the sender never picks up a reply draft', () => {
   // re-read the mode right before the send check
   assert.match(sender, /UPDATE app_drafts SET mode = \? WHERE draft_id = \? AND mode <> 'reply'/, 'the relabel leaves replies alone')
   assert.match(sender, /SELECT mode FROM app_drafts WHERE draft_id = \?[\s\S]*?sendable\(/, 'the mode is re-read before sendable')
+})
+
+test('replied is sticky in every contacts write except the inbox store', () => {
+  // a colleague's reply sets `replied` (inbox-store storeInbound) and Gmail's stage machine cannot see it:
+  // the sweep and persist() writing over it would reopen a follow-up the sender lane could then send
+  const sync = read('server/utils/sync.ts')
+  assert.match(sync, /UPDATE contacts SET stage = @stage[\s\S]{0,200}WHERE email = @email AND stage NOT IN \('final', 'replied'\)/)
+  assert.match(sync, /UPDATE contacts SET note = \? WHERE email = \? AND stage NOT IN \('final', 'replied'\)/)
+  assert.match(read('server/utils/drafts.ts'), /INSERT INTO contacts[\s\S]{0,400}WHERE contacts\.stage NOT IN \('final', 'replied'\)/)
+  assert.match(read('server/utils/sender.ts'), /stage: \(db\.prepare\('SELECT stage FROM contacts WHERE email = \?'\)/, 'the sender passes the cached stage to sendable()')
 })

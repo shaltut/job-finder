@@ -75,6 +75,13 @@ test('a changed recipient or an empty body is held back', () => {
   assert.match((sendable({ ...base, body: '  ' }) as { reason: string }).reason, /empty/)
 })
 
+test('sendable: never to a recruiter the inbox has marked replied', () => {
+  // a colleague's reply is invisible to decideStage(), so Gmail can still say "pending"; the cached stage is the stop
+  assert.match((sendable({ ...base, stage: 'replied' }) as { reason: string }).reason, /replied.*Inbox/)
+  assert.match((sendable({ ...base, mode: 'follow-up', action: 'send-the-follow-up', stage: 'replied' }) as { reason: string }).reason, /replied/)
+  assert.deepEqual(sendable({ ...base, stage: 'drafted' }), { ok: true })
+})
+
 // review 2026-10-05 / owner: follow-up drafts made before app_drafts existed were invisible to the sender.
 // What a draft IS comes from Gmail: a reply inside a thread where we already wrote is a follow-up.
 test('modeOf: a draft in a thread we already sent in is a follow-up, otherwise an application', () => {

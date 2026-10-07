@@ -85,7 +85,8 @@ async function round(
         recipientMatches: t.to === row.email,
         // a local record, because Gmail's search can lag a send by minutes
         sentBefore: !!db.prepare('SELECT 1 FROM app_drafts WHERE email = ? AND mode = ? AND sent_at IS NOT NULL').get(row.email, mode),
-        sentThisRound: sentThisRound.has(row.email)
+        sentThisRound: sentThisRound.has(row.email),
+        stage: (db.prepare('SELECT stage FROM contacts WHERE email = ?').get(row.email) as { stage?: string } | undefined)?.stage ?? null
       })
       if (!verdict.ok) {
         mark(db, id, verdict.reason)

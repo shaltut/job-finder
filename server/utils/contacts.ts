@@ -21,9 +21,11 @@ import { cachedStage, type Decision } from './stages.ts'
  * An INSERT, where the sweep's write is an UPDATE: the sweep only ever revisits rows that exist, and this
  * is specifically for the ones that do not.
  *
- * `WHERE contacts.stage <> 'final'` is the same guard the sweep carries, and it is the two-emails-ever
- * ceiling expressed in the database rather than in prose. A recruiter who has had their two emails is
- * never reopened, no matter what the other device did afterwards.
+ * `WHERE contacts.stage NOT IN ('final', 'replied')` is the same guard the sweep carries, and it is the
+ * two-emails-ever ceiling expressed in the database rather than in prose. A recruiter who has had their two
+ * emails is never reopened, no matter what the other device did afterwards. `replied` is sticky too: the
+ * inbox sets it for a colleague's reply that classifyMessage() cannot see, so Gmail's row 5/6 would read
+ * `contacted` and reopen a follow-up to someone already in conversation.
  *
  * `last_sent_at` is recovered from the due date exactly as the sweep recovers it — silence is 72 hours
  * from the last outgoing message, so the due date minus 72 hours is when that message went.
@@ -39,7 +41,7 @@ export function healContact(db: Database.Database, email: string, d: Decision, n
       note         = excluded.note,
       last_sent_at = excluded.last_sent_at,
       updated_at   = excluded.updated_at
-    WHERE contacts.stage <> 'final'
+    WHERE contacts.stage NOT IN ('final', 'replied')
   `).run({
     // the schema carries CHECK (email = lower(email)) and refuses anything else
     email: email.toLowerCase(),

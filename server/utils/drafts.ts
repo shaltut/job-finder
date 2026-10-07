@@ -64,8 +64,9 @@ export function listDrafts(): StoredDraft[] {
  * Records every verdict and moves the recruiter's stage, in one transaction so a crash cannot leave a
  * draft on disk with no row behind it.
  *
- * The contacts upsert carries `WHERE contacts.stage <> 'final'`: a recruiter who has had their two emails
- * is never contacted again, and that is enforced by the database rather than by prose.
+ * The contacts upsert carries `WHERE contacts.stage NOT IN ('final', 'replied')`: a recruiter who has had
+ * their two emails is never contacted again, and one who replied stays replied (healContact says why) —
+ * enforced by the database rather than by prose.
  */
 export function persist(
   db: Database.Database,
@@ -128,7 +129,7 @@ export function persist(
         ON CONFLICT (email) DO UPDATE SET
           stage = excluded.stage, note = excluded.note, updated_at = excluded.updated_at,
           cv_path = CASE WHEN @apply = 1 THEN excluded.cv_path ELSE contacts.cv_path END
-        WHERE contacts.stage <> 'final'
+        WHERE contacts.stage NOT IN ('final', 'replied')
       `).run({
         email: req.recruiterEmail.toLowerCase(),
         stage,
