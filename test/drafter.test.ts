@@ -405,9 +405,7 @@ test('only the Windows deny-Bash notice is dropped from the job log', async () =
 })
 
 test('reply mode: a body is required and may not carry a placeholder', () => {
-  const ok = parseReply('```json
-{"body":"Tuesday 2pm works for me.","questions":[]}
-```')
+  const ok = parseReply('```json\n{"body":"Tuesday 2pm works for me.","questions":[]}\n```')
   assert.deepEqual(checkReply(ok), [])
   assert.deepEqual(ok.questions, [])
   assert.match(checkReply({ body: '  ', questions: [], report: '' }).join(), /no body/)
