@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  addresses, isInbound, isUnedited, plainBody, replyRecipients, stripQuoted, threadContact, type ThreadMsg
+  addresses, isInbound, isUnedited, plainBody, replyRecipients, shouldSavePoll, stripQuoted, threadContact, type ThreadMsg
 } from '../server/utils/inbox-core.ts'
 
 const SELF = 'me@example.com'
@@ -68,4 +68,13 @@ test('an app draft is unedited only when its message id has not moved', () => {
   assert.equal(isUnedited('m1', 'm1'), true)
   assert.equal(isUnedited('m1', 'm2'), false, 'Gmail gives an edited draft a new message id')
   assert.equal(isUnedited(null, 'm1'), false, 'no record: treat as the owner\'s')
+})
+
+test('an idle poll writes its time only when the stored one is an hour stale', () => {
+  // each write moves data_version and the hand-off pushes an 8 MB snapshot for it
+  assert.equal(shouldSavePoll(0, 10_000, 10_300), false, 'nothing stored, five minutes on: no write')
+  assert.equal(shouldSavePoll(0, 10_000, 13_600), false, 'exactly an hour: still within the overlap')
+  assert.equal(shouldSavePoll(0, 10_000, 13_601), true)
+  assert.equal(shouldSavePoll(2, 10_000, 10_300), true, 'a poll that stored rows is writing anyway')
+  assert.equal(shouldSavePoll(0, null, 10_300), true, 'the first poll records itself, or every restart backfills 30 days')
 })

@@ -81,3 +81,11 @@ export function replyRecipients(latest: ThreadMsg, selfEmail: string): { to: str
 /** Gmail gives an edited draft a new message id, so an unchanged id is the proof nobody touched it. */
 export const isUnedited = (storedMsgId: string | null, currentMsgId: string | null): boolean =>
   !!storedMsgId && storedMsgId === currentMsgId
+
+/**
+ * Whether a poll writes its time to inbox_state. Every write moves data_version, and the hand-off pushes an
+ * 8 MB snapshot whenever that moved — so an idle poll writes only when the stored value is an hour stale.
+ * The live value lives on globalThis; after a restart the search's hour of overlap covers the stale one.
+ */
+export const shouldSavePoll = (stored: number, savedAt: number | null, now: number): boolean =>
+  stored > 0 || savedAt === null || now - savedAt > 3600

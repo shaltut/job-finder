@@ -41,6 +41,18 @@ export function mergeReply(dropped: QArgs[], next: QArgs): QArgs {
 }
 
 /**
+ * An automatic reply offer that changes nothing: the same message of the same thread is already running or
+ * waiting. Every poll re-offers each stranded `queued` row (inbox-store strandedQueued); without this each
+ * offer was a splice, a job_queue delete and an insert, five-minutely. A pressed Re-draft is never a no-op:
+ * it brings a note and priority. A waiting pressed one already carries both, so an automatic offer adds nothing.
+ */
+export function replyNoop(waiting: { kind: string, args: QArgs }[], running: { kind: string, args: QArgs } | null | undefined, next: QArgs): boolean {
+  if (next.manual) return false
+  const same = (i: { kind: string, args: QArgs }) => i.kind === 'reply' && i.args.threadId === next.threadId && i.args.messageId === next.messageId
+  return (!!running && same(running)) || waiting.some(same)
+}
+
+/**
  * Never resumed after a restart. The scrape kinds drive LinkedIn: re-running one on every server edit spends
  * the account's rate limit. `send` sends email: only the owner's button starts it — resuming would fire an
  * unpaced batch on every server edit and start sending on a plain `npm run dev` the next day.

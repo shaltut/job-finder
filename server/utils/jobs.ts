@@ -25,7 +25,7 @@ import { runGapsJob } from './gaps-job'
 import { runReplyJob } from './inbox'
 import { runSendJob } from './sender'
 import { sqlite } from './db'
-import { concurrency, mergeReply, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type Lane } from './queue-core'
+import { concurrency, mergeReply, pickNext, pool, replyNoop, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type Lane } from './queue-core'
 import { handoffState } from './handoff-runtime'
 
 export type { Lane }
@@ -193,9 +193,8 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
 
   // one reply job per thread (queue-core mergeReply)
   if (kind === 'reply' && args.threadId) {
-    // the stranded-row recovery re-offers a message whose job is running right now: nothing to do
-    const cur = lanes.draft.current
-    if (cur?.kind === 'reply' && cur.args.threadId === args.threadId && cur.args.messageId === args.messageId && !args.manual) return null
+    // the stranded-row recovery re-offers, every poll, a message whose job is running or waiting: nothing to do
+    if (replyNoop(queue, lanes.draft.current, args)) return null
     const same = queue.filter(q => q.kind === 'reply' && q.args.threadId === args.threadId)
     args = mergeReply(same.map(q => q.args), args)
     for (const q of same) {

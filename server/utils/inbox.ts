@@ -5,11 +5,14 @@ import { readConfig } from './config'
 import { runReplyDrafter, type ReplyRequest } from './drafter'
 import { signature } from './drafts'
 import { createDraft, gmail, gmailStatus, renderHtml, replyHeaders } from './gmail'
-import { headerOf, isInbound, isUnedited, plainBody, replyRecipients, stripQuoted, threadContact, type ThreadMsg } from './inbox-core'
+import { headerOf, isInbound, isUnedited, plainBody, replyRecipients, shouldSavePoll, stripQuoted, threadContact, type ThreadMsg } from './inbox-core'
 import { inboxRow, knownIds, lastPoll, latestInThread, markReply, noteReply, priorReplyDrafts, recordReplyDraft, setLastPoll, supersedeQueued, storeInbound } from './inbox-store'
 import { openWritableDb } from './ingest'
 import { classifyMessage } from './stages'
 import { gmailRead } from './sync'
+
+// the last poll's start, per worker: inbox_state is written only now and then (inbox-core shouldSavePoll)
+const g = globalThis as { __jobfinderInboxLastPoll?: number }
 
 const BACKFILL = 'newer_than:30d'
 const BASE = '-from:me -in:draft -in:chats'
@@ -37,7 +40,8 @@ async function searchIds(q: string): Promise<{ id: string, threadId: string }[]>
 export async function pollInbox(db: Database.Database, selfEmail: string, log: (s: string) => void,
   onThread: (t: { messageId: string, threadId: string }) => void) {
   const started = Math.floor(Date.now() / 1000)
-  const since = lastPoll(db)
+  const saved = lastPoll(db)
+  const since = g.__jobfinderInboxLastPoll ?? saved
   const found = await searchIds(`${BASE} ${since ? `after:${since - 3600}` : BACKFILL}`)
   const known = knownIds(db, found.map(f => f.id))
   const fresh = found.filter(f => !known.has(f.id))
@@ -80,7 +84,8 @@ export async function pollInbox(db: Database.Database, selfEmail: string, log: (
       log(`inbox: thread ${threadId} skipped — ${(e as Error).message}`)
     }
   }
-  setLastPoll(db, started)
+  g.__jobfinderInboxLastPoll = started
+  if (shouldSavePoll(stored, saved, started)) setLastPoll(db, started)
   log(`inbox: ${found.length} searched, ${fresh.length} new, ${stored} stored from ${threads} thread(s)`)
   return { stored, threads }
 }

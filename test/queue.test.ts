@@ -2,7 +2,7 @@
 // the drafter, Gmail, sync and the CV modules). See docs/superpowers/specs/2026-10-03-job-queue-design.md.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { backoff, concurrency, draftPriority, limiter, mergeReply, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
+import { backoff, concurrency, draftPriority, limiter, mergeReply, pickNext, pool, replyNoop, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
 
 const item = (id: number, kind: string, args: QItem['args'] = {}, lane: QItem['lane'] = 'draft'): QItem =>
   ({ id, lane, kind, args, queuedAt: '' })
@@ -232,4 +232,17 @@ test('a newer message in the thread replaces the queued reply, keeping a pressed
     { messageId: 'm1', threadId: 't', manual: true, note: 'new' },
     'a second press wins over the first'
   )
+})
+
+test('an automatic reply offer for a message already running or waiting is a no-op', () => {
+  // the poll re-offers every stranded queued row; each used to splice, drop and re-add the job_queue row
+  const r = (args: object) => ({ kind: 'reply', args: { threadId: 't', messageId: 'm1', ...args } })
+  const offer = { threadId: 't', messageId: 'm1' }
+  assert.equal(replyNoop([r({})], null, offer), true, 'waiting')
+  assert.equal(replyNoop([], r({}), offer), true, 'running')
+  assert.equal(replyNoop([r({ manual: true, note: 'x' })], null, offer), true, 'a waiting press already carries note and priority')
+  assert.equal(replyNoop([r({})], null, { ...offer, manual: true }), false, 'a press is never a no-op')
+  assert.equal(replyNoop([r({})], null, { ...offer, messageId: 'm2' }), false, 'a newer message replaces the waiting one')
+  assert.equal(replyNoop([{ kind: 'draft', args: offer }], null, offer), false)
+  assert.equal(replyNoop([], null, offer), false)
 })
