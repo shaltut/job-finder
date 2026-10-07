@@ -6,7 +6,7 @@ import { runReplyDrafter, type ReplyRequest } from './drafter'
 import { signature } from './drafts'
 import { createDraft, gmail, gmailStatus, renderHtml, replyHeaders } from './gmail'
 import { headerOf, isInbound, isUnedited, plainBody, replyRecipients, stripQuoted, threadContact, type ThreadMsg } from './inbox-core'
-import { inboxRow, knownIds, lastPoll, latestInThread, markReply, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound } from './inbox-store'
+import { inboxRow, knownIds, lastPoll, latestInThread, markReply, noteReply, priorReplyDrafts, recordReplyDraft, setLastPoll, supersedeQueued, storeInbound } from './inbox-store'
 import { openWritableDb } from './ingest'
 import { classifyMessage } from './stages'
 import { gmailRead } from './sync'
@@ -115,6 +115,8 @@ export async function runReplyJob(args: { messageId?: string, note?: string }, p
     }
     // always the newest stored message of the thread: a reply that arrived after this job was queued wins
     const row = latestInThread(db, asked.thread_id) ?? asked
+    // this job covers the whole thread: an older message still `queued` would be re-enqueued by every poll
+    supersedeQueued(db, row.thread_id, row.message_id)
     try {
       const thread = await gmailRead(() => gmail<{ messages?: ThreadMsg[] }>(`threads/${row.thread_id}?format=full`))
       const msgs = (thread.messages ?? []).filter(m => !m.labelIds?.includes('DRAFT'))
@@ -137,14 +139,18 @@ export async function runReplyJob(args: { messageId?: string, note?: string }, p
       const { to, cc } = replyRecipients(latest, self)
       const head = replyHeaders({ threadId: row.thread_id, messageId: headerOf(latest, 'Message-Id') || undefined, subject: headerOf(latest, 'Subject') })
       const sig = signature(config.profile)
+      const priors = priorReplyDrafts(db, row.thread_id)
       const created = await createDraft({
         to, cc: cc.join(', ') || undefined, subject: head.subject, inReplyTo: head.inReplyTo, references: head.references,
         text: `${res.body}\n\n${sig}`, html: renderHtml(res.body, sig)
       }, null, head.threadId)
 
-      // the previous app reply in this thread: deleted only when untouched, after the new one exists
+      // recorded at once: from here the draft is tracked, so nothing below may mark the job failed
+      recordReplyDraft(db, { messageId: row.message_id, draftId: created.id, draftMsgId: created.messageId, to, questions: res.questions, note: null })
+
+      // the previous app reply drafts in this thread: deleted only when untouched, after the new one exists
       let kept = 0
-      for (const p of priorReplyDrafts(db, row.thread_id)) {
+      for (const p of priors) {
         if (p.draftId === created.id) continue
         try {
           const cur = await gmailRead(() => gmail<{ message?: { id: string } }>(`drafts/${p.draftId}?format=minimal`))
@@ -154,20 +160,22 @@ export async function runReplyJob(args: { messageId?: string, note?: string }, p
             kept++
           }
         } catch (e) {
-          if ((e as { statusCode?: number }).statusCode !== 404) throw e // 404: already sent or deleted
+          const err = e as Error & { statusCode?: number }
+          if (err.statusCode !== 404) { // 404: already sent or deleted
+            push(`${row.contact_email}: could not clear earlier draft ${p.draftId}: ${err.message}`)
+            continue
+          }
         }
-        markReply(db, p.messageId, 'superseded')
+        if (p.messageId !== row.message_id) markReply(db, p.messageId, 'superseded')
       }
-      recordReplyDraft(db, {
-        messageId: row.message_id, draftId: created.id, draftMsgId: created.messageId, to, questions: res.questions,
-        note: kept ? 'your edited earlier draft was kept beside this one' : null
-      })
+      if (kept) noteReply(db, row.message_id, 'your edited earlier draft was kept beside this one')
       const threaded = head.threadId && created.threadId === head.threadId
       push(`${row.contact_email}: reply draft created (${created.id}), ${threaded ? 'in the thread' : 'NEW THREAD'}${res.questions.length ? `, ${res.questions.length} question(s) for you` : ''}`)
       return 0
     } catch (e) {
       if (signal.aborted) {
         push(`${row.contact_email}: stopped`)
+        markReply(db, row.message_id, 'failed', 'stopped — press Re-draft')
         return 1
       }
       markReply(db, row.message_id, 'failed', (e as Error).message.slice(0, 300))

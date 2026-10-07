@@ -72,8 +72,10 @@ async function round(
         ? await backoff(() => gmail<{ messages?: { labelIds?: string[] }[] }>(`threads/${draft.message.threadId}?format=minimal&fields=messages/labelIds`))
         : { messages: [] }
       const mode = modeOf(thread.messages ?? [])
-      if (mode !== row.mode) db.prepare('UPDATE app_drafts SET mode = ? WHERE draft_id = ?').run(mode, id)
+      if (mode !== row.mode) db.prepare(`UPDATE app_drafts SET mode = ? WHERE draft_id = ? AND mode <> 'reply'`).run(mode, id)
       const decision = await gmailDecision(db, to, selfEmail)
+      // a reply job may have recorded this draft as a reply since the list was read: never send it
+      if ((db.prepare('SELECT mode FROM app_drafts WHERE draft_id = ?').get(id) as { mode?: string } | undefined)?.mode === 'reply') continue
       const verdict = sendable({
         subject: t.subject,
         body: t.body,

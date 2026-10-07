@@ -82,6 +82,16 @@ export function recordReplyDraft(db: Database.Database, r: { messageId: string, 
   })()
 }
 
+/** A reply job drafts on the newest message of a thread; older queued ones are covered by it. */
+export function supersedeQueued(db: Database.Database, threadId: string, keepMessageId: string) {
+  db.prepare(`UPDATE inbox SET reply_status = 'superseded' WHERE thread_id = ? AND reply_status = 'queued' AND message_id <> ?`)
+    .run(threadId, keepMessageId)
+}
+
+export function noteReply(db: Database.Database, messageId: string, note: string) {
+  db.prepare('UPDATE inbox SET note = ? WHERE message_id = ?').run(note, messageId)
+}
+
 export const listInbox = (db: Database.Database, limit = 200) =>
   db.prepare('SELECT * FROM inbox ORDER BY received_at DESC LIMIT ?').all(limit) as InboxRow[]
 

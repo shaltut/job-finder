@@ -365,4 +365,8 @@ test('the sender never picks up a reply draft', () => {
   for (const q of pending) assert.match(q, /mode <> 'reply'/, `this query must exclude replies: ${q}`)
   assert.match(read(join('server', 'utils', 'inbox-store.ts')), /'reply', \?\) ON CONFLICT \(draft_id\) DO UPDATE SET mode = 'reply'/,
     'and a reply draft is recorded as one even when the sender adopted it first')
+  // the sender may hold an adopted reply draft in memory: its relabel must not erase 'reply', and it must
+  // re-read the mode right before the send check
+  assert.match(sender, /UPDATE app_drafts SET mode = \? WHERE draft_id = \? AND mode <> 'reply'/, 'the relabel leaves replies alone')
+  assert.match(sender, /SELECT mode FROM app_drafts WHERE draft_id = \?[\s\S]*?sendable\(/, 'the mode is re-read before sendable')
 })

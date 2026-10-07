@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
 import {
-  knownIds, lastPoll, latestInThread, markRead, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, strandedQueued, unreadCount
+  knownIds, lastPoll, latestInThread, markRead, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, strandedQueued, supersedeQueued, unreadCount
 } from '../server/utils/inbox-store.ts'
 
 let dir: string
@@ -68,4 +68,13 @@ test('strandedQueued returns the newest queued message per thread only', () => {
   db.prepare(`UPDATE inbox SET reply_status = 'drafted' WHERE message_id = 's3'`).run()
   const mine = strandedQueued(db).filter(r => r.threadId === 'ts' || r.threadId === 'tdone')
   assert.deepEqual(mine, [{ messageId: 's2', threadId: 'ts' }])
+})
+
+test('a job that drafts on the newest message leaves nothing stranded in the thread', () => {
+  storeInbound(db, m('x1', 'tx', 10))
+  storeInbound(db, m('x2', 'tx', 20))
+  db.prepare(`UPDATE inbox SET reply_status = 'queued' WHERE message_id IN ('x1', 'x2')`).run()
+  recordReplyDraft(db, { messageId: 'x2', draftId: 'dx', draftMsgId: 'dmx', to: 'hr@acme.com', questions: [], note: null })
+  supersedeQueued(db, 'tx', 'x2')
+  assert.deepEqual(strandedQueued(db).filter(r => r.threadId === 'tx'), [])
 })
