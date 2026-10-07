@@ -146,3 +146,18 @@ export interface GmailStatus {
   mismatch: boolean
   redirect: string
 }
+
+export interface InboxItem {
+  message_id: string
+  thread_id: string
+  contact_email: string
+  from_addr: string
+  subject: string
+  body: string
+  received_at: number
+  read_at: number | null
+  reply_status: 'queued' | 'drafted' | 'failed' | 'superseded' | null
+  reply_draft_id: string | null
+  questions: string[]
+  note: string | null
+}
