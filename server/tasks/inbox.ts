@@ -2,9 +2,11 @@ import { readConfigLoose } from '../utils/config'
 import { gmailStatus } from '../utils/gmail'
 import { pollInbox } from '../utils/inbox'
 import { openWritableDb } from '../utils/ingest'
+import { strandedQueued } from '../utils/inbox-store'
 import { enqueue } from '../utils/jobs'
 
-// on globalThis like the job runner: a dev rebuild must not let two polls overlap on a slow backfill
+// on globalThis so a module reload inside one worker cannot start a second poll over a slow backfill;
+// it cannot see across a Nitro worker rebuild (globalThis is per worker)
 const g = globalThis as { __jobfinderInboxPolling?: boolean }
 
 /** Every 5 minutes while the server runs: new replies into the inbox, and a reply draft queued for each thread. */
@@ -17,9 +19,10 @@ export default defineTask({
     g.__jobfinderInboxPolling = true
     const { db, close } = openWritableDb()
     try {
-      const { stored, toDraft } = await pollInbox(db, status.email.toLowerCase(), console.log)
-      for (const t of toDraft) enqueue('reply', { messageId: t.messageId, threadId: t.threadId, auto: true })
-      return { result: `${stored} new repl(ies), ${toDraft.length} draft(s) queued` }
+      // threads a dead poll or a rebuild left `queued` with no job; enqueue() ignores one already running
+      for (const t of strandedQueued(db)) enqueue('reply', { ...t, auto: true })
+      const { stored, threads } = await pollInbox(db, status.email.toLowerCase(), console.log, t => enqueue('reply', { ...t, auto: true }))
+      return { result: `${stored} new repl(ies), ${threads} draft(s) queued` }
     } catch (e) {
       console.log(`[inbox] poll failed: ${(e as Error).message}`)
       return { result: `failed: ${(e as Error).message}` }

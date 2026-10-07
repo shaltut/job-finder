@@ -192,6 +192,9 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
 
   // one reply job per thread (queue-core mergeReply)
   if (kind === 'reply' && args.threadId) {
+    // the stranded-row recovery re-offers a message whose job is running right now: nothing to do
+    const cur = lanes.draft.current
+    if (cur?.kind === 'reply' && cur.args.threadId === args.threadId && cur.args.messageId === args.messageId && !args.manual) return null
     const same = queue.filter(q => q.kind === 'reply' && q.args.threadId === args.threadId)
     args = mergeReply(same.map(q => q.args), args)
     for (const q of same) {

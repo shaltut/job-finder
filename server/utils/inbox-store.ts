@@ -91,3 +91,12 @@ export const unreadCount = (db: Database.Database): number =>
 export function markRead(db: Database.Database, messageId: string) {
   db.prepare('UPDATE inbox SET read_at = ? WHERE message_id = ? AND read_at IS NULL').run(now(), messageId)
 }
+
+/** The newest message of every thread still marked `queued`: its reply job was lost (a poll died, a rebuild). */
+export const strandedQueued = (db: Database.Database): { messageId: string, threadId: string }[] =>
+  db.prepare(`
+    SELECT message_id AS messageId, thread_id AS threadId FROM inbox i
+    WHERE reply_status = 'queued'
+      AND received_at = (SELECT MAX(received_at) FROM inbox WHERE thread_id = i.thread_id AND reply_status = 'queued')
+    GROUP BY thread_id
+  `).all() as { messageId: string, threadId: string }[]

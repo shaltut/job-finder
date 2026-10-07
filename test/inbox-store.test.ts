@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
 import {
-  knownIds, lastPoll, latestInThread, markRead, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, unreadCount
+  knownIds, lastPoll, latestInThread, markRead, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, strandedQueued, unreadCount
 } from '../server/utils/inbox-store.ts'
 
 let dir: string
@@ -58,4 +58,14 @@ test('the last poll time round-trips', () => {
   setLastPoll(db, 500)
   setLastPoll(db, 600)
   assert.equal(lastPoll(db), 600)
+})
+
+test('strandedQueued returns the newest queued message per thread only', () => {
+  storeInbound(db, m('s1', 'ts', 10))
+  storeInbound(db, m('s2', 'ts', 20))
+  storeInbound(db, m('s3', 'tdone', 30))
+  db.prepare(`UPDATE inbox SET reply_status = 'queued' WHERE message_id IN ('s1', 's2')`).run()
+  db.prepare(`UPDATE inbox SET reply_status = 'drafted' WHERE message_id = 's3'`).run()
+  const mine = strandedQueued(db).filter(r => r.threadId === 'ts' || r.threadId === 'tdone')
+  assert.deepEqual(mine, [{ messageId: 's2', threadId: 'ts' }])
 })
