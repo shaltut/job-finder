@@ -58,9 +58,14 @@ export const inboxRow = (db: Database.Database, messageId: string) =>
 export const latestInThread = (db: Database.Database, threadId: string) =>
   db.prepare('SELECT * FROM inbox WHERE thread_id = ? ORDER BY received_at DESC LIMIT 1').get(threadId) as InboxRow | undefined
 
+/**
+ * Every app reply draft still tracked in the thread. Not only `drafted`: a Re-draft marks its row `queued`
+ * (and a failed run `failed`) while it still holds the earlier draft, and that draft must be replaced too.
+ * `superseded` rows were already handled by an earlier run.
+ */
 export function priorReplyDrafts(db: Database.Database, threadId: string) {
   return (db.prepare(`SELECT message_id, reply_draft_id, reply_draft_msg_id FROM inbox
-    WHERE thread_id = ? AND reply_status = 'drafted' AND reply_draft_id IS NOT NULL`).all(threadId) as
+    WHERE thread_id = ? AND reply_draft_id IS NOT NULL AND reply_status IS NOT 'superseded'`).all(threadId) as
     { message_id: string, reply_draft_id: string, reply_draft_msg_id: string | null }[])
     .map(r => ({ messageId: r.message_id, draftId: r.reply_draft_id, draftMsgId: r.reply_draft_msg_id }))
 }

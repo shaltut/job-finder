@@ -115,6 +115,9 @@ export async function runReplyJob(args: { messageId?: string, note?: string }, p
     }
     // always the newest stored message of the thread: a reply that arrived after this job was queued wins
     const row = latestInThread(db, asked.thread_id) ?? asked
+    // read before supersedeQueued: an older queued row may hold an earlier draft, and superseded rows are
+    // excluded. Includes this row's own draft on a Re-draft (it is `queued` now) — replaced below.
+    const priors = priorReplyDrafts(db, row.thread_id)
     // this job covers the whole thread: an older message still `queued` would be re-enqueued by every poll
     supersedeQueued(db, row.thread_id, row.message_id)
     try {
@@ -139,7 +142,6 @@ export async function runReplyJob(args: { messageId?: string, note?: string }, p
       const { to, cc } = replyRecipients(latest, self)
       const head = replyHeaders({ threadId: row.thread_id, messageId: headerOf(latest, 'Message-Id') || undefined, subject: headerOf(latest, 'Subject') })
       const sig = signature(config.profile)
-      const priors = priorReplyDrafts(db, row.thread_id)
       const created = await createDraft({
         to, cc: cc.join(', ') || undefined, subject: head.subject, inReplyTo: head.inReplyTo, references: head.references,
         text: `${res.body}\n\n${sig}`, html: renderHtml(res.body, sig)

@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
 import {
-  knownIds, lastPoll, latestInThread, markRead, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, strandedQueued, supersedeQueued, unreadCount
+  knownIds, lastPoll, latestInThread, markRead, markReply, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, strandedQueued, supersedeQueued, unreadCount
 } from '../server/utils/inbox-store.ts'
 
 let dir: string
@@ -77,4 +77,17 @@ test('a job that drafts on the newest message leaves nothing stranded in the thr
   recordReplyDraft(db, { messageId: 'x2', draftId: 'dx', draftMsgId: 'dmx', to: 'hr@acme.com', questions: [], note: null })
   supersedeQueued(db, 'tx', 'x2')
   assert.deepEqual(strandedQueued(db).filter(r => r.threadId === 'tx'), [])
+})
+
+test('a Re-draft on the same message still sees the draft that message holds', () => {
+  // reply.post.ts marks the pressed row `queued`; a filter on `drafted` alone hid its draft, so the new one
+  // overwrote reply_draft_id and the old draft stayed in Gmail, untracked
+  storeInbound(db, m('r1', 'tr', 10))
+  recordReplyDraft(db, { messageId: 'r1', draftId: 'dr1', draftMsgId: 'dmr1', to: 'hr@acme.com', questions: [], note: null })
+  markReply(db, 'r1', 'queued')
+  assert.deepEqual(priorReplyDrafts(db, 'tr'), [{ messageId: 'r1', draftId: 'dr1', draftMsgId: 'dmr1' }])
+  markReply(db, 'r1', 'failed', 'boom')
+  assert.equal(priorReplyDrafts(db, 'tr').length, 1, 'a failed re-draft still holds the earlier draft')
+  markReply(db, 'r1', 'superseded')
+  assert.deepEqual(priorReplyDrafts(db, 'tr'), [], 'an earlier run already handled it')
 })
