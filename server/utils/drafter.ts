@@ -239,7 +239,7 @@ export const fitsPromptBudget = (config: AppConfig, master: MasterCv): boolean =
   buildSystemPrompt(config, master).length <= PROMPT_BUDGET
 
 /** Strips a ```json fence if the model adds one despite being told not to. */
-export function parseResponse(raw: string): DraftResponse {
+function extractJson(raw: string): unknown {
   let text = raw.trim()
   const fence = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/)
   if (fence) text = fence[1]!.trim()
@@ -256,7 +256,11 @@ export function parseResponse(raw: string): DraftResponse {
   } catch (e) {
     throw new Error(`drafter returned unparseable JSON: ${(e as Error).message}`, { cause: e })
   }
-  return responseSchema.parse(parsed)
+  return parsed
+}
+
+export function parseResponse(raw: string): DraftResponse {
+  return responseSchema.parse(extractJson(raw))
 }
 
 /**
@@ -346,7 +350,8 @@ export interface RunOptions {
  */
 const DRAFTER_MODEL = process.env.JOBFINDER_DRAFTER_MODEL || 'opus'
 
-export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOptions = {}): Promise<DraftResponse> {
+/** One `claude -p` session with the drafter's zero-tool setup. Resolves with stdout; the callers parse it. */
+function runClaude(payload: string, config: AppConfig, opts: RunOptions, label: string): Promise<string> {
   const { onLog = () => {}, timeoutMs = 10 * 60_000 } = opts
   const cwd = neutralCwd()
   const promptFile = join(cwd, `prompt-${randomUUID()}.md`)
@@ -370,20 +375,8 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
     '--output-format', 'text'
   ]
 
-  const payload = JSON.stringify({
-    mode: req.mode,
-    chosen: req.chosen ?? false,
-    recruiter_email: req.recruiterEmail,
-    ...(req.mode === 'follow-up' ? { original_sent_at: req.originalSentAt ?? null } : {}),
-    posts: req.posts.map(p => ({
-      key: p.key, title: p.title, company: p.company, location: p.location,
-      score: p.score, post_type: p.postType, flags: p.flags, text: p.text,
-      ...(req.mode === 'follow-up' ? { already_named: !!p.named } : {})
-    }))
-  })
-
-  return new Promise<DraftResponse>((resolvePromise, reject) => {
-    onLog(`drafting for ${req.recruiterEmail} (${req.posts.length} post(s), mode=${req.mode})`)
+  return new Promise<string>((resolvePromise, reject) => {
+    onLog(label)
     const child = spawn('claude', args, { cwd, env: { ...userSettingsEnv(), ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] })
 
     let out = ''
@@ -409,17 +402,73 @@ export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOption
     child.on('close', (code) => {
       clearTimeout(timer)
       if (code !== 0) return reject(new Error(`claude exited ${code}: ${err.trim().slice(0, 300) || 'no stderr'}`))
-      try {
-        const parsed = parseResponse(out)
-        const problems = checkContract(req, parsed)
-        if (problems.length) return reject(new Error(`drafter broke the contract: ${problems.join('; ')}`))
-        resolvePromise(parsed)
-      } catch (e) {
-        reject(e as Error)
-      }
+      resolvePromise(out)
     })
 
     child.stdin.write(payload)
     child.stdin.end()
   }).finally(() => rmSync(promptFile, { force: true }))
+}
+
+export function runDrafter(req: DraftRequest, config: AppConfig, opts: RunOptions = {}): Promise<DraftResponse> {
+  const payload = JSON.stringify({
+    mode: req.mode,
+    chosen: req.chosen ?? false,
+    recruiter_email: req.recruiterEmail,
+    ...(req.mode === 'follow-up' ? { original_sent_at: req.originalSentAt ?? null } : {}),
+    posts: req.posts.map(p => ({
+      key: p.key, title: p.title, company: p.company, location: p.location,
+      score: p.score, post_type: p.postType, flags: p.flags, text: p.text,
+      ...(req.mode === 'follow-up' ? { already_named: !!p.named } : {})
+    }))
+  })
+  return runClaude(payload, config, opts, `drafting for ${req.recruiterEmail} (${req.posts.length} post(s), mode=${req.mode})`)
+    .then((out) => {
+      const parsed = parseResponse(out)
+      const problems = checkContract(req, parsed)
+      if (problems.length) throw new Error(`drafter broke the contract: ${problems.join('; ')}`)
+      return parsed
+    })
+}
+
+export interface ReplyRequest {
+  recruiterEmail: string
+  /** the owner's instruction from the Re-draft box; empty for an automatic draft */
+  note: string
+  /** the thread, oldest first — the owner's messages too, marked `mine` */
+  thread: { from: string, date: string, mine: boolean, body: string }[]
+  posts: { title: string | null, company: string | null, location: string | null, text: string }[]
+}
+
+const replySchema = z.object({
+  body: z.string(),
+  questions: z.array(z.string()).default([]),
+  report: z.string().default('')
+})
+export type ReplyResponse = z.infer<typeof replySchema>
+
+export const parseReply = (raw: string): ReplyResponse => replySchema.parse(extractJson(raw))
+
+/** The same fail-closed rule as the other modes: an empty reply or a hole in it is never a draft. */
+export function checkReply(res: ReplyResponse): string[] {
+  const problems: string[] = []
+  if (!res.body.trim()) problems.push('the reply carries no body')
+  const hit = res.body.match(PLACEHOLDER)
+  if (hit) problems.push(`the reply still carries an unfilled placeholder: ${hit[0]}`)
+  return problems
+}
+
+/**
+ * Reply mode. The thread is a stranger's words going into the prompt; the session has no tools, so the most
+ * an instruction hidden in it can do is shape prose — and a reply draft is never sent by the app.
+ */
+export function runReplyDrafter(req: ReplyRequest, config: AppConfig, opts: RunOptions = {}): Promise<ReplyResponse> {
+  const payload = JSON.stringify({ mode: 'reply', recruiter_email: req.recruiterEmail, note: req.note, thread: req.thread, posts: req.posts })
+  return runClaude(payload, config, opts, `drafting a reply to ${req.recruiterEmail} (${req.thread.length} message(s))`)
+    .then((out) => {
+      const parsed = parseReply(out)
+      const problems = checkReply(parsed)
+      if (problems.length) throw new Error(`drafter broke the reply contract: ${problems.join('; ')}`)
+      return parsed
+    })
 }

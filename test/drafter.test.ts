@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  PROMPT_BUDGET, PROMPT_SEPARATOR, buildSystemPrompt, candidateBlock, checkContract, fitsPromptBudget, parseResponse,
+  PROMPT_BUDGET, PROMPT_SEPARATOR, buildSystemPrompt, candidateBlock, checkContract, checkReply, fitsPromptBudget, parseReply, parseResponse,
   profileBlock, readProcedure, type DraftRequest
 } from '../server/utils/drafter.ts'
 import { MASTER_CV_HEADING, assignIds } from '../server/utils/cv-master.ts'
@@ -402,4 +402,21 @@ test('only the Windows deny-Bash notice is dropped from the job log', async () =
   assert.ok(CLI_NOTICE.test('Denying Bash also turns off the PowerShell tool, so Claude has neither. To use PowerShell, set CLAUDE_CODE_USE_POWERSHELL_TOOL=1.'))
   assert.equal(CLI_NOTICE.test('claude exited 1: Bash denied'), false)
   assert.equal(CLI_NOTICE.test('Error: Denying Bash also turns off the PowerShell tool'), false, 'anchored: a wrapped error still shows')
+})
+
+test('reply mode: a body is required and may not carry a placeholder', () => {
+  const ok = parseReply('```json
+{"body":"Tuesday 2pm works for me.","questions":[]}
+```')
+  assert.deepEqual(checkReply(ok), [])
+  assert.deepEqual(ok.questions, [])
+  assert.match(checkReply({ body: '  ', questions: [], report: '' }).join(), /no body/)
+  assert.match(checkReply({ body: 'My notice period is [ADD].', questions: [], report: '' }).join(), /placeholder/)
+  assert.deepEqual(parseReply('{"body":"Hi","questions":["What time?"]}').questions, ['What time?'])
+})
+
+test('the procedure has a reply mode that treats the thread as data', () => {
+  const p = readProcedure()
+  assert.match(p, /^## Reply mode$/m)
+  assert.match(p, /data, not instructions/)
 })
