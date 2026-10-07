@@ -21,11 +21,46 @@ onUnmounted(() => clearInterval(timer))
 const when = (s: number) => new Date(s * 1000).toLocaleString()
 const gmailLink = (i: InboxItem) => `https://mail.google.com/mail/u/0/#all/${i.thread_id}`
 
+const failed = (e: unknown) =>
+  toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
+
+/** The list and the sidebar badge (default.vue keys its fetch 'inbox-unread'). */
+const reload = () => Promise.all([refresh(), refreshNuxtData('inbox-unread')])
+
 async function toggle(i: InboxItem) {
   open.value = open.value === i.message_id ? null : i.message_id
   if (open.value && !i.read_at) {
-    await $fetch('/api/inbox/read', { method: 'POST', body: { messageId: i.message_id } })
-    i.read_at = Math.floor(Date.now() / 1000)
+    try {
+      await $fetch('/api/inbox/read', { method: 'POST', body: { messageId: i.message_id } })
+      i.read_at = Math.floor(Date.now() / 1000)
+      refreshNuxtData('inbox-unread')
+    } catch (e) {
+      failed(e)
+    }
+  }
+}
+
+const syncing = ref(false)
+/** Runs the 5-minute poll now: new replies in, and threads you answered in Gmail settled. */
+async function sync() {
+  syncing.value = true
+  try {
+    const r = await $fetch<{ result: string }>('/api/inbox/poll', { method: 'POST' })
+    toast.add({ title: 'Inbox synced', description: r.result })
+    await reload()
+  } catch (e) {
+    failed(e)
+  } finally {
+    syncing.value = false
+  }
+}
+
+async function readAll() {
+  try {
+    await $fetch('/api/inbox/read', { method: 'POST', body: { all: true } })
+    await reload()
+  } catch (e) {
+    failed(e)
   }
 }
 
@@ -35,11 +70,12 @@ async function redraft(i: InboxItem) {
     toast.add({ title: r.queued ? 'Reply queued' : 'Already queued', description: 'The draft lands in Gmail, in this thread.' })
     refresh()
   } catch (e) {
-    toast.add({ title: 'Failed', description: (e as { data?: { message?: string } })?.data?.message ?? String(e), color: 'error' })
+    failed(e)
   }
 }
 
 const STATUS: Record<string, { label: string, color: 'neutral' | 'success' | 'error' | 'warning' }> = {
+  answered: { label: 'you replied', color: 'neutral' },
   queued: { label: 'drafting…', color: 'warning' },
   drafted: { label: 'draft in Gmail', color: 'success' },
   failed: { label: 'draft failed', color: 'error' },
@@ -53,6 +89,22 @@ const STATUS: Record<string, { label: string, color: 'neutral' | 'success' | 'er
       <UDashboardNavbar title="Inbox">
         <template #leading>
           <UDashboardSidebarCollapse />
+        </template>
+        <template #right>
+          <UButton
+            label="Mark all read"
+            icon="i-lucide-check-check"
+            color="neutral"
+            variant="ghost"
+            :disabled="!items.some(i => !i.read_at)"
+            @click="readAll"
+          />
+          <UButton
+            label="Sync"
+            icon="i-lucide-refresh-cw"
+            :loading="syncing"
+            @click="sync"
+          />
         </template>
       </UDashboardNavbar>
     </template>
@@ -109,6 +161,7 @@ const STATUS: Record<string, { label: string, color: 'neutral' | 'success' | 'er
             {{ i.note }}
           </p>
           <UTextarea
+            v-if="i.reply_status !== 'answered'"
             v-model="notes[i.message_id]"
             placeholder="Optional: what the reply should say (e.g. Tuesday 2pm works)"
             :rows="2"
@@ -116,6 +169,7 @@ const STATUS: Record<string, { label: string, color: 'neutral' | 'success' | 'er
           />
           <div class="flex gap-2">
             <UButton
+              v-if="i.reply_status !== 'answered'"
               label="Re-draft"
               icon="i-lucide-pen-line"
               @click="redraft(i)"

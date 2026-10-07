@@ -156,7 +156,7 @@ export interface InboxItem {
   body: string
   received_at: number
   read_at: number | null
-  reply_status: 'queued' | 'drafted' | 'failed' | 'superseded' | null
+  reply_status: 'queued' | 'drafted' | 'failed' | 'superseded' | 'answered' | null
   reply_draft_id: string | null
   questions: string[]
   note: string | null

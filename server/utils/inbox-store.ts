@@ -12,7 +12,7 @@ export interface InboxRow {
   body: string
   received_at: number
   read_at: number | null
-  reply_status: 'queued' | 'drafted' | 'failed' | 'superseded' | null
+  reply_status: 'queued' | 'drafted' | 'failed' | 'superseded' | 'answered' | null
   reply_draft_id: string | null
   reply_draft_msg_id: string | null
   questions: string | null
@@ -95,7 +95,36 @@ export function supersedeQueued(db: Database.Database, threadId: string, keepMes
 
 /** Nothing to draft: the owner answered this message in Gmail themselves (inbox-core ownerAnswered). */
 export function markAnswered(db: Database.Database, messageId: string) {
-  db.prepare(`UPDATE inbox SET reply_status = NULL, note = 'you already replied in Gmail' WHERE message_id = ?`).run(messageId)
+  db.prepare(`UPDATE inbox SET reply_status = 'answered', note = 'you replied in Gmail', read_at = coalesce(read_at, ?) WHERE message_id = ?`)
+    .run(now(), messageId)
+}
+
+/**
+ * The owner answered the thread in Gmail — usually by sending the app's draft by hand. Every message up to
+ * the one answered is settled and read; a reply that arrived after it stays open. A `queued` row belongs to
+ * the drafter, which checks ownerAnswered itself.
+ */
+export function answerThread(db: Database.Database, threadId: string, upToReceivedAt: number) {
+  db.prepare(`UPDATE inbox SET reply_status = 'answered', note = 'you replied in Gmail', read_at = coalesce(read_at, ?)
+    WHERE thread_id = ? AND received_at <= ? AND reply_status IS NOT 'queued' AND reply_status IS NOT 'answered'`)
+    .run(now(), threadId, upToReceivedAt)
+}
+
+/**
+ * Threads still waiting on the owner as far as the inbox knows: the newest stored message is drafted, failed
+ * or untouched. The poll re-reads each to see whether the owner has answered since — the search itself skips
+ * the owner's own mail (`-from:me`), so nothing else would notice.
+ */
+export const openThreads = (db: Database.Database): { threadId: string, messageId: string, receivedAt: number }[] =>
+  db.prepare(`
+    SELECT thread_id AS threadId, message_id AS messageId, received_at AS receivedAt FROM inbox i
+    WHERE received_at = (SELECT MAX(received_at) FROM inbox WHERE thread_id = i.thread_id)
+      AND (reply_status IS NULL OR reply_status IN ('drafted', 'failed'))
+    GROUP BY thread_id
+  `).all() as { threadId: string, messageId: string, receivedAt: number }[]
+
+export function markAllRead(db: Database.Database) {
+  db.prepare('UPDATE inbox SET read_at = ? WHERE read_at IS NULL').run(now())
 }
 
 export function noteReply(db: Database.Database, messageId: string, note: string) {

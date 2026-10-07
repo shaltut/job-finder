@@ -6,7 +6,7 @@ import { runReplyDrafter, type ReplyRequest } from './drafter'
 import { signature } from './drafts'
 import { createDraft, gmail, gmailStatus, renderHtml, replyHeaders } from './gmail'
 import { headerOf, isInbound, isUnedited, ownerAnswered, plainBody, replyRecipients, shouldSavePoll, stripQuoted, threadContact, type ThreadMsg } from './inbox-core'
-import { inboxRow, knownIds, lastPoll, latestInThread, markAnswered, markReply, noteReply, priorReplyDrafts, recordReplyDraft, setLastPoll, supersedeQueued, storeInbound } from './inbox-store'
+import { answerThread, inboxRow, knownIds, lastPoll, latestInThread, markAnswered, openThreads, markReply, noteReply, priorReplyDrafts, recordReplyDraft, setLastPoll, supersedeQueued, storeInbound } from './inbox-store'
 import { openWritableDb } from './ingest'
 import { classifyMessage } from './stages'
 import { gmailRead } from './sync'
@@ -86,10 +86,27 @@ export async function pollInbox(db: Database.Database, selfEmail: string, log: (
       log(`inbox: thread ${threadId} skipped — ${(e as Error).message}`)
     }
   }
+  // Settle threads the owner answered in Gmail (often by sending the app's draft by hand). The search above
+  // skips the owner's mail, so without this a sent reply left its row "draft in Gmail" and unread forever.
+  // One metadata read per open thread; a thread read for new mail above is skipped, it settles next poll.
+  let answered = 0
+  for (const t of openThreads(db)) {
+    if (byThread.has(t.threadId)) continue
+    try {
+      const thread = await gmailRead(() => gmail<{ messages?: ThreadMsg[] }>(`threads/${t.threadId}?format=metadata&metadataHeaders=From`))
+      if (ownerAnswered(thread.messages ?? [], selfEmail, t.messageId)) {
+        answerThread(db, t.threadId, t.receivedAt)
+        answered++
+      }
+    } catch (e) {
+      log(`inbox: thread ${t.threadId} not settled — ${(e as Error).message}`)
+    }
+  }
+
   g.__jobfinderInboxLastPoll = started
   if (shouldSavePoll(stored, saved, started)) setLastPoll(db, started)
-  log(`inbox: ${found.length} searched, ${fresh.length} new, ${stored} stored from ${threads} thread(s)`)
-  return { stored, threads }
+  log(`inbox: ${found.length} searched, ${fresh.length} new, ${stored} stored from ${threads} thread(s), ${answered} answered`)
+  return { stored, threads, answered }
 }
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)

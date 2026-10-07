@@ -21,8 +21,8 @@ export default defineTask({
     try {
       // threads a dead poll or a rebuild left `queued` with no job; enqueue() ignores one already running or waiting (queue-core replyNoop)
       for (const t of strandedQueued(db)) enqueue('reply', t)
-      const { stored, threads } = await pollInbox(db, status.email.toLowerCase(), console.log, t => enqueue('reply', t))
-      return { result: `${stored} new repl(ies), ${threads} draft(s) queued` }
+      const { stored, threads, answered } = await pollInbox(db, status.email.toLowerCase(), console.log, t => enqueue('reply', t))
+      return { result: `${stored} new repl(ies), ${threads} draft(s) queued, ${answered} answered in Gmail` }
     } catch (e) {
       console.log(`[inbox] poll failed: ${(e as Error).message}`)
       return { result: `failed: ${(e as Error).message}` }

@@ -8,7 +8,7 @@ function close() {
   open.value = false
 }
 
-const { data: unread, refresh: refreshUnread } = await useFetch<{ unread: number }>('/api/inbox/unread', { lazy: true, default: () => ({ unread: 0 }) })
+const { data: unread, refresh: refreshUnread } = await useFetch<{ unread: number }>('/api/inbox/unread', { key: 'inbox-unread', lazy: true, default: () => ({ unread: 0 }) })
 let unreadTimer: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
   unreadTimer = setInterval(refreshUnread, 60_000)

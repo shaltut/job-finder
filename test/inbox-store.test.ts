@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
 import {
-  knownIds, lastPoll, latestInThread, markAnswered, markRead, markReply, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, strandedQueued, supersedeQueued, unreadCount
+  answerThread, knownIds, lastPoll, latestInThread, markAllRead, markAnswered, markRead, openThreads, markReply, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, strandedQueued, supersedeQueued, unreadCount
 } from '../server/utils/inbox-store.ts'
 
 let dir: string
@@ -97,6 +97,41 @@ test('an answered message leaves the reply queue with a note saying why', () => 
   markReply(db, 'q1', 'queued')
   markAnswered(db, 'q1')
   const r = latestInThread(db, 'tq')!
-  assert.deepEqual([r.reply_status, r.note], [null, 'you already replied in Gmail'])
+  assert.deepEqual([r.reply_status, r.note], ['answered', 'you replied in Gmail'])
+  assert.ok(r.read_at, 'an answered message is read')
   assert.deepEqual(strandedQueued(db).filter(x => x.threadId === 'tq'), [], 'and no poll re-offers it')
+})
+
+test('a thread whose newest reply was drafted or left alone is open until the owner answers it', () => {
+  storeInbound(db, m('o1', 'to', 10))
+  storeInbound(db, m('o2', 'to', 20))
+  recordReplyDraft(db, { messageId: 'o2', draftId: 'do2', draftMsgId: 'dmo2', to: 'hr@acme.com', questions: [], note: null })
+  storeInbound(db, m('w1', 'tw', 10))
+  markReply(db, 'w1', 'queued')
+  const open = openThreads(db).filter(t => ['to', 'tw'].includes(t.threadId))
+  assert.deepEqual(open, [{ threadId: 'to', messageId: 'o2', receivedAt: 20 }], 'newest row only; a queued thread belongs to the drafter')
+
+  answerThread(db, 'to', 20)
+  assert.deepEqual(openThreads(db).filter(t => t.threadId === 'to'), [], 'answered threads stop being re-read')
+  for (const id of ['o1', 'o2']) {
+    const r = db.prepare('SELECT reply_status, read_at FROM inbox WHERE message_id = ?').get(id) as { reply_status: string, read_at: number | null }
+    assert.equal(r.reply_status, 'answered')
+    assert.ok(r.read_at, `${id} is read`)
+  }
+  assert.equal((db.prepare(`SELECT reply_status FROM inbox WHERE message_id = 'w1'`).get() as { reply_status: string }).reply_status, 'queued', 'other threads untouched')
+})
+
+test('a newer reply after the owner answered is not swallowed', () => {
+  storeInbound(db, m('n1', 'tn', 10))
+  storeInbound(db, m('n2', 'tn', 30))
+  answerThread(db, 'tn', 10)
+  const r = db.prepare(`SELECT reply_status FROM inbox WHERE message_id = 'n2'`).get() as { reply_status: string | null }
+  assert.equal(r.reply_status, null, 'only messages up to the answered one')
+})
+
+test('mark all read clears the badge', () => {
+  storeInbound(db, m('ar1', 'tar', 10))
+  assert.ok(unreadCount(db) > 0)
+  markAllRead(db)
+  assert.equal(unreadCount(db), 0)
 })
