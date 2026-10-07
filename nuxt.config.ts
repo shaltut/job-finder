@@ -33,7 +33,9 @@ export default defineNuxtConfig({
     experimental: { tasks: true },
     scheduledTasks: {
       // 08:07, not 08:00: every scheduler on the planet fires on the hour
-      '7 8 * * *': ['daily']
+      '7 8 * * *': ['daily'],
+      // replies, for the Inbox view (server/tasks/inbox.ts)
+      '*/5 * * * *': ['inbox']
     }
   },
 

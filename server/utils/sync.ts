@@ -36,7 +36,7 @@ const header = (m: RawMessage, name: string) =>
  * apart (~33/s, ~165 units/s, room for createDraft beside it), and a rate-limit refusal waits and retries.
  */
 const paced = limiter(6, 30)
-const gmailRead = <T>(fn: () => Promise<T>) => backoff(() => paced(fn))
+export const gmailRead = <T>(fn: () => Promise<T>) => backoff(() => paced(fn))
 
 /** Every message either side of this address. Sent mail is included; drafts are not, which is the point. */
 async function threadMessages(email: string): Promise<GmailMessage[]> {
