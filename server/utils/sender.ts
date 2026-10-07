@@ -49,7 +49,7 @@ async function round(
   }
   if (adopted) push(`${adopted} draft(s) to known recruiters adopted (drafted before the sender kept a record)`)
 
-  const unsent = db.prepare('SELECT draft_id, email, mode FROM app_drafts WHERE sent_at IS NULL AND outcome IS NULL')
+  const unsent = db.prepare(`SELECT draft_id, email, mode FROM app_drafts WHERE sent_at IS NULL AND outcome IS NULL AND mode <> 'reply'`)
     .all() as { draft_id: string, email: string, mode: string }[]
   const gone = unsent.filter(r => !waiting.has(r.draft_id))
   for (const r of gone) mark(db, r.draft_id, 'gone') // sent or deleted by hand, before the lane saw it
@@ -113,7 +113,7 @@ async function round(
     }
   }
   // counted, not computed: a send that failed (not a 404) stays pending and must keep the lane going
-  return (db.prepare('SELECT count(*) n FROM app_drafts WHERE sent_at IS NULL AND outcome IS NULL').get() as { n: number }).n
+  return (db.prepare(`SELECT count(*) n FROM app_drafts WHERE sent_at IS NULL AND outcome IS NULL AND mode <> 'reply'`).get() as { n: number }).n
 }
 
 const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => {

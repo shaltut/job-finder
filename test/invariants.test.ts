@@ -355,3 +355,14 @@ test('every tags field on Settings commits what was typed when it loses focus', 
   assert.ok(tags.length >= 9, `anchor: found ${tags.length} UInputTags`)
   for (const t of tags) assert.match(t, /add-on-blur/, `a UInputTags without add-on-blur: ${t.trim().split('\n')[0]}`)
 })
+
+test('the sender never picks up a reply draft', () => {
+  // Reply drafts answer a person mid-conversation; the owner reads them before anything goes out. The sender
+  // lane chooses from app_drafts, so every query that picks a pending draft must leave mode 'reply' out.
+  const sender = read(join('server', 'utils', 'sender.ts'))
+  const pending = sender.match(/FROM app_drafts WHERE sent_at IS NULL[^`]*/g) ?? []
+  assert.ok(pending.length >= 2, 'anchors: the pending-draft queries')
+  for (const q of pending) assert.match(q, /mode <> 'reply'/, `this query must exclude replies: ${q}`)
+  assert.match(read(join('server', 'utils', 'inbox-store.ts')), /'reply', \?\) ON CONFLICT \(draft_id\) DO UPDATE SET mode = 'reply'/,
+    'and a reply draft is recorded as one even when the sender adopted it first')
+})

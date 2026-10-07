@@ -281,7 +281,7 @@ export function renderHtml(text: string, signature: string): string {
   return `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;line-height:1.55">${block(text)}<br><br>${block(signature)}</div>`
 }
 
-export interface CreatedDraft { id: string, threadId: string | null, attachedBytes: number | null }
+export interface CreatedDraft { id: string, threadId: string | null, messageId: string | null, attachedBytes: number | null }
 
 /**
  * Creates a Gmail draft with the CV attached in the same call. The original had to re-open every draft
@@ -311,7 +311,7 @@ export async function createDraft(
     const full = await gmail<{ message: { payload: unknown } }>(`drafts/${created.id}?format=full`)
     attachedBytes = findAttachment(full.message.payload, name)
   }
-  return { id: created.id, threadId: created.message?.threadId ?? null, attachedBytes }
+  return { id: created.id, threadId: created.message?.threadId ?? null, messageId: created.message?.id ?? null, attachedBytes }
 }
 
 interface Part { filename?: string, mimeType?: string, body?: { size?: number }, parts?: Part[] }

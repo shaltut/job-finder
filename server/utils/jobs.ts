@@ -22,6 +22,7 @@ import { applyRecord, openWritableDb, type ScraperRecord } from './ingest'
 import { closedInGmail, sweep } from './sync'
 import { runPasteJob } from './paste-job'
 import { runGapsJob } from './gaps-job'
+import { runReplyJob } from './inbox'
 import { runSendJob } from './sender'
 import { sqlite } from './db'
 import { concurrency, mergeReply, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type Lane } from './queue-core'
@@ -293,7 +294,9 @@ function runJob(lane: Lane, item: QueueItem) {
       ? runSendJob(push, abort.signal, () => enqueue('sync'))
       : kind === 'sync'
         ? runSyncJob(push, abort.signal)
-        : (kind === 'gaps' ? runGapsJob(job, args.keys, push, abort.signal) : runDraftJob(job, args, push, abort.signal))
+        : kind === 'reply'
+          ? runReplyJob(args, push, abort.signal)
+          : (kind === 'gaps' ? runGapsJob(job, args.keys, push, abort.signal) : runDraftJob(job, args, push, abort.signal))
     work
       .then(code => finish(code))
       .catch((e) => {
