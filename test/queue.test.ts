@@ -2,7 +2,7 @@
 // the drafter, Gmail, sync and the CV modules). See docs/superpowers/specs/2026-10-03-job-queue-design.md.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { backoff, concurrency, draftPriority, limiter, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
+import { backoff, concurrency, draftPriority, limiter, mergeReply, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type QItem } from '../server/utils/queue-core.ts'
 
 const item = (id: number, kind: string, args: QItem['args'] = {}, lane: QItem['lane'] = 'draft'): QItem =>
   ({ id, lane, kind, args, queuedAt: '' })
@@ -214,4 +214,22 @@ test('restore: an interrupted sender is never resumed — only the owner\'s butt
   const plan = restorePlan([{ id: 4, lane: 'send', kind: 'send', started: true }, { id: 5, lane: 'draft', kind: 'draft', started: true }])
   assert.deepEqual(plan.drop, [4])
   assert.deepEqual(plan.order, [5])
+})
+
+test('reply jobs: a pressed Re-draft is hand-picked, an automatic one is background', () => {
+  assert.equal(draftPriority(item(1, 'reply', { messageId: 'm', threadId: 't', manual: true })), 0)
+  assert.equal(draftPriority(item(1, 'reply', { messageId: 'm', threadId: 't' })), 2)
+})
+
+test('a newer message in the thread replaces the queued reply, keeping a pressed note', () => {
+  assert.deepEqual(mergeReply([], { messageId: 'm2', threadId: 't' }), { messageId: 'm2', threadId: 't' })
+  assert.deepEqual(
+    mergeReply([{ messageId: 'm1', threadId: 't', manual: true, note: 'say Tuesday' }], { messageId: 'm2', threadId: 't' }),
+    { messageId: 'm2', threadId: 't', manual: true, note: 'say Tuesday' }
+  )
+  assert.deepEqual(
+    mergeReply([{ messageId: 'm1', threadId: 't', manual: true, note: 'old' }], { messageId: 'm1', threadId: 't', manual: true, note: 'new' }),
+    { messageId: 'm1', threadId: 't', manual: true, note: 'new' },
+    'a second press wins over the first'
+  )
 })

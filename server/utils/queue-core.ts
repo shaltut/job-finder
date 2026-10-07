@@ -4,7 +4,7 @@
 
 export type Lane = 'scrape' | 'draft' | 'paste' | 'gaps' | 'send'
 
-export interface QArgs { key?: string, keys?: string[], screened?: boolean }
+export interface QArgs { key?: string, keys?: string[], screened?: boolean, messageId?: string, threadId?: string, note?: string, manual?: boolean }
 export interface QItem { id: number, lane: Lane, kind: string, args: QArgs, queuedAt: string }
 
 /**
@@ -12,6 +12,7 @@ export interface QItem { id: number, lane: Lane, kind: string, args: QArgs, queu
  * is the follow-up clock; a bulk or batch run is the background. Within a priority, FIFO.
  */
 export function draftPriority(i: QItem): 0 | 1 | 2 {
+  if (i.kind === 'reply') return i.args.manual ? 0 : 2
   if (i.kind === 'sync') return 1
   if (i.kind === 'draft' && (i.args.key || (i.args.keys?.length && !i.args.screened))) return 0
   return 2
@@ -27,6 +28,16 @@ export function pickNext(queue: QItem[], lane: Lane): number {
     if (best < 0 || draftPriority(q) < draftPriority(queue[best]!)) best = i
   }
   return best
+}
+
+/**
+ * One reply job per thread. A newer message, or a second press, replaces the queued one — drafted against
+ * the newest message — but a pressed Re-draft's priority and note survive an automatic replacement.
+ */
+export function mergeReply(dropped: QArgs[], next: QArgs): QArgs {
+  const pressed = [...dropped].reverse().find(d => d.manual)
+  if (next.manual || !pressed) return next
+  return { ...next, manual: true, ...(pressed.note ? { note: pressed.note } : {}) }
 }
 
 /**

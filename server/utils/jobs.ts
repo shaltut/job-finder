@@ -24,11 +24,11 @@ import { runPasteJob } from './paste-job'
 import { runGapsJob } from './gaps-job'
 import { runSendJob } from './sender'
 import { sqlite } from './db'
-import { concurrency, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type Lane } from './queue-core'
+import { concurrency, mergeReply, pickNext, pool, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type Lane } from './queue-core'
 import { handoffState } from './handoff-runtime'
 
 export type { Lane }
-export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps' | 'send'
+export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps' | 'send' | 'reply'
 
 export interface JobArgs {
   terms?: string
@@ -44,6 +44,11 @@ export interface JobArgs {
   auto?: boolean
   /** draft lane: this run was cut off by a restart and resumed — it writes no skip rows (queue-core resumedArgs) */
   resumed?: boolean
+  /** draft lane, reply jobs: the inbox message to answer, its thread, the owner's note, and whether it was pressed */
+  messageId?: string
+  threadId?: string
+  note?: string
+  manual?: boolean
   /** paste lane: the pasted post's text */
   text?: string
   /** paste lane, from the LinkedIn clipper: who posted it and where (server/utils/paste.ts Provenance) */
@@ -184,6 +189,16 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   if (kind === 'paste' && args.text
     && (queue.some(q => q.kind === 'paste' && samePaste(q.args, args))
       || (lanes.paste.current && samePaste(lanes.paste.current.args, args)))) return null
+
+  // one reply job per thread (queue-core mergeReply)
+  if (kind === 'reply' && args.threadId) {
+    const same = queue.filter(q => q.kind === 'reply' && q.args.threadId === args.threadId)
+    args = mergeReply(same.map(q => q.args), args)
+    for (const q of same) {
+      queue.splice(queue.indexOf(q), 1)
+      saved.drop(q.id)
+    }
+  }
 
   const item: QueueItem = { id: ++state.seq, lane: laneOf(kind), kind, args, queuedAt: new Date().toISOString() }
   queue.push(item)
