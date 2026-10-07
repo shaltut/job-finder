@@ -27,7 +27,7 @@ async function searchIds(q: string): Promise<{ id: string, threadId: string }[]>
 /**
  * One poll. Searches inbound mail since the last poll (an hour of overlap, so a message Gmail indexed late
  * is not missed), reads each new message's thread once, and stores the human replies in threads the owner
- * started with a known recruiter. `onThread` is called, as each thread is stored, with its newest message � so a poll that dies later has
+ * started with a known recruiter. `onThread` is called, as each thread is stored, with its newest message, so a poll that dies later has
  * already handed those threads to the reply drafter.
  */
 export async function pollInbox(db: Database.Database, selfEmail: string, log: (s: string) => void,
