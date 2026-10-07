@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  addresses, isInbound, isUnedited, plainBody, replyRecipients, shouldSavePoll, stripQuoted, threadContact, type ThreadMsg
+  addresses, isInbound, isUnedited, ownerAnswered, plainBody, replyRecipients, shouldSavePoll, stripQuoted, threadContact, type ThreadMsg
 } from '../server/utils/inbox-core.ts'
 
 const SELF = 'me@example.com'
@@ -77,4 +77,16 @@ test('an idle poll writes its time only when the stored one is an hour stale', (
   assert.equal(shouldSavePoll(0, 10_000, 13_601), true)
   assert.equal(shouldSavePoll(2, 10_000, 10_300), true, 'a poll that stored rows is writing anyway')
   assert.equal(shouldSavePoll(0, null, 10_300), true, 'the first poll records itself, or every restart backfills 30 days')
+})
+
+test('ownerAnswered: a message of ours newer than the reply means it is answered; a draft does not count', () => {
+  const app = msg('a', ['SENT'], { From: SELF, To: 'hr@acme.com' }, 1)
+  const reply = msg('b', ['INBOX'], { From: 'hr@acme.com', To: SELF }, 2)
+  const mine = msg('c', ['SENT'], { From: SELF, To: 'hr@acme.com' }, 3)
+  const ooo = msg('d', ['INBOX'], { From: 'hr@acme.com', To: SELF }, 4)
+  assert.equal(ownerAnswered([app, reply], SELF, 'b'), false, 'waiting on us')
+  assert.equal(ownerAnswered([app, reply, mine], SELF, 'b'), true, 'answered in Gmail')
+  assert.equal(ownerAnswered([app, reply, mine, ooo], SELF, 'b'), true, 'an auto-reply after our answer does not reopen it')
+  assert.equal(ownerAnswered([app, reply, msg('c', ['DRAFT'], { From: SELF }, 3)], SELF, 'b'), false, 'a pending draft is not an answer')
+  assert.equal(ownerAnswered([app, reply], SELF, 'gone'), false)
 })

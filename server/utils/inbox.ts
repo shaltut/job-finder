@@ -5,8 +5,8 @@ import { readConfig } from './config'
 import { runReplyDrafter, type ReplyRequest } from './drafter'
 import { signature } from './drafts'
 import { createDraft, gmail, gmailStatus, renderHtml, replyHeaders } from './gmail'
-import { headerOf, isInbound, isUnedited, plainBody, replyRecipients, shouldSavePoll, stripQuoted, threadContact, type ThreadMsg } from './inbox-core'
-import { inboxRow, knownIds, lastPoll, latestInThread, markReply, noteReply, priorReplyDrafts, recordReplyDraft, setLastPoll, supersedeQueued, storeInbound } from './inbox-store'
+import { headerOf, isInbound, isUnedited, ownerAnswered, plainBody, replyRecipients, shouldSavePoll, stripQuoted, threadContact, type ThreadMsg } from './inbox-core'
+import { inboxRow, knownIds, lastPoll, latestInThread, markAnswered, markReply, noteReply, priorReplyDrafts, recordReplyDraft, setLastPoll, supersedeQueued, storeInbound } from './inbox-store'
 import { openWritableDb } from './ingest'
 import { classifyMessage } from './stages'
 import { gmailRead } from './sync'
@@ -75,7 +75,9 @@ export async function pollInbox(db: Database.Database, selfEmail: string, log: (
         stored++
         if (!newest || date > Number(newest.internalDate)) newest = m
       }
-      if (newest) {
+      if (newest && ownerAnswered(messages, selfEmail, newest.id)) {
+        markAnswered(db, newest.id)
+      } else if (newest) {
         markReply(db, newest.id, 'queued')
         threads++
         onThread({ messageId: newest.id, threadId })
@@ -131,6 +133,11 @@ export async function runReplyJob(args: { messageId?: string, note?: string }, p
         .sort((a, b) => Number(a.internalDate) - Number(b.internalDate))
       const latest = msgs.find(m => m.id === row.message_id)
       if (!latest) throw new Error('the message is no longer in Gmail')
+      if (ownerAnswered(msgs, self, row.message_id)) {
+        markAnswered(db, row.message_id)
+        push(`${row.contact_email}: you already replied in Gmail — no draft`)
+        return 0
+      }
 
       const res = await runReplyDrafter({
         recruiterEmail: row.contact_email,

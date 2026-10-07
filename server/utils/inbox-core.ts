@@ -89,3 +89,16 @@ export const isUnedited = (storedMsgId: string | null, currentMsgId: string | nu
  */
 export const shouldSavePoll = (stored: number, savedAt: number | null, now: number): boolean =>
   stored > 0 || savedAt === null || now - savedAt > 3600
+
+/**
+ * The owner already answered this message in Gmail: a message of theirs, drafts aside, is newer than it.
+ * "Newer than this message" rather than "the thread's last message is theirs", so an out-of-office arriving
+ * after the owner's answer does not reopen it. The first 30-day backfill would otherwise draft ~20 replies
+ * to conversations already answered.
+ */
+export function ownerAnswered(messages: ThreadMsg[], selfEmail: string, messageId: string): boolean {
+  const target = messages.find(m => m.id === messageId)
+  if (!target) return false
+  const at = Number(target.internalDate) || 0
+  return messages.some(m => !m.labelIds?.includes('DRAFT') && !isInbound(m, selfEmail) && (Number(m.internalDate) || 0) > at)
+}

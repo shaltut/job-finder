@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import Database from 'better-sqlite3'
 import {
-  knownIds, lastPoll, latestInThread, markRead, markReply, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, strandedQueued, supersedeQueued, unreadCount
+  knownIds, lastPoll, latestInThread, markAnswered, markRead, markReply, priorReplyDrafts, recordReplyDraft, setLastPoll, storeInbound, strandedQueued, supersedeQueued, unreadCount
 } from '../server/utils/inbox-store.ts'
 
 let dir: string
@@ -90,4 +90,13 @@ test('a Re-draft on the same message still sees the draft that message holds', (
   assert.equal(priorReplyDrafts(db, 'tr').length, 1, 'a failed re-draft still holds the earlier draft')
   markReply(db, 'r1', 'superseded')
   assert.deepEqual(priorReplyDrafts(db, 'tr'), [], 'an earlier run already handled it')
+})
+
+test('an answered message leaves the reply queue with a note saying why', () => {
+  storeInbound(db, m('q1', 'tq', 10))
+  markReply(db, 'q1', 'queued')
+  markAnswered(db, 'q1')
+  const r = latestInThread(db, 'tq')!
+  assert.deepEqual([r.reply_status, r.note], [null, 'you already replied in Gmail'])
+  assert.deepEqual(strandedQueued(db).filter(x => x.threadId === 'tq'), [], 'and no poll re-offers it')
 })

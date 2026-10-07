@@ -93,6 +93,11 @@ export function supersedeQueued(db: Database.Database, threadId: string, keepMes
     .run(threadId, keepMessageId)
 }
 
+/** Nothing to draft: the owner answered this message in Gmail themselves (inbox-core ownerAnswered). */
+export function markAnswered(db: Database.Database, messageId: string) {
+  db.prepare(`UPDATE inbox SET reply_status = NULL, note = 'you already replied in Gmail' WHERE message_id = ?`).run(messageId)
+}
+
 export function noteReply(db: Database.Database, messageId: string, note: string) {
   db.prepare('UPDATE inbox SET note = ? WHERE message_id = ?').run(note, messageId)
 }
