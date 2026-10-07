@@ -134,11 +134,20 @@ npm run dev ──► http://127.0.0.1:3939
    stripQuoted`); bounces and auto-replies never arrive. **The poll hands each thread to the reply drafter as
    it goes** (`onThread`), so a poll that dies later has already queued what it stored; one unreadable
    thread is logged and skipped, never a failed poll. Because a rebuild or a dead poll can still lose a
-   job, the task first re-enqueues rows stranded as `queued` (`strandedQueued`), and `enqueue` refuses a
-   reply already running for the same thread and message (a pressed Re-draft is exempt). Each thread gets
-   one `reply` job on the draft lane (background priority; Re-draft is hand-picked), and once it resolves
-   its row every other `queued` row in the thread becomes `superseded` (`supersedeQueued`), or every poll
-   would re-enqueue it. `claude -p` in `reply` mode returns `{ body, questions }` — `questions` is what the
+   job, the task first re-enqueues rows stranded as `queued` (`strandedQueued`), and `enqueue` treats a
+   reply already running or waiting for the same thread and message as a no-op (`replyNoop`; a pressed
+   Re-draft is exempt). Each thread gets one `reply` job on the draft lane (background priority; Re-draft is
+   hand-picked), and when the job starts, every other `queued` row in the thread becomes `superseded`
+   (`supersedeQueued`), or every poll would re-enqueue it. **`replied` is sticky, like `final`**: every
+   contacts write but `storeInbound`'s (healContact, the sweep, persist()) carries `stage NOT IN ('final',
+   'replied')`, because Gmail's stage machine cannot see a colleague's reply and would reopen a follow-up —
+   and `sendable()` refuses to send to a `replied` recruiter. **A message the owner already answered in
+   Gmail gets no draft** (`ownerAnswered`: a non-draft message of theirs newer than it) — neither queued by
+   the poll nor drafted by the job; the row reads 'you already replied in Gmail'. **An idle poll writes
+   nothing**: the live last-poll time is on `globalThis`, and `inbox_state` is written only when the poll
+   stored a reply or the stored time is over an hour stale (`shouldSavePoll`) — each write moves
+   `data_version`, which made the hand-off push an 8 MB snapshot every tick; the search's hour of overlap
+   covers a stale value after a restart. `claude -p` in `reply` mode returns `{ body, questions }` — `questions` is what the
    profile cannot answer, shown as "Needs your input", never a guess. The draft lands in the thread and is
    recorded in `inbox` and `app_drafts` **immediately after `createDraft`**, before older drafts are
    touched, so nothing later can fail a job whose draft exists; the previous app reply draft is then

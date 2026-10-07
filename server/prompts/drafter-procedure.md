@@ -302,6 +302,8 @@ Return only this JSON object:
 
 ## Before you return
 
+In apply and follow-up modes (reply mode returns only `body` and `questions` — no results, no subject):
+
 - Every claim traces to the injected Evidence. No invented projects, employers, metrics or percentages.
 - Nothing in the email is a fact that is not in the injected Evidence.
 - The subject carries the injected name and no other name.
