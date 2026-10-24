@@ -26,7 +26,7 @@ import { runReplyJob } from './inbox'
 import { runSendJob } from './sender'
 import { sqlite } from './db'
 import { concurrency, mergeReply, pickNext, pool, replyNoop, restorePlan, resumedArgs, samePaste, shouldRestore, withRetry, type Lane } from './queue-core'
-import { handoffState } from './handoff-runtime'
+import { handoffState, leading } from './handoff-runtime'
 
 export type { Lane }
 export type Kind = 'scrape' | 'rescore' | 'reflag' | 'reextract' | 'draft' | 'sync' | 'paste' | 'gaps' | 'send' | 'reply'
@@ -142,7 +142,7 @@ export function restoreQueue(log: (line: string) => void = console.log) {
     { id: number, lane: Lane, kind: Kind, args: string, queued_at: string, started_at: string | null }[]
   if (!rows.length) return
   const h = handoffState()
-  if (!shouldRestore({ pulled: h.pulled })) {
+  if (!shouldRestore({ pulled: h.pulled, leading: leading() })) {
     sqlite.prepare('DELETE FROM job_queue').run()
     log(`[queue] ${rows.length} job(s) came with the other machine's data (${rows.map(r => r.kind).join(', ')}) — not resumed here; queue them again if still wanted`)
     return
@@ -166,6 +166,8 @@ export function restoreQueue(log: (line: string) => void = console.log) {
 }
 
 export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
+  // standby (the other machine leads, server/utils/handoff.ts): nothing runs here, so nothing queues here
+  if (!leading()) return null
   // A bulk draft keeps only the keys not already waiting or running; pump() never coalesces a `keys`
   // item with single-`key` ones, so screened and hand-picked posts cannot share a session.
   if (kind === 'draft' && args.keys) {
@@ -212,7 +214,7 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
 
 function pump() {
   // a closing worker starts nothing: its children would outlive it, and the next worker resumes the row anyway
-  if (state.shuttingDown) return
+  if (state.shuttingDown || !leading()) return
   for (const lane of Object.keys(lanes) as Lane[]) {
     if (lanes[lane].current) continue
     // the draft lane runs hand-picked drafts first, then the Gmail sync, then bulk (queue-core.ts)
@@ -360,6 +362,17 @@ function runJob(lane: Lane, item: QueueItem) {
 export function stopForShutdown() {
   state.shuttingDown = true
   for (const lane of Object.keys(lanes) as Lane[]) lanes[lane].current?.child?.kill('SIGTERM')
+}
+
+/**
+ * Handing the lease to the other machine: stop every running job and forget the queue — never resumed
+ * here or there, since the other machine works on from data these jobs had not finished writing.
+ */
+export function yieldAll(): number {
+  const n = queue.length
+  for (const q of queue.splice(0)) saved.drop(q.id)
+  for (const lane of Object.keys(lanes) as Lane[]) lanes[lane].current?.child?.kill('SIGTERM')
+  return n
 }
 
 export function stopLane(lane: Lane): boolean {

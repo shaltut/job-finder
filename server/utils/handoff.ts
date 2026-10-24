@@ -1,5 +1,7 @@
-// Hands the database between two machines that never run at once, through a cloud-synced folder.
-// See docs/superpowers/specs/2026-10-03-cross-machine-sync-design.md.
+// Hands the database between two machines through a cloud-synced folder. Both may run at once, but only
+// one LEADS (runs jobs, takes writes, pushes); the other is on standby and follows the leader's snapshots
+// live — see nextStep() below and docs/superpowers/specs/2026-10-24-live-standby-design.md. The file
+// hand-off itself: docs/superpowers/specs/2026-10-03-cross-machine-sync-design.md.
 //
 // The live file never sits in the synced folder: a sync client copies the main file while commits
 // still sit in -wal (the failure that cost the old file-copy backup 12 posts on 2026-09-25). Snapshots
@@ -38,14 +40,20 @@ function writeJson(file: string, value: unknown) {
   renameSync(`${file}.tmp`, file)
 }
 
-export function readLocalGen(stateFile: string): number {
+export type Role = 'active' | 'standby' | 'claiming' | 'yielding'
+/** data/sync-state.json — the gen, and the role, which must outlive a dev worker rebuild (globalThis does not). */
+export interface LocalState { gen: number, role?: Role, since?: string }
+
+export function readLocal(stateFile: string): LocalState {
   try {
-    return (JSON.parse(readFileSync(stateFile, 'utf8')) as { gen: number }).gen ?? 0
+    return { gen: 0, ...(JSON.parse(readFileSync(stateFile, 'utf8')) as Partial<LocalState>) }
   } catch {
-    return 0
+    return { gen: 0 }
   }
 }
-const writeLocalGen = (stateFile: string, gen: number) => writeJson(stateFile, { gen })
+export const readLocalGen = (stateFile: string): number => readLocal(stateFile).gen ?? 0
+export const writeLocal = (stateFile: string, patch: Partial<LocalState>) => writeJson(stateFile, { ...readLocal(stateFile), ...patch })
+const writeLocalGen = (stateFile: string, gen: number) => writeLocal(stateFile, { gen })
 
 export const shouldPull = (remote: SyncMeta | null, localGen: number) => !!remote && remote.gen > localGen
 export const canPush = (remote: SyncMeta | null, localGen: number) => (remote?.gen ?? 0) === localGen
@@ -121,6 +129,22 @@ export function mirror(from: string, to: string): number {
   return copied
 }
 
+/** Copies the remote snapshot to `tmp` and proves it is the one sync.json describes, and readable. */
+function fetchSnapshot(p: HandoffPaths, remote: SyncMeta, tmp: string) {
+  assertNoStrays(p.syncDir)
+  copyFileSync(snapFile(p), tmp)
+  if (statSync(tmp).size !== remote.size || sha256(tmp) !== remote.sha256) {
+    throw new Error(`the gen ${remote.gen} snapshot is not yet downloaded (it does not match sync.json)`)
+  }
+  const check = new Database(tmp, { readonly: true, fileMustExist: true })
+  try {
+    const r = check.pragma('integrity_check', { simple: true })
+    if (r !== 'ok') throw new Error(`integrity_check: ${r}`)
+  } finally {
+    check.close()
+  }
+}
+
 /**
  * Runs at boot, before any connection to `p.db` exists. A failure keeps the local file: the caller
  * must then disable pushing, because a machine that could not see the newest snapshot must not
@@ -132,18 +156,7 @@ export function pull(p: HandoffPaths, now = new Date()): { pulled: boolean, gen:
   if (!shouldPull(remote, local)) return { pulled: false, gen: local }
   const tmp = `${p.db}.pull.tmp`
   try {
-    assertNoStrays(p.syncDir)
-    copyFileSync(snapFile(p), tmp)
-    if (statSync(tmp).size !== remote!.size || sha256(tmp) !== remote!.sha256) {
-      throw new Error(`the gen ${remote!.gen} snapshot is not yet downloaded (it does not match sync.json)`)
-    }
-    const check = new Database(tmp, { readonly: true, fileMustExist: true })
-    try {
-      const r = check.pragma('integrity_check', { simple: true })
-      if (r !== 'ok') throw new Error(`integrity_check: ${r}`)
-    } finally {
-      check.close()
-    }
+    fetchSnapshot(p, remote!, tmp)
     if (existsSync(p.db)) {
       // closing the last connection checkpoints the WAL into the main file, so nothing deleted below
       // is the only copy of a commit if the rename then fails
@@ -198,24 +211,136 @@ export function push(p: HandoffPaths, host: string, now = new Date(), opts: { in
   return { ok: true, gen: meta.gen }
 }
 
+/**
+ * The standby's pull: the newer snapshot replaces the LIVE database's rows in place, because every module
+ * holds db.ts's open connection and the file cannot be swapped under it. All deletes before all inserts —
+ * applications and post_requirements cascade from posts — inside one transaction with the foreign keys
+ * deferred to the commit. Only shared columns, so a snapshot one migration apart still lands.
+ *
+ * Safe only because a machine on standby runs no job (pump() starts nothing, the write gate refuses the
+ * UI), so no openWritableDb() connection writes underneath. `job_queue` is never copied: it is per
+ * machine, and resuming the other machine's jobs drafted the same recruiters twice. `keep` takes a
+ * pre-pull copy first — for a standby holding work its final push did not get out.
+ */
+export function livePull(live: Database.Database, p: HandoffPaths, opts: { keep?: boolean } = {}, now = new Date()): { pulled: boolean, gen: number, error?: string } {
+  const remote = readMeta(p.syncDir)
+  const local = readLocalGen(p.stateFile)
+  if (!shouldPull(remote, local)) return { pulled: false, gen: local }
+  const tmp = `${p.db}.pull.tmp`
+  try {
+    fetchSnapshot(p, remote!, tmp)
+    if (opts.keep) safetyCopy(p, 'pre-pull', now)
+    live.prepare('ATTACH DATABASE ? AS snap').run(tmp)
+    try {
+      const tables = (schema: string) => (live.prepare(`SELECT name FROM ${schema}.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__drizzle%' AND name <> 'job_queue'`).all() as { name: string }[]).map(t => t.name)
+      const cols = (t: string, schema: string) => (live.prepare('SELECT name FROM pragma_table_info(?, ?)').all(t, schema) as { name: string }[]).map(c => c.name)
+      const theirs = new Set(tables('snap'))
+      const both = tables('main').filter(t => theirs.has(t))
+      live.transaction(() => {
+        live.pragma('defer_foreign_keys = ON')
+        for (const t of both) live.prepare(`DELETE FROM main."${t}"`).run()
+        for (const t of both) {
+          const have = new Set(cols(t, 'snap'))
+          const shared = cols(t, 'main').filter(c => have.has(c)).map(c => `"${c}"`).join(', ')
+          if (shared) live.prepare(`INSERT INTO main."${t}" (${shared}) SELECT ${shared} FROM snap."${t}"`).run()
+        }
+      })()
+    } finally {
+      live.exec('DETACH DATABASE snap')
+    }
+    writeLocalGen(p.stateFile, remote!.gen)
+  } catch (e) {
+    return { pulled: false, gen: local, error: (e as Error).message }
+  } finally {
+    rmSync(tmp, { force: true })
+  }
+  try {
+    mirror(join(p.syncDir, 'cv'), p.cvDir)
+  } catch { /* a CV that did not arrive costs a tailored attachment, never data (see pull) */ }
+  return { pulled: true, gen: remote!.gen }
+}
+
 // One heartbeat file per machine, so no two machines ever write the same file — a shared one turns a
-// heartbeat that lands mid-push into a sync-client conflict copy.
+// heartbeat that lands mid-push into a sync-client conflict copy. The heartbeat is also the lease: it
+// carries this machine's role, when it last became the leader, and the gen it holds.
 const safeHost = (host: string) => host.replace(/[^\w.-]/g, '_')
 
-export function heartbeat(p: HandoffPaths, host: string, now = new Date()) {
-  if (existsSync(p.syncDir)) writeJson(join(p.syncDir, `heartbeat-${safeHost(host)}.json`), { at: now.toISOString() })
+export interface Peer { host: string, at: string, role: Role, since: string, gen: number }
+
+export function heartbeat(p: HandoffPaths, host: string, now = new Date(), lease: { role: Role, since: string, gen: number } = { role: 'active', since: '', gen: 0 }) {
+  if (existsSync(p.syncDir)) writeJson(join(p.syncDir, `heartbeat-${safeHost(host)}.json`), { at: now.toISOString(), host, ...lease })
 }
 
-/** Another machine wrote a heartbeat in the last 5 minutes. A warning only: a crashed machine must not lock anyone out. */
-export function otherActive(syncDir: string, host: string, now = new Date()): boolean {
-  if (!existsSync(syncDir)) return false
+/**
+ * The other machine's heartbeat, if it is under 5 minutes old. A heartbeat from a build before the lease
+ * carries no role and is read as `active`: that build never yields, so it must be treated as leading.
+ */
+export function livePeer(syncDir: string, host: string, now = new Date()): Peer | null {
+  if (!existsSync(syncDir)) return null
   const mine = `heartbeat-${safeHost(host)}.json`
-  return readdirSync(syncDir).some((f) => {
-    if (!f.startsWith('heartbeat-') || !f.endsWith('.json') || f === mine) return false
+  let best: Peer | null = null
+  for (const f of readdirSync(syncDir)) {
+    if (!f.startsWith('heartbeat-') || !f.endsWith('.json') || f === mine) continue
     try {
-      return now.getTime() - Date.parse((JSON.parse(readFileSync(join(syncDir, f), 'utf8')) as { at: string }).at) < ACTIVE_MS
-    } catch {
-      return false
-    }
-  })
+      const b = JSON.parse(readFileSync(join(syncDir, f), 'utf8')) as Partial<Peer>
+      if (!b.at || now.getTime() - Date.parse(b.at) >= ACTIVE_MS) continue
+      const peer: Peer = { host: b.host ?? f.slice(10, -5), at: b.at, role: b.role ?? 'active', since: b.since ?? '', gen: b.gen ?? 0 }
+      if (!best || peer.at > best.at) best = peer
+    } catch { /* half-synced file: skip it this tick */ }
+  }
+  return best
 }
+
+/** Another machine wrote a heartbeat in the last 5 minutes. */
+export const otherActive = (syncDir: string, host: string, now = new Date()): boolean => !!livePeer(syncDir, host, now)
+
+/** Which machine leads when a fresh process starts: standby whenever a live peer leads or is taking over. */
+export const bootRole = (peer: Peer | null): Role => peer && peer.role !== 'standby' ? 'standby' : 'active'
+
+export interface Me { host: string, role: Role, since: string, busy: boolean, localGen: number, remoteGen: number | null }
+export interface Step { role: Role, since?: string, stop?: true, finish?: true, pull?: true }
+
+/**
+ * One tick of the lease, run every 30 s by server/plugins/handoff.ts. Pure, so every transition is tested.
+ *
+ * - active → yielding when the peer claims, when the peer also leads and became leader later (a laptop
+ *   that slept through a take-over wakes up still "active"), or when a newer gen than ours appeared — and
+ *   the leader never pulls under its own running jobs, so it yields first and pulls from standby.
+ * - yielding: stops every lane (`stop`), waits until none runs, then pushes its last changes (`finish`).
+ * - standby follows each newer snapshot (`pull`) and never leads on its own: a stale peer heartbeat looks
+ *   the same whether the other machine closed or this one's OneDrive stopped delivering. The button does.
+ * - claiming (the Use-this-machine button): waits for the peer to stand down AND for its final snapshot
+ *   (`remoteGen >= peer.gen`) to arrive, then pulls and leads. With no live peer it leads at once.
+ *
+ * Ties (both standby, both claiming, both leading since the same instant) go to the lower host name.
+ * ponytail: the lease travels through OneDrive, so a take-over waits on its delivery (a minute or two),
+ * and a claim on a peer whose heartbeat is stale (asleep, offline) proceeds at once — if it was only
+ * paused it leads too until its next tick reads the newer leader. That window is the one place two
+ * machines can both run jobs; a real lock needs a server both can reach.
+ */
+export function nextStep(me: Me, peer: Peer | null, now = new Date()): Step {
+  const newer = (me.remoteGen ?? 0) > me.localGen
+  const lead = (): Step => ({ role: 'active', since: now.toISOString(), ...(newer ? { pull: true as const } : {}) })
+  const peerWins = (p: Peer) => p.since > me.since || (p.since === me.since && p.host < me.host)
+  switch (me.role) {
+    case 'active':
+      if (peer?.role === 'claiming' || (peer?.role === 'active' && peerWins(peer)) || newer) return { role: 'yielding', stop: true }
+      return { role: 'active' }
+    case 'yielding':
+      return me.busy ? { role: 'yielding' } : { role: 'standby', finish: true }
+    case 'standby':
+      // never on a missing peer: that is also what THIS machine sees when its own OneDrive stopped
+      // delivering, and leading then would push into a stale folder and fork it (a sync-client stray)
+      if (peer?.role === 'standby' && me.host < peer.host) return lead()
+      return newer ? { role: 'standby', pull: true } : { role: 'standby' }
+    case 'claiming':
+      if (!peer) return lead()
+      if (peer.role === 'standby' && (me.remoteGen ?? 0) >= peer.gen) return lead()
+      if (peer.role === 'claiming' && peer.host < me.host) return { role: 'standby' }
+      return { role: 'claiming' }
+  }
+}
+
+/** The write gate on standby: every write through the API is refused but the hand-off's own controls. */
+export const standbyRefuses = (role: Role, method: string, path: string): boolean =>
+  role !== 'active' && method !== 'GET' && method !== 'HEAD' && path.startsWith('/api/') && !path.startsWith('/api/sync')
