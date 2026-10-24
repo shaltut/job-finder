@@ -326,13 +326,13 @@ const yieldColumns: TableColumn<YieldRow>[] = [
         <div class="flex items-center gap-3 text-sm">
           <span class="font-semibold text-highlighted">Sync</span>
           <span class="text-muted mr-auto">
-            {{ syncState.host }} · gen {{ syncState.gen }} · last push {{ syncState.lastPushAt ? new Date(syncState.lastPushAt).toLocaleTimeString() : 'not yet this session' }}
+            {{ syncState.host }} ({{ syncState.role }}) · gen {{ syncState.gen }}{{ syncState.peer ? ` · ${syncState.peer.host} ${syncState.peer.role}` : '' }} · last push {{ syncState.lastPushAt ? new Date(syncState.lastPushAt).toLocaleTimeString() : 'not yet this session' }}
           </span>
           <UButton
             size="sm"
             variant="soft"
             icon="i-lucide-refresh-cw"
-            :disabled="!!syncState.conflict || !!syncState.pushDisabled"
+            :disabled="!!syncState.conflict || !!syncState.pushDisabled || syncState.role !== 'active'"
             @click="syncNow"
           >
             {{ syncState.remoteGen === null ? 'Start syncing from this machine' : 'Sync now' }}
@@ -342,19 +342,13 @@ const yieldColumns: TableColumn<YieldRow>[] = [
           v-if="syncState.conflict"
           class="mt-3"
           color="error"
-          :title="`${syncState.conflict.host} pushed gen ${syncState.conflict.gen} after this machine started. Restart to pull it — work done here since is in backups/conflict-*.db.`"
+          :title="`${syncState.conflict.host} pushed gen ${syncState.conflict.gen} after this machine's last push. Standing by to pull it — work done here since is in backups/conflict-*.db.`"
         />
         <UAlert
           v-else-if="syncState.pushDisabled"
           class="mt-3"
           color="warning"
           :title="syncState.pushDisabled"
-        />
-        <UAlert
-          v-else-if="syncState.otherActive"
-          class="mt-3"
-          color="warning"
-          title="The other machine looks active. Close it before working here."
         />
         <p
           v-if="syncState.lastError"

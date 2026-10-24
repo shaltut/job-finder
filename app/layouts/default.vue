@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from '@nuxt/ui'
+import type { SyncState } from '~/types'
 
 const open = ref(false)
 const colorMode = useColorMode()
@@ -10,10 +11,31 @@ function close() {
 
 const { data: unread, refresh: refreshUnread } = await useFetch<{ unread: number }>('/api/inbox/unread', { key: 'inbox-unread', lazy: true, default: () => ({ unread: 0 }) })
 let unreadTimer: ReturnType<typeof setInterval> | undefined
+// the two-machine lease (server/utils/handoff.ts): on every page, because standby refuses every action
+const { data: sync, refresh: refreshSync } = await useFetch<SyncState>('/api/sync', { key: 'sync-state', lazy: true })
+const standby = computed(() => sync.value?.enabled && sync.value.role !== 'active' ? sync.value : null)
+const standbyText = computed(() => {
+  const s = standby.value
+  if (!s) return ''
+  const other = s.peer?.host ?? 'the other machine'
+  if (s.role === 'claiming') return `Taking over from ${other}: waiting for it to stop its jobs and for its last changes to arrive through OneDrive (a minute or two).`
+  if (s.role === 'yielding') return `Handing over to ${other}: stopping this machine's jobs.`
+  const err = s.lastError ? ` Last problem: ${s.lastError}` : ''
+  if (!s.peer) return `This machine is on standby and cannot see the other machine (closed, or OneDrive is not syncing). Press Use this machine to work here.${err}`
+  return `${other} is the active machine. This one is on standby: it shows ${other}'s data as it arrives and runs nothing.${err}`
+})
+async function takeOver() {
+  sync.value = await $fetch<SyncState>('/api/sync/claim', { method: 'POST' })
+}
+let syncTimer: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
   unreadTimer = setInterval(refreshUnread, 60_000)
+  syncTimer = setInterval(refreshSync, 15_000)
 })
-onUnmounted(() => clearInterval(unreadTimer))
+onUnmounted(() => {
+  clearInterval(unreadTimer)
+  clearInterval(syncTimer)
+})
 useHead({ titleTemplate: t => `${unread.value.unread ? `(${unread.value.unread}) ` : ''}${t ? `${t} · ` : ''}Job Finder` })
 
 const links = computed(() => [[{
@@ -110,5 +132,15 @@ const groups = computed(() => [{
     <UDashboardSearch :groups="groups" />
 
     <slot />
+
+    <UAlert
+      v-if="standby"
+      class="fixed bottom-4 right-4 z-50 max-w-md shadow-lg"
+      color="warning"
+      icon="i-lucide-monitor-pause"
+      :title="standby.role === 'standby' ? 'Standby' : standby.role === 'claiming' ? 'Taking over' : 'Handing over'"
+      :description="standbyText"
+      :actions="standby.role === 'standby' ? [{ label: 'Use this machine', color: 'warning', variant: 'solid', onClick: takeOver }] : []"
+    />
   </UDashboardGroup>
 </template>
