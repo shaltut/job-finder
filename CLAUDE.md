@@ -55,7 +55,8 @@ npm run dev ──► http://127.0.0.1:3939
 
 1. **Scraper** `scraper/run.ts`: drives the installed Chrome (`playwright-core`, `channel: 'chrome'`, headed,
    its own profile in `./profile`) through LinkedIn content search, one term at a time (the literal term
-   **`feed`** scrapes `linkedin.com/feed/` instead — same cards, no `datePosted` filter), scrolls until the
+   **`feed`** scrapes `linkedin.com/feed/` instead — same cards, no `datePosted` filter; a term listed N
+   times runs N times back to back, logged `feed (2/3)`), scrolls until the
    card count stops growing, expands "… more", keeps posts offering a contact route the owner switched on
    in Settings (`contactChannels`, email-only by default), sends survivors to
    OpenAI (`gpt-5-nano`, Responses API, strict JSON schema) with the CV text in the prompt.
@@ -367,6 +368,12 @@ and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
 - `cv` — repo-relative path under `data/cv/`, written by the upload endpoint rather than typed. The scoring
   model reads the PDF itself once per run (`input_file`); no PDF library.
 - `terms` (the home feed plus 8 searches), `titles` (30, for the scoring prompt), `max`, `since`.
+  **A repeat is the run count**: a term listed N times runs N times back to back (`rotateTerms` rotates
+  the distinct list, then expands it), so nothing new is stored and `--terms feed,feed` repeats the same
+  way. `UInputTags` carries `duplicate` for it and `parseSettings` must never dedupe `terms`
+  (`test/settings.test.ts`). Worth it for `feed`, which reloads fresh; a repeated search returns the same
+  cards. A repeat costs no OpenAI call for what an earlier one emitted — `seen` holds this run's keys — and
+  rows keep the bare term, so the yield table has one bucket. `max` and the 10-20 s pause apply per run.
 - `excludes` — words, names or domains that disqualify a post outright, becoming the `excluded` flag
   (see the data model above). Read by the pre-screen only: it never reaches a prompt, because a hard
   rule the owner wrote does not need the model's opinion. `min(2)` per entry, because a
@@ -669,10 +676,25 @@ drafts keep arguing from a stale CV.
   interrupted draft re-runs from the start of its recruiter list, and an interrupted scrape is lost.
   **A new file under `server/plugins/` is not loaded by a running dev server** until a full restart —
   measured: a new plugin never ran across a rebuild — so boot-time work goes into an existing plugin.
-- **Two machines hand off, never share.** The owner alternates a Windows PC and a Mac, never running both.
+- **Two machines may both run; one leads.** The owner alternates a Windows PC and a Mac and sometimes
+  forgets one is still running, so since 2026-10-24 a **lease** in the per-host heartbeat files picks one
+  leader: it runs jobs, takes writes and pushes; the other is on **standby**, pulls each newer snapshot into
+  its live database (`livePull`: ATTACH, all deletes then all inserts in one transaction, FKs deferred,
+  `job_queue` never copied) and runs nothing — `pump()`/`enqueue()` gate on `leading()`, the inbox and daily
+  tasks skip, and the origin middleware refuses every non-GET `/api/` call but `/api/sync/*` with 409. A
+  fresh process stands by while the other leads (`bootRole`); **Use this machine** (`/api/sync/claim`) makes
+  the leader stop every lane, drop its queue, push and stand down. **A standby never promotes itself** — a
+  stale peer heartbeat is also what a machine whose own OneDrive is offline sees, and leading then forks the
+  folder; with the peer stale the button takes over at once. Every transition is the pure `nextStep()`,
+  run every 30 s. **Why not a merge of both databases:** two writers double-draft and double-send inside
+  Gmail's index lag — `closedInGmail` reads row 8 on both, and `sendable()`'s local record is per machine —
+  so Gmail being the truth does **not** cover concurrent machines; the lease does, except a forced take-over
+  of a paused (not crashed) leader, which leads too until its next tick. The heartbeat is written on every
+  tick: it used to be skipped on a tick that pushed, so the busiest machine looked idle. A build from before
+  the lease never yields — update both machines. Spec: `docs/superpowers/specs/2026-10-24-live-standby-design.md`.
   `server/utils/handoff.ts` pulls a newer `VACUUM INTO` snapshot from `JOBFINDER_SYNC_DIR` at boot —
   inside `db.ts`'s `open()`, before any connection exists — and `server/plugins/handoff.ts` pushes one
-  every 2 minutes when `changeSig()` moved. **That signature is `data_version` plus `total_changes()`,
+  at most every 2 minutes, from the leader, when `changeSig()` moved. **That signature is `data_version` plus `total_changes()`,
   and both halves are load-bearing**: `total_changes()` counts the server connection only, while the job
   runners write through their own `openWritableDb()` connections, which only `data_version` sees. `gen`
   in `sync.json` makes each push a compare-and-swap, so a machine that booted before OneDrive delivered
@@ -680,7 +702,9 @@ drafts keep arguing from a stale CV.
   `jobfinder*` / `sync*` file in the folder is a sync-client conflict copy and stops both pull and push.
   **`sync.json` carries the snapshot's sha256 and a pull refuses a mismatch**: OneDrive delivers the 1 KB
   `sync.json` before the 8 MB snapshot, and pulling the previous generation's data under the new gen
-  would let the next push erase the other machine's session. **Nothing pushes on its own without a
+  would let the next push erase the other machine's session. A refused push still writes
+  `backups/conflict-*.db` but is no longer sticky: the machine yields and the standby pull clears it.
+  **Nothing pushes on its own without a
   change since boot** (`lastSig` starts at the current `changeSig()`), and **an empty folder is seeded
   only by an explicit init** from the Run view — an empty folder and an undelivered one look identical.
   Heartbeats go to per-host `heartbeat-<host>.json` files, never `sync.json`, so they cannot collide

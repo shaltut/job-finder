@@ -773,18 +773,21 @@ async function disconnectGmail() {
           </h2>
           <p class="text-sm text-muted">
             Terms are searched one at a time. The literal term <code class="text-xs">feed</code> scrapes your own
-            LinkedIn home feed instead of a search.
+            LinkedIn home feed instead of a search. Add a term more than once to run it that many times back to
+            back — worth it for <code class="text-xs">feed</code>, which serves fresh posts on every reload; a
+            repeated search returns the same results.
           </p>
         </template>
 
         <div class="space-y-4">
           <UFormField
             label="Search terms"
-            :help="`${form.terms.length} terms — type one and press Enter`"
+            :help="`${form.terms.length} runs — type a term and press Enter; repeat it to run it again`"
           >
             <UInputTags
               v-model="form.terms"
               add-on-blur
+              duplicate
               placeholder="e.g. senior &lt;your role&gt; hiring"
               class="w-full"
             />

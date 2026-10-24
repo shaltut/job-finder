@@ -4,6 +4,7 @@ import { DB_PATH } from '../utils/db'
 import { readConfigLoose } from '../utils/config'
 import { gmailStatus } from '../utils/gmail'
 import { enqueue, notify } from '../utils/jobs'
+import { leading } from '../utils/handoff-runtime'
 
 /**
  * Daily housekeeping. Runs only while the dev server is up — nothing happens when it is down, same as the
@@ -27,7 +28,9 @@ export default defineTask({
       // loose, not readConfig(): an incomplete config must not cost us the nightly backup, and the
       // sweep has no use for the fields a scrape needs
       const email = readConfigLoose().profile.email
-      if (!email) {
+      if (!leading()) {
+        messages.push('sweep skipped: standby (the other machine leads)')
+      } else if (!email) {
         messages.push('sweep skipped: no profile email set')
       } else if (gmailStatus(email).authorized) {
         enqueue('sync', { auto: true })

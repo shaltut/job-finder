@@ -4,6 +4,7 @@ import { pollInbox } from '../utils/inbox'
 import { openWritableDb } from '../utils/ingest'
 import { strandedQueued } from '../utils/inbox-store'
 import { enqueue } from '../utils/jobs'
+import { leading } from '../utils/handoff-runtime'
 
 // on globalThis so a module reload inside one worker cannot start a second poll over a slow backfill;
 // it cannot see across a Nitro worker rebuild (globalThis is per worker)
@@ -13,6 +14,8 @@ const g = globalThis as { __jobfinderInboxPolling?: boolean }
 export default defineTask({
   meta: { name: 'inbox', description: 'Poll Gmail for replies in threads the owner started' },
   async run() {
+    // only the leading machine polls: two would each draft a reply in the same thread
+    if (!leading()) return { result: 'skipped: standby (the other machine leads)' }
     if (g.__jobfinderInboxPolling) return { result: 'skipped: a poll is still running' }
     const status = gmailStatus(readConfigLoose().profile.email || null)
     if (!status.authorized || !status.email) return { result: 'skipped: gmail not connected' }

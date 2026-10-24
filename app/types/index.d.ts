@@ -88,6 +88,9 @@ export interface SyncState {
   pushDisabled: string | null
   conflict: { gen: number, host: string } | null
   otherActive: boolean
+  /** only `active` runs jobs and takes writes; see server/utils/handoff.ts nextStep */
+  role: 'active' | 'standby' | 'claiming' | 'yielding'
+  peer: { host: string, role: 'active' | 'standby' | 'claiming' | 'yielding', at: string } | null
   lastPushAt: string | null
   lastError: string | null
 }

@@ -203,9 +203,16 @@ silence. Then the address is closed and the database refuses to reopen it.
 
 ## Two machines
 
-One history across two computers (say a Windows PC and a Mac) that **never run the app at the same
-time**. The database is handed between them through a folder both sync — OneDrive here. It is a hand-off,
-not a live share: running both at once forks the data.
+One history across two computers (say a Windows PC and a Mac), handed between them through a folder
+both sync — OneDrive here. **Both may run at once, but only one is active**: it runs jobs and takes
+changes; the other is on **standby**, shows the active machine's data as it arrives (a minute or two
+behind) and runs nothing — a standby banner sits on every page, and actions there are refused. To switch,
+press **Use this machine** on the standby: the active one stops its jobs (queued ones are dropped — queue
+them again), sends its last changes, and stands down; a minute or two later the one you are at is active.
+A machine started while the other is active comes up on standby, so a machine you forgot is harmless. After
+closing the active machine, press Use this machine on the other: with no live heartbeat it takes over at
+once. A standby never takes over by itself — it cannot tell a closed machine from its own OneDrive being
+offline. **Both machines need this version** — an older one never stands down, so stop both to upgrade.
 
 1. **Create the folder once**, on the machine that holds the history you want to keep:
    `mkdir C:\Users\<you>\OneDrive\job-finder-sync`. After step 2, start the app there and press
@@ -226,19 +233,21 @@ not a live share: running both at once forks the data.
    then **Sync with Gmail** in Pipeline so recruiter stages are re-read from your mail. Where both
    machines stored the same post, this machine's copy wins, including whether it was dismissed or
    marked applied.
-6. **Before you leave a machine**: Run → **Sync now**, then **wait for OneDrive's synced checkmark** on the
-   folder before closing the lid. The app also pushes every 2 minutes after a change, which covers a
-   forgotten button but not an upload that never finished.
+6. **Before you close a machine**: Run → **Sync now**, then **wait for OneDrive's synced checkmark** on the
+   folder before closing the lid. The active machine also pushes every 2 minutes after a change, which
+   covers a forgotten button but not an upload that never finished. Leaving it running needs nothing:
+   press Use this machine on the other one.
 
 What the app does about mistakes:
-- Starting the second machine before the first one's upload arrived: when the newer snapshot shows up,
-  this machine **refuses to push over it**, saves its own work to `backups/conflict-*.db` and asks you to
-  restart.
+- Both machines active at once (a laptop slept through a take-over, or OneDrive was offline): the one that
+  became active later wins; the other **refuses to push over it**, saves its own work to
+  `backups/conflict-*.db`, stops its jobs and goes on standby — no restart needed. The minute this takes is
+  the one window in which both could run jobs.
 - Both machines pushed anyway (the lid closed mid-upload): OneDrive leaves a conflict copy such as
   `sync-<machine>.json` in the folder. Both machines then refuse to sync and name the file. Merge the
   other side's database with `scripts/merge-db.ts`, delete the stray file, restart.
-- The other machine sent a heartbeat in the last 5 minutes: a warning on the Run view. A warning only, so
-  a machine that crashed cannot lock you out.
+- The active machine crashed: press Use this machine on the other one. Once the crashed one's heartbeat
+  is 5 minutes old the take-over does not wait for it, so a dead machine cannot lock you out.
 
 The synced folder holds your posts, recruiter names and addresses, and your CV. It is your own data in
 your own account, but it no longer lives on one disk only.

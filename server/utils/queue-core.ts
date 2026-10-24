@@ -179,10 +179,10 @@ export const samePaste = (a: { text?: string, authorUrl?: string }, b: { text?: 
 /**
  * Whether a fresh worker resumes the persisted queue. Not after a hand-off pull: those rows are the other
  * machine's, and it may have finished them after its last push (or still be running them) — resuming would
- * draft the same recruiters twice. Without a pull the rows are this machine's own, whatever the other
- * machine is doing.
+ * draft the same recruiters twice. Nor on standby (`leading: false`): those rows would run once this
+ * machine takes over, on data the other machine has worked since. Otherwise the rows are this machine's own.
  */
-export const shouldRestore = (o: { pulled: boolean }) => !o.pulled
+export const shouldRestore = (o: { pulled: boolean, leading?: boolean }) => !o.pulled && o.leading !== false
 
 /**
  * A draft that was running when its worker died is marked `resumed`: it may have been cut down inside

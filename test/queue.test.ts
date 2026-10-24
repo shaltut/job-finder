@@ -110,6 +110,7 @@ test('withRetry: Stop during the back-off ends it at once', async () => {
 
 test('restore: never after a hand-off pull — those rows are the other machine\'s', () => {
   assert.equal(shouldRestore({ pulled: true }), false)
+  assert.equal(shouldRestore({ pulled: false, leading: false }), false, 'standby: run nothing later on the leader\'s data')
 })
 
 test('a resumed draft is marked so it writes no skip rows', () => {

@@ -14,7 +14,7 @@ import Database from 'better-sqlite3'
 import { chromium } from 'playwright-core'
 import {
   admits, ageOf, applyCueFor, TEXT_CAP, channelsOf, collapsedText, dedupeKey, excludeRule, extractEmails, extractLinks, extractPhones, extractRefIds, MORE_LABEL, normalize, storedKey,
-  throttleEvidence, rotateTerms, dayIndex, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
+  throttleEvidence, rotateTerms, runLabel, dayIndex, keepScrolling, postedAt, prescreen, rand, resolveUrls, searchUrl, sleep, systemPrompt, urnMap
 } from './lib.ts'
 import type { Config } from './lib.ts'
 import { loadCv, scorePost, type Score } from './score.ts'
@@ -63,6 +63,7 @@ const CONFIG = loadConfig()
 // argv still wins over the stored settings, and the hardcoded fallbacks stay as the last resort
 // Rotated only when the list comes from Settings: an explicit --terms is the caller naming exactly
 // what to scrape, and reordering that would make a dry run unreproducible.
+// Either way a term listed N times runs N times back to back, so `--terms feed,feed` repeats too.
 const SEARCH_TERMS = opts.terms
   ? opts.terms.split(',').map(t => t.trim()).filter(Boolean)
   : rotateTerms(CONFIG.terms, dayIndex())
@@ -300,20 +301,24 @@ async function run({ dry }: { dry: boolean }) {
   try {
     // A dry run over the whole configured list is nine searches nobody asked for, so it stops at the
     // first term — unless --terms named them, in which case running exactly those is the entire point.
-    for (const term of dry && !opts.terms ? SEARCH_TERMS.slice(0, 1) : SEARCH_TERMS) {
+    const runs = dry && !opts.terms ? SEARCH_TERMS.slice(0, 1) : SEARCH_TERMS
+    for (const [i, term] of runs.entries()) {
       checkStop()
+      // `feed (2/3)` in the log only: rows keep the bare term, so the yield table has one bucket per term.
+      // A repeat skips, unscored, every post an earlier one emitted — `seen` holds this run's keys too.
+      const label = runLabel(runs, i)
       let cards: Card[]
       try {
         cards = await scrapeTerm(page, term)
       } catch (e) {
         const err = e as Error & { code?: number }
         if (err.code === 2 || err.code === 3 || stopping || /has been closed/.test(err.message)) throw err
-        log(`[${term}] failed: ${err.message}`)
+        log(`[${label}] failed: ${err.message}`)
         continue
       }
       // The permalink count is here because it was invisible: a search that resolves half its cards looks
       // exactly like one that resolves all of them. Measured 29/50 on a real term. 'feed' is always 0.
-      log(`[${term}] ${cards.length} cards, ${cards.filter(c => c.postUrl).length} permalinks`)
+      log(`[${label}] ${cards.length} cards, ${cards.filter(c => c.postUrl).length} permalinks`)
       const q = { overCap: 0, unexpanded: 0, noAuthor: 0, noAge: 0, noChannel: 0, keys: new Set<string>(), dupes: 0 }
       for (const c of cards) {
         checkStop()
@@ -397,7 +402,7 @@ async function run({ dry }: { dry: boolean }) {
         })
         added++
       }
-      if (dry) log(`[${term}] quality: ${cards.length} cards, ${q.overCap} over ${TEXT_CAP} chars, ${q.unexpanded} unexpanded, ${q.noAuthor} no author, ${q.noAge} no age, ${q.noChannel} no channel, ${q.dupes} duplicate keys`)
+      if (dry) log(`[${label}] quality: ${cards.length} cards, ${q.overCap} over ${TEXT_CAP} chars, ${q.unexpanded} unexpanded, ${q.noAuthor} no author, ${q.noAge} no age, ${q.noChannel} no channel, ${q.dupes} duplicate keys`)
       if (!dry) await sleep(rand(10000, 20000))
     }
   } finally {

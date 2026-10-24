@@ -1,12 +1,12 @@
-// Two temp dirs stand in for two machines sharing one OneDrive folder. The machines never run at once,
-// which is the only reason a whole-file hand-off is enough.
+// Two temp dirs stand in for two machines sharing one OneDrive folder. Both may run, but only one leads,
+// which is why a whole-file hand-off is still enough.
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import Database from 'better-sqlite3'
-import { canPush, heartbeat, mirror, otherActive, pull, push, readLocalGen, readMeta, shouldPull, strays, type HandoffPaths } from '../server/utils/handoff.ts'
+import { bootRole, canPush, heartbeat, livePeer, livePull, mirror, nextStep, otherActive, pull, push, readLocalGen, readMeta, shouldPull, standbyRefuses, strays, type HandoffPaths, type Me, type Peer } from '../server/utils/handoff.ts'
 
 function machine(root: string, name: string, syncDir: string): HandoffPaths {
   const base = join(root, name)
@@ -196,4 +196,126 @@ test('the boot pull runs once per process, never again on a dev worker rebuild',
   assert.equal(firstBootInProcess(marker, 100), true)
   assert.equal(firstBootInProcess(marker, 100), false, 'same process: a rebuilt worker')
   assert.equal(firstBootInProcess(marker, 200), true, 'a real restart')
+})
+
+// ---- the lease: both machines running, one leading (docs/superpowers/specs/2026-10-24-live-standby-design.md)
+
+const T = new Date('2026-10-24T12:00:00Z')
+const me = (o: Partial<Me> = {}): Me => ({ host: 'mac', role: 'active', since: '2026-10-24T09:00:00.000Z', busy: false, localGen: 4, remoteGen: 4, ...o })
+const peer = (o: Partial<Peer> = {}): Peer => ({ host: 'pc', at: T.toISOString(), role: 'standby', since: '', gen: 4, ...o })
+
+test('nextStep: the leader yields to a claim, to a later leader, and to a newer gen — never pulls under its jobs', () => {
+  assert.deepEqual(nextStep(me(), peer(), T), { role: 'active' })
+  assert.deepEqual(nextStep(me(), null, T), { role: 'active' })
+  assert.deepEqual(nextStep(me(), peer({ role: 'claiming' }), T), { role: 'yielding', stop: true })
+  assert.deepEqual(nextStep(me(), peer({ role: 'active', since: '2026-10-24T11:00:00.000Z' }), T), { role: 'yielding', stop: true }, 'woke up after a take-over')
+  assert.deepEqual(nextStep(me(), peer({ role: 'active', since: '2026-10-24T08:00:00.000Z' }), T), { role: 'active' }, 'the older leader is the one that yields')
+  assert.deepEqual(nextStep(me(), peer({ role: 'active', since: me().since }), T), { role: 'active' }, 'tie: the lower host name keeps it')
+  assert.deepEqual(nextStep(me({ host: 'pc' }), peer({ host: 'mac', role: 'active', since: me().since }), T), { role: 'yielding', stop: true })
+  assert.deepEqual(nextStep(me({ remoteGen: 5 }), null, T), { role: 'yielding', stop: true }, 'someone published over us')
+})
+
+test('nextStep: yielding waits for its jobs, then pushes and stands by', () => {
+  assert.deepEqual(nextStep(me({ role: 'yielding', busy: true }), peer({ role: 'claiming' }), T), { role: 'yielding' })
+  assert.deepEqual(nextStep(me({ role: 'yielding' }), peer({ role: 'claiming' }), T), { role: 'standby', finish: true })
+})
+
+test('nextStep: standby follows the leader, and leads once nobody does', () => {
+  assert.deepEqual(nextStep(me({ role: 'standby' }), peer({ role: 'active' }), T), { role: 'standby' })
+  assert.deepEqual(nextStep(me({ role: 'standby', remoteGen: 6 }), peer({ role: 'active' }), T), { role: 'standby', pull: true })
+  assert.deepEqual(nextStep(me({ role: 'standby', remoteGen: 6 }), null, T), { role: 'standby', pull: true }, 'no visible peer: closed, or our own OneDrive is offline — wait for the button')
+  assert.deepEqual(nextStep(me({ role: 'standby' }), peer(), T), { role: 'active', since: T.toISOString() }, 'both standby: the lower host name leads')
+  assert.deepEqual(nextStep(me({ role: 'standby', host: 'pc' }), peer({ host: 'mac' }), T), { role: 'standby' }, '…and the higher one waits')
+})
+
+test('nextStep: claiming waits for the leader to stand down and for its last snapshot', () => {
+  const c = me({ role: 'claiming', localGen: 4, remoteGen: 4 })
+  assert.deepEqual(nextStep(c, peer({ role: 'active' }), T), { role: 'claiming' })
+  assert.deepEqual(nextStep(c, peer({ role: 'yielding' }), T), { role: 'claiming' })
+  assert.deepEqual(nextStep(c, peer({ role: 'standby', gen: 5 }), T), { role: 'claiming' }, 'its gen-5 sync.json has not arrived yet')
+  assert.deepEqual(nextStep({ ...c, remoteGen: 5 }, peer({ role: 'standby', gen: 5 }), T), { role: 'active', since: T.toISOString(), pull: true })
+  assert.deepEqual(nextStep(c, peer({ role: 'standby', gen: 4 }), T), { role: 'active', since: T.toISOString() }, 'nothing left to push')
+  assert.deepEqual(nextStep(c, null, T), { role: 'active', since: T.toISOString() }, 'stale heartbeat: take over')
+  assert.deepEqual(nextStep(c, peer({ role: 'claiming' }), T), { role: 'claiming' })
+  assert.deepEqual(nextStep({ ...c, host: 'pc' }, peer({ host: 'mac', role: 'claiming' }), T), { role: 'standby' }, 'both pressed: the higher host name backs off')
+})
+
+test('bootRole and livePeer: a fresh process stands by while the other leads; an old heartbeat reads as leading', () => {
+  const { sync, a } = setup()
+  mkdirSync(sync, { recursive: true })
+  assert.equal(bootRole(null), 'active')
+  assert.equal(bootRole(peer({ role: 'standby' })), 'active')
+  for (const r of ['active', 'claiming', 'yielding'] as const) assert.equal(bootRole(peer({ role: r })), 'standby')
+  writeFileSync(join(sync, 'heartbeat-pc.json'), JSON.stringify({ at: '2026-10-24T11:59:00Z' })) // a build from before the lease
+  assert.deepEqual(livePeer(sync, 'mac', T), { host: 'pc', at: '2026-10-24T11:59:00Z', role: 'active', since: '', gen: 0 })
+  heartbeat(a, 'mac', T, { role: 'standby', since: 's', gen: 3 })
+  assert.equal(livePeer(sync, 'pc', T)?.role, 'standby')
+  assert.equal(livePeer(sync, 'pc', new Date('2026-10-24T12:06:00Z')), null, 'stale')
+})
+
+test('standbyRefuses: every API write but the hand-off controls', () => {
+  assert.equal(standbyRefuses('active', 'POST', '/api/run/draft'), false)
+  assert.equal(standbyRefuses('standby', 'POST', '/api/run/draft'), true)
+  assert.equal(standbyRefuses('claiming', 'PUT', '/api/config'), true)
+  assert.equal(standbyRefuses('standby', 'GET', '/api/posts?x=1'), false)
+  assert.equal(standbyRefuses('standby', 'POST', '/api/sync/claim'), false)
+  assert.equal(standbyRefuses('standby', 'POST', '/_nuxt/x'), false)
+})
+
+function schema(file: string) {
+  const d = new Database(file)
+  d.pragma('journal_mode = WAL')
+  d.pragma('foreign_keys = ON')
+  d.exec(`CREATE TABLE IF NOT EXISTS posts (key TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS applications (key TEXT PRIMARY KEY REFERENCES posts(key) ON DELETE CASCADE, verdict TEXT);
+    CREATE TABLE IF NOT EXISTS job_queue (id INTEGER PRIMARY KEY, kind TEXT)`)
+  return d
+}
+
+test('live take-over: B claims, A stands down and pushes, B pulls into its open connection; job_queue stays B\'s', () => {
+  const { sync, a, b } = setup()
+  mkdirSync(sync, { recursive: true })
+  const da = schema(a.db)
+  da.exec(`INSERT INTO posts VALUES ('p1'); INSERT INTO applications VALUES ('p1', 'drafted'); INSERT INTO job_queue VALUES (1, 'draft-from-a')`)
+  da.close()
+  push(a, 'pc', T, { init: true })
+  pull(b) // B boots, takes gen 1, and stands by while A leads
+  const live = schema(b.db) // B's server connection: stays open throughout
+  live.exec(`DELETE FROM job_queue; INSERT INTO job_queue VALUES (7, 'b-own')`)
+
+  // A works on, then sees B's claim, stops its jobs and pushes its last changes
+  const da2 = new Database(a.db)
+  da2.exec(`INSERT INTO posts VALUES ('p2'); INSERT INTO applications VALUES ('p2', 'drafted')`)
+  da2.close()
+  assert.equal(nextStep(me({ host: 'pc', localGen: 1, remoteGen: 1 }), peer({ host: 'mac', role: 'claiming', gen: 1 }), T).role, 'yielding')
+  assert.deepEqual(push(a, 'pc', T), { ok: true, gen: 2 })
+  heartbeat(a, 'pc', T, { role: 'standby', since: '', gen: 2 })
+
+  const step = nextStep(me({ role: 'claiming', localGen: readLocalGen(b.stateFile), remoteGen: readMeta(sync)!.gen }), livePeer(sync, 'mac', T), T)
+  assert.deepEqual(step, { role: 'active', since: T.toISOString(), pull: true })
+  assert.deepEqual(livePull(live, b), { pulled: true, gen: 2 })
+  assert.deepEqual(live.prepare('SELECT key, verdict FROM applications ORDER BY key').all(), [{ key: 'p1', verdict: 'drafted' }, { key: 'p2', verdict: 'drafted' }])
+  assert.deepEqual(live.prepare('SELECT id, kind FROM job_queue').all(), [{ id: 7, kind: 'b-own' }], 'never the other machine\'s queue')
+  assert.equal(readLocalGen(b.stateFile), 2)
+  assert.deepEqual(livePull(live, b), { pulled: false, gen: 2 }, 'nothing newer')
+  live.close()
+})
+
+test('livePull refuses a snapshot that has not fully arrived, and leaves the live rows alone', () => {
+  const { sync, a, b } = setup()
+  mkdirSync(sync, { recursive: true })
+  schema(a.db).close()
+  insert(a.db, 'gen1')
+  push(a, 'pc', T, { init: true })
+  const gen1 = readFileSync(join(sync, 'jobfinder.db'))
+  insert(a.db, 'gen2')
+  push(a, 'pc', T)
+  writeFileSync(join(sync, 'jobfinder.db'), gen1)
+  const live = schema(b.db)
+  live.exec(`INSERT INTO posts VALUES ('local')`)
+  const r = livePull(live, b)
+  assert.equal(r.pulled, false)
+  assert.match(r.error ?? '', /not yet downloaded/)
+  assert.deepEqual(live.prepare('SELECT key FROM posts').all(), [{ key: 'local' }])
+  live.close()
 })
