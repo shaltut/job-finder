@@ -141,7 +141,7 @@ const yieldColumns: TableColumn<YieldRow>[] = [
             Scrape
           </h2>
           <p class="text-sm text-muted">
-            Leave the terms box empty to run all {{ config.terms.length }} configured terms, including your home feed.
+            Leave the terms box empty to run all {{ config.terms.length }} configured runs, including your home feed.
           </p>
         </template>
 
@@ -152,7 +152,7 @@ const yieldColumns: TableColumn<YieldRow>[] = [
           >
             <UInput
               v-model="terms"
-              :placeholder="config.terms.join(', ')"
+              :placeholder="[...new Set(config.terms)].join(', ')"
               class="w-full"
             />
           </UFormField>

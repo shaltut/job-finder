@@ -52,6 +52,12 @@ test('settings round-trip: write then read returns the same object', () => {
   assert.deepEqual(readSettingsFrom(db), cfg)
 })
 
+test('a repeated term survives parseSettings — the repeat IS the run count', () => {
+  // feed listed three times runs three times (rotateTerms); a "tidy" dedupe here would delete the feature
+  const s = parseSettings({ ...emptySettings(), terms: ['feed', 'feed', 'feed', 'a'] })
+  assert.deepEqual(s.terms, ['feed', 'feed', 'feed', 'a'])
+})
+
 test('a fresh database reads as undefined rather than throwing', () => {
   // no settings table at all: the migration has not run yet
   assert.equal(readSettingsFrom(new Database(':memory:')), undefined)

@@ -364,11 +364,23 @@ export const postedAt = (age: string | null | undefined, at: Date = new Date()):
  * the highest-volume source to a budget it never spends.
  */
 export function rotateTerms(terms: readonly string[], day: number): string[] {
-  const feed = terms.filter(t => t === 'feed')
-  const rest = terms.filter(t => t !== 'feed')
-  if (!rest.length) return [...feed]
+  // A term listed N times runs N times back to back (feed x3, then the next term): the distinct list is
+  // what rotates, so a repeat is never split across the wrap point.
+  const count = new Map<string, number>()
+  for (const t of terms) count.set(t, (count.get(t) ?? 0) + 1)
+  const times = (t: string) => Array<string>(count.get(t)!).fill(t)
+  const feed = count.has('feed') ? times('feed') : []
+  const rest = [...count.keys()].filter(t => t !== 'feed')
+  if (!rest.length) return feed
   const at = ((day % rest.length) + rest.length) % rest.length // a negative day must not cut a hole
-  return [...feed, ...rest.slice(at), ...rest.slice(0, at)]
+  return [...feed, ...[...rest.slice(at), ...rest.slice(0, at)].flatMap(times)]
+}
+
+/** The log label for run `i` of a run list: `feed (2/3)` for a repeated term, the bare term otherwise. */
+export function runLabel(list: readonly string[], i: number): string {
+  const term = list[i]!
+  const of = list.filter(t => t === term).length
+  return of > 1 ? `${term} (${list.slice(0, i + 1).filter(t => t === term).length}/${of})` : term
 }
 
 /** Whole days since the epoch — the rotation advances once a day, with no state to persist or corrupt. */

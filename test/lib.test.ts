@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   admits, ageOf, applyCueFor, applyCueNear, channelsOf, dedupeKey, extractEmails, extractLinks, extractPhones, extractRefIds, legacyKey, storedKey,
-  excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, isThrottled, normalize, postedAt, postUrlFrom, prescreen, rotateTerms, throttleEvidence,
+  excludeRule, fieldRule, FLAG_RULES, gateOnPostType, hasApplyCue, isThrottled, normalize, postedAt, postUrlFrom, prescreen, rotateTerms, runLabel, throttleEvidence,
   keepScrolling, resolveUrls, SCORE_SCHEMA, SCROLL_STALL_MS, searchUrl, skillRule, systemPrompt, tokenFromId, urnMap
 } from '../scraper/lib.ts'
 import type { Config } from '../scraper/lib.ts'
@@ -582,6 +582,22 @@ test('rotateTerms: the tail of the list must not starve forever', () => {
   // wraps, and a day count far from zero is still in range
   assert.deepEqual(rotateTerms(terms, 4), rotateTerms(terms, 0))
   assert.deepEqual(rotateTerms(terms, 20_000), rotateTerms(terms, 20_000 % 4))
+})
+
+test('rotateTerms: a term listed N times runs N times back to back, never split by the rotation', () => {
+  // The owner's request: feed x3, then the searches. A repeated search sits together too, on any day.
+  const terms = ['a', 'feed', 'b', 'feed', 'b', 'c', 'feed']
+  assert.deepEqual(rotateTerms(terms, 0), ['feed', 'feed', 'feed', 'a', 'b', 'b', 'c'])
+  assert.deepEqual(rotateTerms(terms, 1), ['feed', 'feed', 'feed', 'b', 'b', 'c', 'a'])
+  assert.deepEqual(rotateTerms(terms, 2), ['feed', 'feed', 'feed', 'c', 'a', 'b', 'b'])
+  // rotation is over the distinct terms, so a repeat does not slow anybody's turn at the front
+  assert.deepEqual(rotateTerms(terms, 3), rotateTerms(terms, 0))
+  assert.deepEqual(rotateTerms(['feed', 'feed'], 5), ['feed', 'feed'])
+})
+
+test('runLabel: repeats read "feed (2/3)", a single run the bare term', () => {
+  const runs = ['feed', 'feed', 'feed', 'a']
+  assert.deepEqual(runs.map((_, i) => runLabel(runs, i)), ['feed (1/3)', 'feed (2/3)', 'feed (3/3)', 'a'])
 })
 
 test('rotateTerms: feed stays first, because it is not a search', () => {

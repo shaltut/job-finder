@@ -55,7 +55,8 @@ npm run dev ──► http://127.0.0.1:3939
 
 1. **Scraper** `scraper/run.ts`: drives the installed Chrome (`playwright-core`, `channel: 'chrome'`, headed,
    its own profile in `./profile`) through LinkedIn content search, one term at a time (the literal term
-   **`feed`** scrapes `linkedin.com/feed/` instead — same cards, no `datePosted` filter), scrolls until the
+   **`feed`** scrapes `linkedin.com/feed/` instead — same cards, no `datePosted` filter; a term listed N
+   times runs N times back to back, logged `feed (2/3)`), scrolls until the
    card count stops growing, expands "… more", keeps posts offering a contact route the owner switched on
    in Settings (`contactChannels`, email-only by default), sends survivors to
    OpenAI (`gpt-5-nano`, Responses API, strict JSON schema) with the CV text in the prompt.
@@ -349,6 +350,12 @@ and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
 - `cv` — repo-relative path under `data/cv/`, written by the upload endpoint rather than typed. The scoring
   model reads the PDF itself once per run (`input_file`); no PDF library.
 - `terms` (the home feed plus 8 searches), `titles` (30, for the scoring prompt), `max`, `since`.
+  **A repeat is the run count**: a term listed N times runs N times back to back (`rotateTerms` rotates
+  the distinct list, then expands it), so nothing new is stored and `--terms feed,feed` repeats the same
+  way. `UInputTags` carries `duplicate` for it and `parseSettings` must never dedupe `terms`
+  (`test/settings.test.ts`). Worth it for `feed`, which reloads fresh; a repeated search returns the same
+  cards. A repeat costs no OpenAI call for what an earlier one emitted — `seen` holds this run's keys — and
+  rows keep the bare term, so the yield table has one bucket. `max` and the 10-20 s pause apply per run.
 - `excludes` — words, names or domains that disqualify a post outright, becoming the `excluded` flag
   (see the data model above). Read by the pre-screen only: it never reaches a prompt, because a hard
   rule the owner wrote does not need the model's opinion. `min(2)` per entry, because a
