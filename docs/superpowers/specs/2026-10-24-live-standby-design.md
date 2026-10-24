@@ -61,7 +61,7 @@ button, **Use this machine**, on the standby.
   inserts (applications and post_requirements cascade from posts), foreign keys deferred to commit,
   shared columns only. **`job_queue` is never copied.** Safe only because standby runs nothing.
 - **What enforces "standby runs nothing":** `pump()` starts nothing and `enqueue()` queues nothing unless
-  leading; the inbox and daily tasks skip; `restoreQueue` does not resume on standby; and the origin
+  leading; the inbox, daily and schedule tasks skip; `restoreQueue` does not resume on standby; and the origin
   middleware refuses every non-GET `/api/` call but `/api/sync/*` with 409.
 - **The conflict is no longer sticky.** A refused push still writes `backups/conflict-*.db`; the next tick
   yields and the standby pull clears it. A live pull also clears a failed boot pull's push block.

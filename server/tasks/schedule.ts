@@ -2,6 +2,7 @@ import { scheduledArgs, tick, TICK_MS } from '../../shared/schedule'
 import { readConfigLoose } from '../utils/config'
 import { sqlite } from '../utils/db'
 import { enqueue } from '../utils/jobs'
+import { leading } from '../utils/handoff-runtime'
 
 /**
  * The scheduled scrape (Settings → Schedule). Ticks every ten minutes; `tick()` in shared/schedule.ts
@@ -10,6 +11,8 @@ import { enqueue } from '../utils/jobs'
 export default defineTask({
   meta: { name: 'schedule', description: 'Starts the scheduled scrape when a slot is due' },
   run() {
+    // only the leading machine scrapes: the slot is the leader's, and its schedule_state arrives with the next pull
+    if (!leading()) return { result: 'skipped: standby (the other machine leads)' }
     const cfg = readConfigLoose()
     const row = sqlite.prepare('SELECT last_run_at AS at FROM schedule_state WHERE id = 1').get() as { at: number | null } | undefined
     const t = tick(cfg.schedule.every, row?.at ? new Date(row.at * 1000) : null, new Date(), TICK_MS)

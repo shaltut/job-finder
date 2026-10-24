@@ -680,7 +680,7 @@ drafts keep arguing from a stale CV.
   forgets one is still running, so since 2026-10-24 a **lease** in the per-host heartbeat files picks one
   leader: it runs jobs, takes writes and pushes; the other is on **standby**, pulls each newer snapshot into
   its live database (`livePull`: ATTACH, all deletes then all inserts in one transaction, FKs deferred,
-  `job_queue` never copied) and runs nothing — `pump()`/`enqueue()` gate on `leading()`, the inbox and daily
+  `job_queue` never copied) and runs nothing — `pump()`/`enqueue()` gate on `leading()`, the inbox, daily and schedule
   tasks skip, and the origin middleware refuses every non-GET `/api/` call but `/api/sync/*` with 409. A
   fresh process stands by while the other leads (`bootRole`); **Use this machine** (`/api/sync/claim`) makes
   the leader stop every lane, drop its queue, push and stand down. **A standby never promotes itself** — a
