@@ -8,6 +8,7 @@
 // the separate completeness gate the run paths gate on. The old single schema conflated the two.
 import { z } from 'zod'
 import { normalizeCountries } from './countries.ts'
+import { FREQUENCIES } from './schedule.ts'
 
 /** '' or a valid instance of the inner check — used for fields that are legitimately unset. */
 const blankOr = (inner: z.ZodType, message: string) =>
@@ -95,6 +96,16 @@ export const settingsSchema = z.object({
     evidence: z.string().trim().max(8000),
     gaps: z.array(z.string().trim().min(1).max(600)).max(30),
     neverClaim: z.array(z.string().trim().min(1).max(200)).max(20)
+  }),
+  // The scheduled scrape (shared/schedule.ts, server/tasks/schedule.ts). Off by default, so an existing
+  // install is unchanged. `own: false` reuses the main terms with their rotation; `terms`, `max` and
+  // `since` are read only when `own` is on, and an empty `terms` still means the main list.
+  schedule: z.object({
+    every: z.enum(FREQUENCIES),
+    own: z.boolean(),
+    terms: z.array(z.string().trim().min(1)),
+    max: z.number().int().min(1).max(200),
+    since: z.enum(['past-24h', 'past-week', 'past-month'])
   })
 })
 
@@ -136,7 +147,8 @@ export const EMPTY_SETTINGS: StoredSettings = {
   since: 'past-24h',
   contactChannels: ['email'],
   tailorCv: false,
-  background: { strengths: [], evidence: '', gaps: [], neverClaim: [] }
+  background: { strengths: [], evidence: '', gaps: [], neverClaim: [] },
+  schedule: { every: 'off', own: false, terms: [], max: 40, since: 'past-week' }
 }
 
 /** Deep clone, so callers cannot mutate the shared default. */

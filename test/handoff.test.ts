@@ -92,7 +92,9 @@ test('sync.json unreadable after a history exists: retry, never a conflict backu
   insert(a.db, 'x')
   push(a, 'pc', new Date(), { init: true })
   rmSync(join(sync, 'sync.json'))
-  assert.throws(() => push(a, 'pc'), /sync\.json unreadable/)
+  assert.throws(() => push(a, 'pc'), /sync\.json missing/)
+  writeFileSync(join(sync, 'sync.json'), Buffer.alloc(180)) // what a crash mid-push left on 2026-10-13
+  assert.throws(() => push(a, 'pc'), /not valid JSON.*rebuild it/)
   assert.equal(backups(a, 'conflict-').length, 0)
 })
 

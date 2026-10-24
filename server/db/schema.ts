@@ -253,3 +253,12 @@ export const inboxState = sqliteTable('inbox_state', {
   id: integer('id').primaryKey(),
   lastPollAt: integer('last_poll_at')
 }, t => [check('inbox_state_one_row', sql`${t.id} = 1`)])
+
+// When the scheduled scrape last spent a slot (server/tasks/schedule.ts). Its own row, not a key in the
+// settings JSON: the Settings form PUTs the whole object back, so runtime state there would read as an
+// edit and a stale tab would write an old time over a new one. In the database, it travels with the
+// hand-off, so the other machine does not re-run a slot this one already ran.
+export const scheduleState = sqliteTable('schedule_state', {
+  id: integer('id').primaryKey(),
+  lastRunAt: integer('last_run_at')
+}, t => [check('schedule_state_one_row', sql`${t.id} = 1`)])

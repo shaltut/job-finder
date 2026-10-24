@@ -35,7 +35,9 @@ export default defineNuxtConfig({
       // 08:07, not 08:00: every scheduler on the planet fires on the hour
       '7 8 * * *': ['daily'],
       // replies, for the Inbox view (server/tasks/inbox.ts)
-      '*/5 * * * *': ['inbox']
+      '*/5 * * * *': ['inbox'],
+      // the scheduled scrape: decides whether a slot is due (server/tasks/schedule.ts)
+      '*/10 * * * *': ['schedule']
     }
   },
 

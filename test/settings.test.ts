@@ -464,6 +464,16 @@ test('a settings row written before tailorCv existed reads as switched off, in f
   assert.deepEqual(Object.keys(upgraded), Object.keys(EMPTY_SETTINGS))
 })
 
+test('a settings row written before the schedule existed reads as off, parses, and keeps form key order', () => {
+  const legacy = emptySettings() as Record<string, unknown>
+  delete legacy.schedule
+  const upgraded = upgradeSettings(legacy) as StoredSettings
+  assert.equal(upgraded.schedule.every, 'off')
+  assert.deepEqual(Object.keys(upgraded), Object.keys(EMPTY_SETTINGS))
+  assert.deepEqual(parseSettings(upgraded).schedule, EMPTY_SETTINGS.schedule)
+  assert.throws(() => parseSettings({ ...upgraded, schedule: { ...upgraded.schedule, every: 'hourly' } }))
+})
+
 test('flagInputs() covers every setting flagRules() reads, so a Settings save never leaves stale flags', async () => {
   // A stored flag is never recomputed on its own and keeps a post out of the drafter queue. The Settings
   // page re-flags only when flagInputs() changes, so a field flagRules() reads that flagInputs() omits is

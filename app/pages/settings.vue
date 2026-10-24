@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { COUNTRIES } from '#shared/countries'
+import { FREQUENCIES, FREQUENCY_LABELS, nextSlot } from '#shared/schedule'
 import { CONTACT_CHANNELS, flagInputs, type ContactChannel } from '#shared/settings'
 import type { EditorToolbarItem } from '@nuxt/ui'
 import type { AppConfig, GmailStatus, SettingsStatus } from '~/types'
@@ -52,6 +53,21 @@ const phoneOn = channelOn('phone')
 // the full ISO list. Names are the stored value, so this binds straight to the string arrays.
 const COUNTRY_NAMES = COUNTRIES.map(c => c.name)
 
+const SINCE_ITEMS = [
+  { label: 'Past 24 hours', value: 'past-24h' },
+  { label: 'Past week', value: 'past-week' },
+  { label: 'Past month', value: 'past-month' }
+]
+const SCHEDULE_ITEMS = FREQUENCIES.map(value => ({ value, label: FREQUENCY_LABELS[value] }))
+// Client-side only: the server renders this page too, and a time formatted there would not match the
+// browser's rendering of it.
+const now = ref<Date | null>(null)
+onMounted(() => (now.value = new Date()))
+const nextRun = computed(() => {
+  const at = now.value && nextSlot(form.value.schedule.every, now.value)
+  return at ? at.toLocaleString(undefined, { weekday: 'long', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
+})
+
 const { data: status, refresh: refreshStatus } = await useFetch<SettingsStatus>('/api/settings/status', {
   lazy: true,
   default: () => ({ missing: [], ready: true, cv: '', cvExists: false })
@@ -72,6 +88,7 @@ async function save() {
     form.value.terms = form.value.terms.map(s => s.trim()).filter(Boolean)
     form.value.titles = form.value.titles.map(s => s.trim()).filter(Boolean)
     form.value.excludes = form.value.excludes.map(s => s.trim()).filter(Boolean)
+    form.value.schedule.terms = form.value.schedule.terms.map(s => s.trim()).filter(Boolean)
     // the editor's trailing blank line, for the same reason — see `settled` above
     form.value.background.evidence = form.value.background.evidence.trimEnd()
     // every input the pre-screen flags derive from, not only the exclude list: a stored flag is never
@@ -810,15 +827,79 @@ async function disconnectGmail() {
             <UFormField label="Posted within">
               <USelect
                 v-model="form.since"
-                :items="[
-                  { label: 'Past 24 hours', value: 'past-24h' },
-                  { label: 'Past week', value: 'past-week' },
-                  { label: 'Past month', value: 'past-month' }
-                ]"
+                :items="SINCE_ITEMS"
                 class="w-full"
               />
             </UFormField>
           </div>
+        </div>
+      </UCard>
+
+      <UCard class="shrink-0">
+        <template #header>
+          <h2 class="font-semibold text-highlighted">
+            Schedule
+          </h2>
+          <p class="text-sm text-muted">
+            Scrapes on its own while this app is running, with Chrome minimized to the taskbar. Each run starts
+            up to about 40 minutes after its time, at random, so LinkedIn never sees the same minute twice. A
+            time missed while the PC was off runs once when the app is back; one that finds a scrape already
+            running is skipped, because back-to-back scrapes are what makes LinkedIn pause search.
+          </p>
+        </template>
+
+        <div class="space-y-4">
+          <UFormField
+            label="Scrape automatically"
+            :help="nextRun ? `Next: ${nextRun}` : undefined"
+          >
+            <USelect
+              v-model="form.schedule.every"
+              :items="SCHEDULE_ITEMS"
+              class="w-full"
+            />
+          </UFormField>
+
+          <template v-if="form.schedule.every !== 'off'">
+            <USwitch
+              v-model="form.schedule.own"
+              label="Use its own search settings"
+              description="Off: the terms and cards per term above, with posts from the past day on a daily schedule and the past week on a weekly one."
+            />
+
+            <template v-if="form.schedule.own">
+              <UFormField
+                label="Search terms"
+                :help="form.schedule.terms.length ? `${form.schedule.terms.length} terms` : 'Empty uses the terms above'"
+              >
+                <UInputTags
+                  v-model="form.schedule.terms"
+                  add-on-blur
+                  placeholder="e.g. senior &lt;your role&gt; hiring"
+                  class="w-full"
+                />
+              </UFormField>
+
+              <div class="grid gap-4 sm:grid-cols-2">
+                <UFormField label="Max cards per term">
+                  <UInput
+                    v-model.number="form.schedule.max"
+                    type="number"
+                    :min="1"
+                    :max="200"
+                    class="w-full"
+                  />
+                </UFormField>
+                <UFormField label="Posted within">
+                  <USelect
+                    v-model="form.schedule.since"
+                    :items="SINCE_ITEMS"
+                    class="w-full"
+                  />
+                </UFormField>
+              </div>
+            </template>
+          </template>
         </div>
       </UCard>
 

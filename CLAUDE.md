@@ -156,6 +156,24 @@ npm run dev ──► http://127.0.0.1:3939
    the sender's pending queries exclude it, its `modeOf` relabel never overwrites it, and it re-reads the
    mode right before `sendable()` because a reply job can record a draft after the list was read; pinned by
    `test/invariants.test.ts`. Spec: `docs/superpowers/specs/2026-10-07-inbox-replies-design.md`.
+8. **Scheduled scrape** `shared/schedule.ts` + `server/tasks/schedule.ts` (`*/10 * * * *`): Settings →
+   Schedule picks Off / weekly (Sun) / twice weekly (Sun, Wed) / daily / twice daily, at fixed 09:00 and
+   21:00 on the machine's clock. `tick()` decides each tick and is the tested half; the task only reads and
+   writes `schedule_state.last_run_at` and enqueues. **A slot is spent when reached** — scraped, skipped or
+   failed — so a throttled run is never retried ten minutes later; a PC that was off scrapes once when the
+   server is back, not once per missed slot. **Switching on records a baseline backdated one tick** rather
+   than firing at once; switching off clears it. **An idle tick writes nothing** (the `inbox_state`
+   lesson: every write is a hand-off push). The job carries `scheduled: true`: `enqueue` drops it while
+   another *scrape* runs or waits (a reflag only delays it), and `scrapeArgs` passes `--jitter` (0-30 min
+   late, as the retired launchd plist did) and **`--background`**, which minimizes Chrome over CDP right
+   after launch. Measured 2026-10-11: Chrome clamps an off-screen
+   `--window-position` back on-screen, ignores `--start-minimized`, and a CDP move off-screen keeps the
+   keyboard focus; minimizing returns focus and Playwright's default anti-backgrounding switches keep the
+   page `visible`. **But a minimized window barely paints, so Playwright's normal click times out** on its
+   scroll/hit-test wait — 1 of 10 "…more" buttons expanded — and the expander clicks with `force` in
+   background mode only (10 of 10, still trusted mouse events). Re-check `npm run dry -- --terms feed --max
+   10 --background` reports `0 unexpanded` after touching the expander. Only fires while `npm run dev` runs,
+   and a server restart mid-run drops it like any scrape.
 
 ## Commands
 
@@ -368,6 +386,11 @@ and keeps the old `readConfig` / `readConfigRaw` / `writeConfig` names.
   (`scraper/lib.ts` re-exports it — it imports `node:crypto` and cannot be what a browser bundle reads).
   `parseSettings` orders and dedupes it, so the order the Settings dirty check depends on is a property of
   the stored row. Empty saves but `missingFields()` refuses to run: the usual two-schema split.
+- `schedule` — `every`, `own`, `terms`, `max`, `since` (pipeline item 8). `own: false` passes only a
+  `since` matching the frequency (past-24h daily, past-week weekly — a weekly run with the manual past-24h
+  would never see six days of posts) and no `terms`, so the main list keeps its rotation; `own: true` passes
+  its own, with an empty `terms` still meaning the main list. Its last-run time lives in `schedule_state`,
+  never in this row: the form PUTs the whole object back, and a stale tab would write an old time over a new one.
 - **`.env`** — `OPENAI_API_KEY`; optionally `JOBFINDER_DB`, `JOBFINDER_MODEL`, `JOBFINDER_DRAFTER_MODEL` (default `opus`), `PROFILE_DIR`, `JOBFINDER_SYNC_DIR` (the two-machine hand-off; unset = off). Loaded with
   Node's `--env-file-if-exists`. Never write the key into a tracked file.
 
@@ -661,7 +684,12 @@ drafts keep arguing from a stale CV.
   change since boot** (`lastSig` starts at the current `changeSig()`), and **an empty folder is seeded
   only by an explicit init** from the Run view — an empty folder and an undelivered one look identical.
   Heartbeats go to per-host `heartbeat-<host>.json` files, never `sync.json`, so they cannot collide
-  with a push. **Never move `data/`
+  with a push. **`writeJson` flushes before the rename**: a hard crash on 2026-10-13 left `sync.json`
+  180 bytes of NUL (NTFS kept the rename, not the data), and once local gen > 0 `push()` refuses a bad
+  `sync.json` forever. **Rebuild it by hand** — only if this machine pushed last (its `sync-state.json`
+  mtime matches the snapshot's): `gen` from `data/sync-state.json`, `sha256` and `size` of the folder's
+  `jobfinder.db` (run `integrity_check` on it first), any `host`/`pushedAt`; the next tick pushes gen + 1.
+  Never re-init instead — numbering restarts at 1 and the other machine never pulls again. **Never move `data/`
   itself into OneDrive** — a file sync of a WAL database is the 2026-09-25 backup bug. **Paths written to
   the database use `/`** (`tailoredCvPath` is `posix.join`; `migrate.ts` rewrites old rows each boot),
   because `\` is a filename character on the Mac. `scripts/merge-db.ts` is the one-time, insert-only merge

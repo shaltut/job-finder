@@ -32,9 +32,11 @@ export function readMeta(syncDir: string): SyncMeta | null {
   }
 }
 
+// flush: NTFS commits the rename before the data, so a crash after an unflushed write leaves the file at
+// full size and all NUL — sync.json, 2026-10-13, which then blocked every push until rebuilt by hand
 function writeJson(file: string, value: unknown) {
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(`${file}.tmp`, JSON.stringify(value, null, 2))
+  writeFileSync(`${file}.tmp`, JSON.stringify(value, null, 2), { flush: true })
   renameSync(`${file}.tmp`, file)
 }
 
@@ -178,7 +180,11 @@ export function push(p: HandoffPaths, host: string, now = new Date(), opts: { in
   assertNoStrays(p.syncDir)
   const remote = readMeta(p.syncDir)
   const local = readLocalGen(p.stateFile)
-  if (!remote && local > 0) throw new Error('sync.json unreadable — OneDrive may be mid-sync; retrying')
+  if (!remote && local > 0) {
+    throw new Error(existsSync(metaFile(p.syncDir))
+      ? 'sync.json is present but not valid JSON — OneDrive mid-sync, or a crash zeroed it; if it repeats, rebuild it (CLAUDE.md, "Two machines")'
+      : 'sync.json missing — OneDrive may be mid-sync; retrying')
+  }
   if (!remote && !opts.init) throw new Error('the sync folder has no history yet — press Sync now to init it from this machine, or wait for the other machine\'s to arrive')
   if (!canPush(remote, local)) {
     // keep this machine's work recoverable before it stops publishing

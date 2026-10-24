@@ -31,7 +31,8 @@ const { values: opts } = parseArgs({
     'reextract': { type: 'boolean' },
     'dry-run': { type: 'boolean' },
     'login': { type: 'boolean' },
-    'jitter': { type: 'boolean' }
+    'jitter': { type: 'boolean' },
+    'background': { type: 'boolean' }
   }
 })
 
@@ -106,14 +107,38 @@ function knownKeys(): Set<string> {
 // ---------------- browser ----------------
 // Real Chrome from its own profile dir. Chrome refuses automation on the user's main profile, so this one
 // is logged into once via --login and reused forever after.
-const openBrowser = () => chromium.launchPersistentContext(PROFILE_DIR, {
-  channel: 'chrome',
-  headless: false,
-  viewport: null,
-  args: ['--window-size=1400,1000', '--lang=en-US'],
-  locale: 'en-US', // keep LinkedIn's UI labels in English; normalize() handles the cards it serves in Arabic anyway
-  ignoreDefaultArgs: ['--enable-automation'] // no "controlled by automated software" bar; navigator.webdriver stays false
-})
+const openBrowser = async () => {
+  const ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
+    channel: 'chrome',
+    headless: false,
+    viewport: null,
+    args: ['--window-size=1400,1000', '--lang=en-US'],
+    locale: 'en-US', // keep LinkedIn's UI labels in English; normalize() handles the cards it serves in Arabic anyway
+    ignoreDefaultArgs: ['--enable-automation'] // no "controlled by automated software" bar; navigator.webdriver stays false
+  })
+  if (opts.background) await minimize(ctx)
+  return ctx
+}
+
+/**
+ * --background (the scheduled scrape): still a headed Chrome, minimized right after launch so it never
+ * sits in front of whoever is using the PC. Measured 2026-10-11 against the alternatives: Chrome clamps
+ * an off-screen --window-position back onto a display, --start-minimized is ignored, and a CDP move
+ * off-screen keeps the keyboard focus, so typing lands in an invisible window. Minimizing hands focus
+ * back, and Playwright's default --disable-renderer-backgrounding / --disable-backgrounding-occluded-
+ * windows keep the page "visible": scroll, lazy-load, click and screenshots all still work.
+ * A failure only costs the hiding, so it is logged and the scrape goes on in a normal window.
+ */
+async function minimize(ctx: Awaited<ReturnType<typeof chromium.launchPersistentContext>>) {
+  try {
+    const cdp = await ctx.newCDPSession(ctx.pages()[0] || await ctx.newPage())
+    const { windowId } = await cdp.send('Browser.getWindowForTarget')
+    await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } })
+    await cdp.detach()
+  } catch (e) {
+    log(`could not minimize Chrome, scraping in a normal window: ${(e as Error).message}`)
+  }
+}
 
 async function login() {
   const ctx = await openBrowser()
@@ -232,8 +257,12 @@ async function scrapeTerm(page: import('playwright-core').Page, term: string): P
     // the account's language, so even an English post there carries "…المزيد". Measured 2026-09-26: with
     // the English label alone, 7 of the first 9 feed cards were stored collapsed — two of them hiring posts
     // that kept their address only because it happened to sit above the fold.
+    // `force` in a minimized window only: Playwright's default click waits on rendered frames to scroll
+    // into view and hit-test, and a minimized Chrome barely paints — measured 2026-10-11 on the feed, 1 of
+    // 10 expanded and the rest timed out, leaving posts whose address sits below the fold. A forced click
+    // skips that wait and is still a real mouse event (10 of 10); a DOM .click() also works but is untrusted.
     const more = await page.locator('main button', { hasText: MORE_LABEL }).all()
-    for (const b of more.reverse()) await b.click({ timeout: 2000 }).catch(() => {})
+    for (const b of more.reverse()) await b.click({ timeout: 2000, force: !!opts.background }).catch(() => {})
     await sleep(1000)
     cards = (await page.evaluate(readCards) as Card[]).slice(0, MAX_CARDS)
     if (!cards.length) {

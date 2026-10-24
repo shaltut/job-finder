@@ -43,6 +43,8 @@ export interface JobArgs {
   screened?: boolean
   /** set on jobs started by the daily tick, so they notify when they finish */
   auto?: boolean
+  /** scrape lane: started by the schedule (server/tasks/schedule.ts) — Chrome minimized, and skipped rather than queued behind another scrape */
+  scheduled?: boolean
   /** draft lane: this run was cut off by a restart and resumed — it writes no skip rows (queue-core resumedArgs) */
   resumed?: boolean
   /** draft lane, reply jobs: the inbox message to answer, its thread, the owner's note, and whether it was pressed */
@@ -186,6 +188,10 @@ export function enqueue(kind: Kind, args: JobArgs = {}): QueueItem | null {
   // The server queues a reflag on every save that changes a flag input, and the page then asks for one
   // too, to report the count; one queued reflag already reads the newest settings when it runs.
   if (kind === 'reflag' && queue.some(q => q.kind === 'reflag')) return null
+  // A scheduled scrape behind a manual one is two scrapes back to back, which is how LinkedIn's search
+  // pause (exit 3) gets tripped; the slot is spent either way. A reflag or rescore on the lane only delays it.
+  if (kind === 'scrape' && args.scheduled
+    && (queue.some(q => q.kind === 'scrape') || lanes.scrape.current?.kind === 'scrape')) return null
   // the same pasted text queued twice, or pasted again while its own score is still running, is a no-op
   if (kind === 'paste' && args.text
     && (queue.some(q => q.kind === 'paste' && samePaste(q.args, args))
@@ -243,6 +249,9 @@ function scrapeArgs({ kind, args }: { kind: Kind, args: JobArgs }): [string, str
     if (args.terms) a.push('--terms', args.terms)
     if (args.max) a.push('--max', String(args.max))
     if (args.since) a.push('--since', args.since)
+    // --jitter starts it 0-30 min late, as the retired launchd schedule did: the same minute every day is
+    // the most regular signal a scrape can hand LinkedIn's throttle
+    if (args.scheduled) a.push('--background', '--jitter')
   }
   return [process.execPath, a]
 }
